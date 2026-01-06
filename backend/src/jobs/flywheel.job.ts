@@ -20,6 +20,18 @@ let lastSellTime: Date | null = null
 const MIN_TRADE_COOLDOWN_MS = 5 * 60 * 1000 // 5 minutes between same-direction trades
 const MIN_ANY_TRADE_COOLDOWN_MS = 2 * 60 * 1000 // 2 minutes between any trades
 
+// ═══════════════════════════════════════════════════════════════════════════
+// SIMPLE ALGORITHM CYCLE TRACKING
+// After 5 buys, sell 20% of tokens 5 times, then repeat
+// ═══════════════════════════════════════════════════════════════════════════
+
+let simpleCyclePhase: 'buy' | 'sell' = 'buy'
+let simpleBuyCount = 0
+let simpleSellCount = 0
+const SIMPLE_BUYS_PER_CYCLE = 5
+const SIMPLE_SELLS_PER_CYCLE = 5
+const SIMPLE_SELL_PERCENT = 20 // Sell 20% of tokens each sell
+
 function canExecuteTrade(type: 'buy' | 'sell'): boolean {
   const now = Date.now()
 
@@ -133,9 +145,10 @@ console.error = (...args: any[]) => {
   originalConsoleError.apply(console, args)
 }
 
-// Simple market making - basic threshold-based
+// Simple market making - 5 buys then 5 sells (20% each) cycle
 async function runSimpleMarketMaking(config: FlywheelConfig) {
   console.log('\n📈 Market Making: SIMPLE Mode')
+  console.log(`   Cycle: ${simpleCyclePhase.toUpperCase()} phase | Buys: ${simpleBuyCount}/${SIMPLE_BUYS_PER_CYCLE} | Sells: ${simpleSellCount}/${SIMPLE_SELLS_PER_CYCLE}`)
 
   const opsBalance = await walletMonitor.getOpsWalletBalance()
   if (!opsBalance) {
@@ -143,32 +156,69 @@ async function runSimpleMarketMaking(config: FlywheelConfig) {
     return
   }
 
-  if (opsBalance.sol_balance > config.max_buy_amount_sol + 0.01) {
-    // We have SOL - execute a buy
-    console.log('   Executing buy order...')
+  // BUY PHASE: Execute buys until we reach 5
+  if (simpleCyclePhase === 'buy') {
+    // Check if we have enough SOL for a buy
+    if (opsBalance.sol_balance < config.min_buy_amount_sol + 0.01) {
+      console.log(`   ℹ️ Insufficient SOL for buy (${opsBalance.sol_balance.toFixed(4)} SOL)`)
+      return
+    }
+
+    // Execute buy
+    console.log(`   Executing buy ${simpleBuyCount + 1}/${SIMPLE_BUYS_PER_CYCLE}...`)
     const buyAmount = Math.min(
-      opsBalance.sol_balance * 0.1, // Use 10% of balance
+      opsBalance.sol_balance * 0.15, // Use 15% of SOL balance per buy
       config.max_buy_amount_sol
     )
+
     const buyResult = await marketMaker.executeBuy(buyAmount)
     if (buyResult) {
       addTransaction(buyResult)
-      console.log(`   ✅ Bought tokens with ${buyResult.amount.toFixed(6)} SOL`)
+      simpleBuyCount++
+      console.log(`   ✅ Buy ${simpleBuyCount}/${SIMPLE_BUYS_PER_CYCLE} complete - ${buyAmount.toFixed(6)} SOL`)
+
+      // Check if we should switch to sell phase
+      if (simpleBuyCount >= SIMPLE_BUYS_PER_CYCLE) {
+        simpleCyclePhase = 'sell'
+        simpleBuyCount = 0
+        console.log(`   🔄 Switching to SELL phase (${SIMPLE_SELLS_PER_CYCLE} sells of ${SIMPLE_SELL_PERCENT}% each)`)
+      }
     }
-  } else if (opsBalance.token_balance > env.maxSellAmountTokens * 2) {
-    // We have excess tokens - execute a sell
-    console.log('   Executing sell order...')
-    const sellAmount = Math.min(
-      opsBalance.token_balance * 0.05, // Sell 5% of holdings
-      env.maxSellAmountTokens
-    )
+  }
+  // SELL PHASE: Execute 5 sells of 20% each
+  else if (simpleCyclePhase === 'sell') {
+    // Check if we have tokens to sell
+    if (opsBalance.token_balance <= 0) {
+      console.log('   ℹ️ No tokens to sell - switching back to buy phase')
+      simpleCyclePhase = 'buy'
+      simpleSellCount = 0
+      return
+    }
+
+    // Execute sell of 20% of current token balance
+    console.log(`   Executing sell ${simpleSellCount + 1}/${SIMPLE_SELLS_PER_CYCLE} (${SIMPLE_SELL_PERCENT}% of tokens)...`)
+    const sellAmount = opsBalance.token_balance * (SIMPLE_SELL_PERCENT / 100)
+
+    if (sellAmount < 1) {
+      console.log('   ℹ️ Token amount too small to sell - switching back to buy phase')
+      simpleCyclePhase = 'buy'
+      simpleSellCount = 0
+      return
+    }
+
     const sellResult = await marketMaker.executeSell(sellAmount)
     if (sellResult) {
       addTransaction(sellResult)
-      console.log(`   ✅ Sold ${sellResult.amount.toFixed(0)} tokens`)
+      simpleSellCount++
+      console.log(`   ✅ Sell ${simpleSellCount}/${SIMPLE_SELLS_PER_CYCLE} complete - ${sellAmount.toFixed(0)} tokens`)
+
+      // Check if we should switch back to buy phase
+      if (simpleSellCount >= SIMPLE_SELLS_PER_CYCLE) {
+        simpleCyclePhase = 'buy'
+        simpleSellCount = 0
+        console.log(`   🔄 Cycle complete! Switching back to BUY phase (${SIMPLE_BUYS_PER_CYCLE} buys)`)
+      }
     }
-  } else {
-    console.log('   ℹ️ No market making action needed')
   }
 }
 
@@ -482,5 +532,13 @@ export function getServiceStatus() {
       history: inventoryManager.getHistory(),
     },
     recentTransactions: recentTransactions.slice(0, 10),
+    simpleCycleStatus: {
+      phase: simpleCyclePhase,
+      buyCount: simpleBuyCount,
+      sellCount: simpleSellCount,
+      buysPerCycle: SIMPLE_BUYS_PER_CYCLE,
+      sellsPerCycle: SIMPLE_SELLS_PER_CYCLE,
+      sellPercentage: SIMPLE_SELL_PERCENT,
+    },
   }
 }
