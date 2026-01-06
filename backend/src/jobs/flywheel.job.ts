@@ -5,7 +5,7 @@ import { walletMonitor } from '../services/wallet-monitor'
 import { priceAnalyzer } from '../services/price-analyzer'
 import { twapExecutor } from '../services/twap-executor'
 import { inventoryManager } from '../services/inventory-manager'
-import { fetchConfig, updateWalletBalance, calculateAndUpdateFeeStats, type FlywheelConfig } from '../config/database'
+import { fetchConfig, updateWalletBalance, calculateAndUpdateFeeStats, saveFlywheelState, loadFlywheelState, type FlywheelConfig } from '../config/database'
 import { getSolPrice } from '../config/solana'
 import { env } from '../config/env'
 import type { Transaction } from '../types'
@@ -33,6 +33,35 @@ let simpleSellAmountPerTx = 0 // Fixed amount to sell per transaction
 const SIMPLE_BUYS_PER_CYCLE = 5
 const SIMPLE_SELLS_PER_CYCLE = 5
 const SIMPLE_TOTAL_SELL_PERCENT = 40 // Sell 40% of tokens total across all sells
+
+// Helper to persist current state to database
+async function persistFlywheelState() {
+  await saveFlywheelState({
+    cycle_phase: simpleCyclePhase,
+    buy_count: simpleBuyCount,
+    sell_count: simpleSellCount,
+    sell_phase_token_snapshot: simpleSellPhaseTokenSnapshot,
+    sell_amount_per_tx: simpleSellAmountPerTx,
+  })
+}
+
+// Initialize state from database (called on startup)
+async function initializeFlywheelState() {
+  const state = await loadFlywheelState()
+  simpleCyclePhase = state.cycle_phase
+  simpleBuyCount = state.buy_count
+  simpleSellCount = state.sell_count
+  simpleSellPhaseTokenSnapshot = state.sell_phase_token_snapshot
+  simpleSellAmountPerTx = state.sell_amount_per_tx
+
+  if (state.cycle_phase !== 'buy' || state.buy_count > 0 || state.sell_count > 0) {
+    console.log(`📂 Restored flywheel state: ${simpleCyclePhase.toUpperCase()} phase`)
+    console.log(`   Buys: ${simpleBuyCount}/${SIMPLE_BUYS_PER_CYCLE}, Sells: ${simpleSellCount}/${SIMPLE_SELLS_PER_CYCLE}`)
+    if (simpleSellPhaseTokenSnapshot > 0) {
+      console.log(`   Token snapshot: ${simpleSellPhaseTokenSnapshot.toFixed(0)}, Per TX: ${simpleSellAmountPerTx.toFixed(0)}`)
+    }
+  }
+}
 
 function canExecuteTrade(type: 'buy' | 'sell'): boolean {
   const now = Date.now()
@@ -197,6 +226,9 @@ async function runSimpleMarketMaking(config: FlywheelConfig) {
           console.log('   ⚠️ No tokens available for sell phase, staying in buy phase')
         }
       }
+
+      // Persist state after successful buy
+      await persistFlywheelState()
     }
   }
   // SELL PHASE: Execute 5 sells of fixed amount (40% total / 5 = 8% each)
@@ -208,6 +240,7 @@ async function runSimpleMarketMaking(config: FlywheelConfig) {
       simpleSellCount = 0
       simpleSellPhaseTokenSnapshot = 0
       simpleSellAmountPerTx = 0
+      await persistFlywheelState()
       return
     }
 
@@ -223,6 +256,7 @@ async function runSimpleMarketMaking(config: FlywheelConfig) {
       simpleSellCount = 0
       simpleSellPhaseTokenSnapshot = 0
       simpleSellAmountPerTx = 0
+      await persistFlywheelState()
       return
     }
 
@@ -243,6 +277,9 @@ async function runSimpleMarketMaking(config: FlywheelConfig) {
         simpleSellAmountPerTx = 0
         console.log(`   🔄 Cycle complete! Switching back to BUY phase (${SIMPLE_BUYS_PER_CYCLE} buys)`)
       }
+
+      // Persist state after successful sell
+      await persistFlywheelState()
     }
   }
 }
@@ -520,13 +557,16 @@ async function runFlywheelCycle() {
 }
 
 // Schedule the flywheel job
-export function startFlywheelJob() {
+export async function startFlywheelJob() {
   // Convert interval to cron expression
   // For 1 minute interval: '* * * * *'
   const intervalMinutes = Math.max(1, Math.floor(env.feeCollectionIntervalMs / 60000))
 
   console.log(`\n🚀 Starting flywheel automation (every ${intervalMinutes} minute(s))`)
   console.log('   Algorithm modes available: simple, smart, rebalance')
+
+  // Load persisted state from database (resume where we left off)
+  await initializeFlywheelState()
 
   // Run immediately on start
   runFlywheelCycle()

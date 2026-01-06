@@ -255,3 +255,82 @@ export async function fetchConfig(): Promise<FlywheelConfig> {
     ...data,
   }
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// FLYWHEEL STATE PERSISTENCE
+// Saves/loads cycle state so we resume after restarts
+// ═══════════════════════════════════════════════════════════════════════════
+
+export interface FlywheelState {
+  cycle_phase: 'buy' | 'sell'
+  buy_count: number
+  sell_count: number
+  sell_phase_token_snapshot: number
+  sell_amount_per_tx: number
+  updated_at: string
+}
+
+const DEFAULT_FLYWHEEL_STATE: FlywheelState = {
+  cycle_phase: 'buy',
+  buy_count: 0,
+  sell_count: 0,
+  sell_phase_token_snapshot: 0,
+  sell_amount_per_tx: 0,
+  updated_at: new Date().toISOString(),
+}
+
+export async function saveFlywheelState(state: Omit<FlywheelState, 'updated_at'>): Promise<boolean> {
+  if (!supabase) {
+    console.warn('⚠️ Supabase not configured - flywheel state not persisted')
+    return false
+  }
+
+  const { error } = await supabase
+    .from('flywheel_state')
+    .upsert([{
+      id: 'main',
+      ...state,
+      updated_at: new Date().toISOString(),
+    }], {
+      onConflict: 'id',
+    })
+
+  if (error) {
+    console.error('❌ Failed to save flywheel state:', error)
+    return false
+  }
+
+  return true
+}
+
+export async function loadFlywheelState(): Promise<FlywheelState> {
+  if (!supabase) {
+    console.warn('⚠️ Supabase not configured - using default flywheel state')
+    return DEFAULT_FLYWHEEL_STATE
+  }
+
+  const { data, error } = await supabase
+    .from('flywheel_state')
+    .select('*')
+    .eq('id', 'main')
+    .single()
+
+  if (error) {
+    // Table might not exist yet or no row - return defaults
+    if (error.code !== 'PGRST116') { // PGRST116 = no rows returned
+      console.warn('⚠️ Could not load flywheel state:', error.message)
+    }
+    return DEFAULT_FLYWHEEL_STATE
+  }
+
+  console.log(`📂 Loaded flywheel state: ${data.cycle_phase} phase, buys: ${data.buy_count}, sells: ${data.sell_count}`)
+
+  return {
+    cycle_phase: data.cycle_phase || 'buy',
+    buy_count: data.buy_count || 0,
+    sell_count: data.sell_count || 0,
+    sell_phase_token_snapshot: data.sell_phase_token_snapshot || 0,
+    sell_amount_per_tx: data.sell_amount_per_tx || 0,
+    updated_at: data.updated_at || new Date().toISOString(),
+  }
+}
