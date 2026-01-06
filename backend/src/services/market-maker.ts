@@ -83,7 +83,7 @@ export class MarketMaker {
         throw new Error(`Jupiter swap failed: ${swapResponse.statusText}`)
       }
 
-      const { swapTransaction } = await swapResponse.json()
+      const { swapTransaction } = await swapResponse.json() as { swapTransaction: string }
 
       // Deserialize and sign transaction
       const transactionBuf = Buffer.from(swapTransaction, 'base64')

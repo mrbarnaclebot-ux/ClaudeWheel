@@ -18,6 +18,7 @@ const envSchema = z.object({
 
   // Wallets
   DEV_WALLET_PRIVATE_KEY: z.string().optional(),
+  DEV_WALLET_ADDRESS: z.string().optional(), // Public key for admin authorization
   OPS_WALLET_PRIVATE_KEY: z.string().optional(),
 
   // Token
@@ -64,6 +65,7 @@ export const env = {
 
   // Wallets
   devWalletPrivateKey: parsed.data.DEV_WALLET_PRIVATE_KEY,
+  devWalletAddress: parsed.data.DEV_WALLET_ADDRESS, // Public key for admin authorization
   opsWalletPrivateKey: parsed.data.OPS_WALLET_PRIVATE_KEY,
 
   // Token

@@ -6,7 +6,8 @@ export const metadata: Metadata = {
   title: 'Claude Flywheel | Autonomous Market Making',
   description: 'Real-time visualization of the Claude token flywheel - automated fee collection and market making on Solana',
   icons: {
-    icon: '/favicon.ico',
+    icon: '/logo.png',
+    apple: '/logo.png',
   },
 }
 

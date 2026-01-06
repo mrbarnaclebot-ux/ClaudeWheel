@@ -1,10 +1,13 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback, ClipboardEvent } from 'react'
 import { useWallet } from '@solana/wallet-adapter-react'
 import { WalletMultiButton } from '@solana/wallet-adapter-react-ui'
 import { motion } from 'framer-motion'
 import { supabase } from '@/lib/supabase'
+import { fetchTokenMetadata, isValidSolanaAddress } from '@/lib/token-metadata'
+import { fetchAdminNonce, updateConfigWithSignature } from '@/lib/api'
+import bs58 from 'bs58'
 
 // Dev wallet address - only this wallet can access admin
 const DEV_WALLET_ADDRESS = process.env.NEXT_PUBLIC_DEV_WALLET_ADDRESS || ''
@@ -13,20 +16,92 @@ interface Config {
   token_mint_address: string
   token_symbol: string
   token_decimals: number
+  flywheel_active: boolean
   market_making_enabled: boolean
+  fee_collection_enabled: boolean
+  ops_wallet_address: string
+  // Fee collection settings
+  fee_threshold_sol: number
+  fee_percentage: number
+  // Market making settings
+  min_buy_amount_sol: number
+  max_buy_amount_sol: number
+  buy_interval_minutes: number
+  slippage_bps: number
+  // Advanced algorithm settings
+  algorithm_mode: 'simple' | 'smart' | 'rebalance'
+  target_sol_allocation: number
+  target_token_allocation: number
+  rebalance_threshold: number
+  use_twap: boolean
+  twap_threshold_usd: number
+}
+
+const defaultConfig: Config = {
+  token_mint_address: '',
+  token_symbol: 'CLAUDE',
+  token_decimals: 6,
+  flywheel_active: false,
+  market_making_enabled: false,
+  fee_collection_enabled: true,
+  ops_wallet_address: '',
+  fee_threshold_sol: 0.1,
+  fee_percentage: 100,
+  min_buy_amount_sol: 0.01,
+  max_buy_amount_sol: 0.1,
+  buy_interval_minutes: 60,
+  slippage_bps: 500,
+  algorithm_mode: 'simple',
+  target_sol_allocation: 30,
+  target_token_allocation: 70,
+  rebalance_threshold: 10,
+  use_twap: true,
+  twap_threshold_usd: 50,
 }
 
 export default function AdminPage() {
-  const { publicKey, connected } = useWallet()
+  const { publicKey, connected, signMessage } = useWallet()
   const [isAuthorized, setIsAuthorized] = useState(false)
-  const [config, setConfig] = useState<Config>({
-    token_mint_address: '',
-    token_symbol: 'CLAUDE',
-    token_decimals: 6,
-    market_making_enabled: false,
-  })
+  const [config, setConfig] = useState<Config>(defaultConfig)
   const [isSaving, setIsSaving] = useState(false)
+  const [isFetchingMetadata, setIsFetchingMetadata] = useState(false)
   const [message, setMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null)
+
+  // Fetch token metadata when address changes
+  const handleFetchMetadata = useCallback(async (address: string) => {
+    if (!address || !isValidSolanaAddress(address)) {
+      return
+    }
+
+    setIsFetchingMetadata(true)
+    setMessage(null)
+
+    try {
+      const metadata = await fetchTokenMetadata(address)
+      if (metadata) {
+        setConfig(prev => ({
+          ...prev,
+          token_symbol: metadata.symbol || prev.token_symbol,
+          token_decimals: metadata.decimals ?? prev.token_decimals,
+        }))
+        setMessage({ type: 'success', text: `Found token: ${metadata.name} (${metadata.symbol})` })
+      } else {
+        setMessage({ type: 'error', text: 'Could not find token metadata. Please enter symbol manually.' })
+      }
+    } catch (error: any) {
+      console.error('Failed to fetch metadata:', error)
+      setMessage({ type: 'error', text: 'Failed to fetch token metadata. Please enter symbol manually.' })
+    } finally {
+      setIsFetchingMetadata(false)
+    }
+  }, [])
+
+  // Handle paste event for token address
+  const handlePaste = useCallback((e: ClipboardEvent<HTMLInputElement>) => {
+    e.preventDefault()
+    const pastedText = e.clipboardData.getData('text').trim()
+    setConfig(prev => ({ ...prev, token_mint_address: pastedText }))
+  }, [])
 
   // Check authorization
   useEffect(() => {
@@ -56,8 +131,23 @@ export default function AdminPage() {
         setConfig({
           token_mint_address: data.token_mint_address || '',
           token_symbol: data.token_symbol || 'CLAUDE',
-          token_decimals: data.token_decimals || 6,
-          market_making_enabled: data.market_making_enabled || false,
+          token_decimals: data.token_decimals ?? 6,
+          flywheel_active: data.flywheel_active ?? false,
+          market_making_enabled: data.market_making_enabled ?? false,
+          fee_collection_enabled: data.fee_collection_enabled ?? true,
+          ops_wallet_address: data.ops_wallet_address || '',
+          fee_threshold_sol: data.fee_threshold_sol ?? 0.1,
+          fee_percentage: data.fee_percentage ?? 100,
+          min_buy_amount_sol: data.min_buy_amount_sol ?? 0.01,
+          max_buy_amount_sol: data.max_buy_amount_sol ?? 0.1,
+          buy_interval_minutes: data.buy_interval_minutes ?? 60,
+          slippage_bps: data.slippage_bps ?? 500,
+          algorithm_mode: data.algorithm_mode ?? 'simple',
+          target_sol_allocation: data.target_sol_allocation ?? 30,
+          target_token_allocation: data.target_token_allocation ?? 70,
+          rebalance_threshold: data.rebalance_threshold ?? 10,
+          use_twap: data.use_twap ?? true,
+          twap_threshold_usd: data.twap_threshold_usd ?? 50,
         })
       }
     } catch (error) {
@@ -65,28 +155,49 @@ export default function AdminPage() {
     }
   }
 
-  // Save config to Supabase
+  // Save config using wallet signature verification
   async function saveConfig() {
-    if (!isAuthorized) return
+    if (!isAuthorized || !publicKey || !signMessage) return
 
     setIsSaving(true)
     setMessage(null)
 
     try {
-      const { error } = await supabase
-        .from('config')
-        .upsert({
-          id: 'main',
-          ...config,
-          updated_at: new Date().toISOString(),
-        })
+      // Step 1: Get a nonce message from the backend (includes hash of config)
+      // This binds the signature to the specific config values being saved
+      const nonceData = await fetchAdminNonce(config)
+      if (!nonceData) {
+        throw new Error('Failed to get nonce from server')
+      }
 
-      if (error) throw error
+      // Step 2: Sign the message with the wallet
+      // The message includes a hash of the config, preventing replay attacks with different values
+      const messageBytes = new TextEncoder().encode(nonceData.message)
+      const signatureBytes = await signMessage(messageBytes)
+      const signature = bs58.encode(signatureBytes)
+
+      // Step 3: Send signed config update to backend
+      // Backend verifies the config hash in the signed message matches the submitted config
+      const result = await updateConfigWithSignature(
+        nonceData.message,
+        signature,
+        publicKey.toString(),
+        config
+      )
+
+      if (!result.success) {
+        throw new Error(result.error || 'Failed to save configuration')
+      }
 
       setMessage({ type: 'success', text: 'Configuration saved successfully!' })
     } catch (error: any) {
       console.error('Failed to save config:', error)
-      setMessage({ type: 'error', text: error.message || 'Failed to save configuration' })
+      // Handle user rejection of signature
+      if (error.message?.includes('User rejected')) {
+        setMessage({ type: 'error', text: 'Signature rejected. Please approve the signature to save.' })
+      } else {
+        setMessage({ type: 'error', text: error.message || 'Failed to save configuration' })
+      }
     } finally {
       setIsSaving(false)
     }
@@ -150,7 +261,7 @@ export default function AdminPage() {
       <motion.div
         initial={{ opacity: 0, y: -20 }}
         animate={{ opacity: 1, y: 0 }}
-        className="max-w-2xl mx-auto mb-8"
+        className="max-w-3xl mx-auto mb-8"
       >
         <div className="flex items-center justify-between">
           <div>
@@ -174,14 +285,52 @@ export default function AdminPage() {
         </div>
       </motion.div>
 
-      {/* Config Form */}
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.1 }}
-        className="max-w-2xl mx-auto"
-      >
-        <div className="card-glow bg-bg-card p-6">
+      {/* Config Forms */}
+      <div className="max-w-3xl mx-auto space-y-6">
+        {/* Master Flywheel Toggle */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.05 }}
+          className={`card-glow p-6 ${config.flywheel_active ? 'bg-success/10 border-success/30' : 'bg-bg-card'}`}
+        >
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-4">
+              <div className={`w-4 h-4 rounded-full ${config.flywheel_active ? 'bg-success animate-pulse' : 'bg-text-muted'}`} />
+              <div>
+                <h2 className="font-display text-xl font-bold text-text-primary">
+                  Flywheel Status
+                </h2>
+                <p className="text-text-muted font-mono text-sm mt-1">
+                  {config.flywheel_active ? 'System is running' : 'System is paused'}
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={() => setConfig({ ...config, flywheel_active: !config.flywheel_active })}
+              className={`px-6 py-3 rounded-lg font-mono font-semibold transition-all ${
+                config.flywheel_active
+                  ? 'bg-error/20 text-error border border-error/30 hover:bg-error/30'
+                  : 'bg-success/20 text-success border border-success/30 hover:bg-success/30'
+              }`}
+            >
+              {config.flywheel_active ? 'PAUSE' : 'START'}
+            </button>
+          </div>
+          {!config.flywheel_active && (
+            <p className="text-text-muted font-mono text-xs mt-4 p-3 bg-bg-secondary rounded-lg">
+              When paused, fee collection and market making operations are disabled.
+            </p>
+          )}
+        </motion.div>
+
+        {/* Token Configuration */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.1 }}
+          className="card-glow bg-bg-card p-6"
+        >
           <h2 className="font-display text-lg font-semibold text-text-primary mb-6 flex items-center gap-2">
             <span className="text-accent-primary">◎</span>
             Token Configuration
@@ -192,97 +341,438 @@ export default function AdminPage() {
             <label className="block text-text-secondary font-mono text-sm mb-2">
               Token Mint Address (Contract Address)
             </label>
-            <input
-              type="text"
-              value={config.token_mint_address}
-              onChange={(e) => setConfig({ ...config, token_mint_address: e.target.value })}
-              placeholder="Enter your token mint address after PumpFun launch"
-              className="w-full bg-bg-secondary border border-border-subtle rounded-lg px-4 py-3 font-mono text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent-primary transition-colors"
-            />
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={config.token_mint_address}
+                onChange={(e) => setConfig(prev => ({ ...prev, token_mint_address: e.target.value }))}
+                onPaste={handlePaste}
+                placeholder="Paste your token mint address here"
+                className="flex-1 bg-bg-secondary border border-border-subtle rounded-lg px-4 py-3 font-mono text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent-primary transition-colors"
+              />
+              <button
+                type="button"
+                onClick={() => handleFetchMetadata(config.token_mint_address)}
+                disabled={isFetchingMetadata || !config.token_mint_address || !isValidSolanaAddress(config.token_mint_address)}
+                className="px-4 py-3 bg-accent-primary/20 text-accent-primary border border-accent-primary/30 rounded-lg font-mono text-sm hover:bg-accent-primary/30 disabled:opacity-50 disabled:cursor-not-allowed transition-colors whitespace-nowrap"
+              >
+                {isFetchingMetadata ? (
+                  <span className="flex items-center gap-2">
+                    <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                    </svg>
+                    Fetching...
+                  </span>
+                ) : (
+                  'Fetch Info'
+                )}
+              </button>
+            </div>
             <p className="text-text-muted font-mono text-xs mt-2">
-              Get this from PumpFun after launching your token
+              Enter CA and click "Fetch Info" to auto-fill token symbol and decimals
             </p>
           </div>
 
-          {/* Token Symbol */}
-          <div className="mb-6">
-            <label className="block text-text-secondary font-mono text-sm mb-2">
-              Token Symbol
-            </label>
-            <input
-              type="text"
-              value={config.token_symbol}
-              onChange={(e) => setConfig({ ...config, token_symbol: e.target.value.toUpperCase() })}
-              placeholder="CLAUDE"
-              maxLength={10}
-              className="w-full bg-bg-secondary border border-border-subtle rounded-lg px-4 py-3 font-mono text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent-primary transition-colors"
-            />
+          {/* Token Symbol & Decimals Row */}
+          <div className="grid grid-cols-2 gap-4 mb-6">
+            <div>
+              <label className="block text-text-secondary font-mono text-sm mb-2">
+                Token Symbol
+              </label>
+              <input
+                type="text"
+                value={config.token_symbol}
+                onChange={(e) => setConfig({ ...config, token_symbol: e.target.value.toUpperCase() })}
+                placeholder="CLAUDE"
+                maxLength={10}
+                className="w-full bg-bg-secondary border border-border-subtle rounded-lg px-4 py-3 font-mono text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent-primary transition-colors"
+              />
+            </div>
+            <div>
+              <label className="block text-text-secondary font-mono text-sm mb-2">
+                Token Decimals
+              </label>
+              <input
+                type="number"
+                value={config.token_decimals}
+                onChange={(e) => setConfig({ ...config, token_decimals: parseInt(e.target.value) || 6 })}
+                min={0}
+                max={18}
+                className="w-full bg-bg-secondary border border-border-subtle rounded-lg px-4 py-3 font-mono text-sm text-text-primary focus:outline-none focus:border-accent-primary transition-colors"
+              />
+            </div>
           </div>
+        </motion.div>
 
-          {/* Token Decimals */}
+        {/* Wallet Configuration */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.15 }}
+          className="card-glow bg-bg-card p-6"
+        >
+          <h2 className="font-display text-lg font-semibold text-text-primary mb-6 flex items-center gap-2">
+            <span className="text-accent-primary">◎</span>
+            Wallet Configuration
+          </h2>
+
+          {/* Dev Wallet (Read Only) */}
           <div className="mb-6">
             <label className="block text-text-secondary font-mono text-sm mb-2">
-              Token Decimals
+              Dev Wallet Address (Creator Fee Receiver)
             </label>
-            <input
-              type="number"
-              value={config.token_decimals}
-              onChange={(e) => setConfig({ ...config, token_decimals: parseInt(e.target.value) || 6 })}
-              min={0}
-              max={18}
-              className="w-full bg-bg-secondary border border-border-subtle rounded-lg px-4 py-3 font-mono text-text-primary focus:outline-none focus:border-accent-primary transition-colors"
-            />
+            <div className="w-full bg-bg-secondary/50 border border-border-subtle rounded-lg px-4 py-3 font-mono text-sm text-text-muted">
+              {DEV_WALLET_ADDRESS || 'Not configured in environment'}
+            </div>
             <p className="text-text-muted font-mono text-xs mt-2">
-              Usually 6 for PumpFun tokens
+              Set via NEXT_PUBLIC_DEV_WALLET_ADDRESS environment variable
             </p>
           </div>
 
-          {/* Market Making Toggle */}
-          <div className="mb-8">
-            <div className="flex items-center justify-between">
+          {/* Ops Wallet */}
+          <div className="mb-6">
+            <label className="block text-text-secondary font-mono text-sm mb-2">
+              Ops Wallet Address (Market Making Wallet)
+            </label>
+            <input
+              type="text"
+              value={config.ops_wallet_address}
+              onChange={(e) => setConfig({ ...config, ops_wallet_address: e.target.value })}
+              onPaste={(e) => {
+                e.preventDefault()
+                const pastedText = e.clipboardData.getData('text').trim()
+                setConfig(prev => ({ ...prev, ops_wallet_address: pastedText }))
+              }}
+              placeholder="Enter ops wallet address"
+              className="w-full bg-bg-secondary border border-border-subtle rounded-lg px-4 py-3 font-mono text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent-primary transition-colors"
+            />
+            <p className="text-text-muted font-mono text-xs mt-2">
+              Wallet that receives transferred SOL and executes buys
+            </p>
+          </div>
+        </motion.div>
+
+        {/* Fee Collection Settings */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.2 }}
+          className="card-glow bg-bg-card p-6"
+        >
+          <div className="flex items-center justify-between mb-6">
+            <h2 className="font-display text-lg font-semibold text-text-primary flex items-center gap-2">
+              <span className="text-accent-primary">◎</span>
+              Fee Collection
+            </h2>
+            <button
+              onClick={() => setConfig({ ...config, fee_collection_enabled: !config.fee_collection_enabled })}
+              className={`relative w-14 h-7 rounded-full transition-colors ${
+                config.fee_collection_enabled ? 'bg-success' : 'bg-bg-secondary'
+              }`}
+            >
+              <span
+                className={`absolute top-1 w-5 h-5 rounded-full bg-white transition-transform ${
+                  config.fee_collection_enabled ? 'left-8' : 'left-1'
+                }`}
+              />
+            </button>
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-text-secondary font-mono text-sm mb-2">
+                Fee Threshold (SOL)
+              </label>
+              <input
+                type="number"
+                value={config.fee_threshold_sol}
+                onChange={(e) => setConfig({ ...config, fee_threshold_sol: parseFloat(e.target.value) || 0.1 })}
+                step="0.01"
+                min={0}
+                className="w-full bg-bg-secondary border border-border-subtle rounded-lg px-4 py-3 font-mono text-sm text-text-primary focus:outline-none focus:border-accent-primary transition-colors"
+              />
+              <p className="text-text-muted font-mono text-xs mt-2">
+                Min balance before collecting
+              </p>
+            </div>
+            <div>
+              <label className="block text-text-secondary font-mono text-sm mb-2">
+                Transfer Percentage (%)
+              </label>
+              <input
+                type="number"
+                value={config.fee_percentage}
+                onChange={(e) => setConfig({ ...config, fee_percentage: Math.min(100, Math.max(0, parseInt(e.target.value) || 100)) })}
+                min={0}
+                max={100}
+                className="w-full bg-bg-secondary border border-border-subtle rounded-lg px-4 py-3 font-mono text-sm text-text-primary focus:outline-none focus:border-accent-primary transition-colors"
+              />
+              <p className="text-text-muted font-mono text-xs mt-2">
+                % of fees to transfer to ops
+              </p>
+            </div>
+          </div>
+        </motion.div>
+
+        {/* Market Making Settings */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.25 }}
+          className="card-glow bg-bg-card p-6"
+        >
+          <div className="flex items-center justify-between mb-6">
+            <h2 className="font-display text-lg font-semibold text-text-primary flex items-center gap-2">
+              <span className="text-accent-primary">◎</span>
+              Market Making
+            </h2>
+            <button
+              onClick={() => setConfig({ ...config, market_making_enabled: !config.market_making_enabled })}
+              className={`relative w-14 h-7 rounded-full transition-colors ${
+                config.market_making_enabled ? 'bg-success' : 'bg-bg-secondary'
+              }`}
+            >
+              <span
+                className={`absolute top-1 w-5 h-5 rounded-full bg-white transition-transform ${
+                  config.market_making_enabled ? 'left-8' : 'left-1'
+                }`}
+              />
+            </button>
+          </div>
+
+          <div className="grid grid-cols-2 gap-4 mb-4">
+            <div>
+              <label className="block text-text-secondary font-mono text-sm mb-2">
+                Min Buy Amount (SOL)
+              </label>
+              <input
+                type="number"
+                value={config.min_buy_amount_sol}
+                onChange={(e) => setConfig({ ...config, min_buy_amount_sol: parseFloat(e.target.value) || 0.01 })}
+                step="0.001"
+                min={0}
+                className="w-full bg-bg-secondary border border-border-subtle rounded-lg px-4 py-3 font-mono text-sm text-text-primary focus:outline-none focus:border-accent-primary transition-colors"
+              />
+            </div>
+            <div>
+              <label className="block text-text-secondary font-mono text-sm mb-2">
+                Max Buy Amount (SOL)
+              </label>
+              <input
+                type="number"
+                value={config.max_buy_amount_sol}
+                onChange={(e) => setConfig({ ...config, max_buy_amount_sol: parseFloat(e.target.value) || 0.1 })}
+                step="0.01"
+                min={0}
+                className="w-full bg-bg-secondary border border-border-subtle rounded-lg px-4 py-3 font-mono text-sm text-text-primary focus:outline-none focus:border-accent-primary transition-colors"
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-text-secondary font-mono text-sm mb-2">
+                Buy Interval (minutes)
+              </label>
+              <input
+                type="number"
+                value={config.buy_interval_minutes}
+                onChange={(e) => setConfig({ ...config, buy_interval_minutes: parseInt(e.target.value) || 60 })}
+                min={1}
+                className="w-full bg-bg-secondary border border-border-subtle rounded-lg px-4 py-3 font-mono text-sm text-text-primary focus:outline-none focus:border-accent-primary transition-colors"
+              />
+              <p className="text-text-muted font-mono text-xs mt-2">
+                Time between buy operations
+              </p>
+            </div>
+            <div>
+              <label className="block text-text-secondary font-mono text-sm mb-2">
+                Slippage Tolerance (bps)
+              </label>
+              <input
+                type="number"
+                value={config.slippage_bps}
+                onChange={(e) => setConfig({ ...config, slippage_bps: parseInt(e.target.value) || 500 })}
+                min={1}
+                max={5000}
+                className="w-full bg-bg-secondary border border-border-subtle rounded-lg px-4 py-3 font-mono text-sm text-text-primary focus:outline-none focus:border-accent-primary transition-colors"
+              />
+              <p className="text-text-muted font-mono text-xs mt-2">
+                500 bps = 5% slippage
+              </p>
+            </div>
+          </div>
+        </motion.div>
+
+        {/* Advanced Algorithm Settings */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.3 }}
+          className="card-glow bg-bg-card p-6"
+        >
+          <h2 className="font-display text-lg font-semibold text-text-primary mb-6 flex items-center gap-2">
+            <span className="text-accent-primary">◎</span>
+            Algorithm Settings
+          </h2>
+
+          {/* Algorithm Mode Selector */}
+          <div className="mb-6">
+            <label className="block text-text-secondary font-mono text-sm mb-2">
+              Algorithm Mode
+            </label>
+            <div className="grid grid-cols-3 gap-2">
+              {(['simple', 'smart', 'rebalance'] as const).map((mode) => (
+                <button
+                  key={mode}
+                  onClick={() => setConfig({ ...config, algorithm_mode: mode })}
+                  className={`p-3 rounded-lg font-mono text-sm border transition-all ${
+                    config.algorithm_mode === mode
+                      ? 'bg-accent-primary/20 text-accent-primary border-accent-primary/50'
+                      : 'bg-bg-secondary text-text-secondary border-border-subtle hover:border-text-muted'
+                  }`}
+                >
+                  <div className="font-semibold capitalize">{mode}</div>
+                  <div className="text-xs mt-1 text-text-muted">
+                    {mode === 'simple' && 'Basic threshold'}
+                    {mode === 'smart' && 'RSI + trends'}
+                    {mode === 'rebalance' && 'Portfolio balance'}
+                  </div>
+                </button>
+              ))}
+            </div>
+            <p className="text-text-muted font-mono text-xs mt-2">
+              {config.algorithm_mode === 'simple' && 'Simple: Buys when SOL balance exceeds threshold, basic percentage trades'}
+              {config.algorithm_mode === 'smart' && 'Smart: Uses price trend analysis, RSI, and confidence scoring'}
+              {config.algorithm_mode === 'rebalance' && 'Rebalance: Maintains target SOL/token allocation percentages'}
+            </p>
+          </div>
+
+          {/* Portfolio Allocation (for rebalance mode) */}
+          {config.algorithm_mode === 'rebalance' && (
+            <div className="mb-6 p-4 bg-bg-secondary/50 rounded-lg border border-border-subtle">
+              <h3 className="font-mono text-sm font-semibold text-text-primary mb-4">Target Allocation</h3>
+              <div className="grid grid-cols-2 gap-4 mb-4">
+                <div>
+                  <label className="block text-text-secondary font-mono text-sm mb-2">
+                    SOL Allocation (%)
+                  </label>
+                  <input
+                    type="number"
+                    value={config.target_sol_allocation}
+                    onChange={(e) => {
+                      const solPct = Math.min(100, Math.max(0, parseInt(e.target.value) || 30))
+                      setConfig({ ...config, target_sol_allocation: solPct, target_token_allocation: 100 - solPct })
+                    }}
+                    min={0}
+                    max={100}
+                    className="w-full bg-bg-secondary border border-border-subtle rounded-lg px-4 py-3 font-mono text-sm text-text-primary focus:outline-none focus:border-accent-primary transition-colors"
+                  />
+                </div>
+                <div>
+                  <label className="block text-text-secondary font-mono text-sm mb-2">
+                    Token Allocation (%)
+                  </label>
+                  <input
+                    type="number"
+                    value={config.target_token_allocation}
+                    onChange={(e) => {
+                      const tokenPct = Math.min(100, Math.max(0, parseInt(e.target.value) || 70))
+                      setConfig({ ...config, target_token_allocation: tokenPct, target_sol_allocation: 100 - tokenPct })
+                    }}
+                    min={0}
+                    max={100}
+                    className="w-full bg-bg-secondary border border-border-subtle rounded-lg px-4 py-3 font-mono text-sm text-text-primary focus:outline-none focus:border-accent-primary transition-colors"
+                  />
+                </div>
+              </div>
               <div>
-                <label className="block text-text-secondary font-mono text-sm">
-                  Market Making
+                <label className="block text-text-secondary font-mono text-sm mb-2">
+                  Rebalance Threshold (%)
                 </label>
+                <input
+                  type="number"
+                  value={config.rebalance_threshold}
+                  onChange={(e) => setConfig({ ...config, rebalance_threshold: parseInt(e.target.value) || 10 })}
+                  min={1}
+                  max={50}
+                  className="w-full bg-bg-secondary border border-border-subtle rounded-lg px-4 py-3 font-mono text-sm text-text-primary focus:outline-none focus:border-accent-primary transition-colors"
+                />
+                <p className="text-text-muted font-mono text-xs mt-2">
+                  Triggers rebalance when allocation deviates by this %
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* TWAP Settings */}
+          <div className="p-4 bg-bg-secondary/50 rounded-lg border border-border-subtle">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h3 className="font-mono text-sm font-semibold text-text-primary">TWAP Execution</h3>
                 <p className="text-text-muted font-mono text-xs mt-1">
-                  Enable automated buy/sell operations
+                  Split large orders over time to reduce price impact
                 </p>
               </div>
               <button
-                onClick={() => setConfig({ ...config, market_making_enabled: !config.market_making_enabled })}
-                className={`relative w-14 h-7 rounded-full transition-colors ${
-                  config.market_making_enabled ? 'bg-success' : 'bg-bg-secondary'
+                onClick={() => setConfig({ ...config, use_twap: !config.use_twap })}
+                className={`relative w-12 h-6 rounded-full transition-colors ${
+                  config.use_twap ? 'bg-success' : 'bg-bg-card'
                 }`}
               >
                 <span
-                  className={`absolute top-1 w-5 h-5 rounded-full bg-white transition-transform ${
-                    config.market_making_enabled ? 'left-8' : 'left-1'
+                  className={`absolute top-0.5 w-5 h-5 rounded-full bg-white transition-transform ${
+                    config.use_twap ? 'left-6' : 'left-0.5'
                   }`}
                 />
               </button>
             </div>
+            {config.use_twap && (
+              <div>
+                <label className="block text-text-secondary font-mono text-sm mb-2">
+                  TWAP Threshold (USD)
+                </label>
+                <input
+                  type="number"
+                  value={config.twap_threshold_usd}
+                  onChange={(e) => setConfig({ ...config, twap_threshold_usd: parseFloat(e.target.value) || 50 })}
+                  min={1}
+                  className="w-full bg-bg-secondary border border-border-subtle rounded-lg px-4 py-3 font-mono text-sm text-text-primary focus:outline-none focus:border-accent-primary transition-colors"
+                />
+                <p className="text-text-muted font-mono text-xs mt-2">
+                  Orders above this value will use TWAP execution
+                </p>
+              </div>
+            )}
           </div>
+        </motion.div>
 
-          {/* Message */}
-          {message && (
-            <motion.div
-              initial={{ opacity: 0, y: -10 }}
-              animate={{ opacity: 1, y: 0 }}
-              className={`mb-6 p-4 rounded-lg font-mono text-sm ${
-                message.type === 'success'
-                  ? 'bg-success/20 text-success border border-success/30'
-                  : 'bg-error/20 text-error border border-error/30'
-              }`}
-            >
-              {message.text}
-            </motion.div>
-          )}
+        {/* Message */}
+        {message && (
+          <motion.div
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className={`p-4 rounded-lg font-mono text-sm ${
+              message.type === 'success'
+                ? 'bg-success/20 text-success border border-success/30'
+                : 'bg-error/20 text-error border border-error/30'
+            }`}
+          >
+            {message.text}
+          </motion.div>
+        )}
 
-          {/* Save Button */}
+        {/* Save Button */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.3 }}
+        >
           <button
             onClick={saveConfig}
             disabled={isSaving}
-            className="w-full btn btn-primary py-3 text-base disabled:opacity-50 disabled:cursor-not-allowed"
+            className="w-full btn btn-primary py-4 text-base disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {isSaving ? (
               <span className="flex items-center justify-center gap-2">
@@ -293,13 +783,13 @@ export default function AdminPage() {
                 Saving...
               </span>
             ) : (
-              'Save Configuration'
+              'Save All Configuration'
             )}
           </button>
-        </div>
+        </motion.div>
 
         {/* Back to Dashboard */}
-        <div className="mt-6 text-center">
+        <div className="text-center pb-8">
           <a
             href="/"
             className="text-text-muted hover:text-accent-primary font-mono text-sm transition-colors"
@@ -307,7 +797,7 @@ export default function AdminPage() {
             ← Back to Dashboard
           </a>
         </div>
-      </motion.div>
+      </div>
     </div>
   )
 }

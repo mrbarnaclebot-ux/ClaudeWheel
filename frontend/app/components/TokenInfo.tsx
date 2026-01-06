@@ -6,9 +6,10 @@ import { PLACEHOLDER_CA, shortenAddress } from '@/lib/utils'
 
 interface TokenInfoProps {
   contractAddress?: string
+  tokenSymbol?: string
 }
 
-export default function TokenInfo({ contractAddress = PLACEHOLDER_CA }: TokenInfoProps) {
+export default function TokenInfo({ contractAddress = PLACEHOLDER_CA, tokenSymbol = 'TOKEN' }: TokenInfoProps) {
   const [copied, setCopied] = useState(false)
 
   const handleCopy = async () => {
@@ -33,8 +34,9 @@ export default function TokenInfo({ contractAddress = PLACEHOLDER_CA }: TokenInf
           <div className="flex items-center gap-2">
             <span className="text-accent-primary text-lg">◎</span>
             <h3 className="text-sm font-mono font-semibold text-text-primary uppercase">
-              Contract Address
+              ${tokenSymbol}
             </h3>
+            <span className="badge badge-success text-xs">LIVE</span>
           </div>
           <div className="flex items-center gap-2">
             <a

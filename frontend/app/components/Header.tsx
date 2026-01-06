@@ -1,6 +1,7 @@
 'use client'
 
 import { motion } from 'framer-motion'
+import Image from 'next/image'
 
 interface HeaderProps {
   isActive?: boolean
@@ -19,8 +20,14 @@ export default function Header({ isActive = true }: HeaderProps) {
         <div className="flex items-center gap-3">
           {/* Logo icon */}
           <div className="relative">
-            <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-accent-primary to-accent-tertiary flex items-center justify-center">
-              <span className="text-bg-void font-bold text-lg">◈</span>
+            <div className="w-10 h-10 rounded-lg overflow-hidden">
+              <Image
+                src="/logo.png"
+                alt="Claude Flywheel"
+                width={40}
+                height={40}
+                className="w-full h-full object-contain"
+              />
             </div>
             <div className="absolute -top-1 -right-1">
               <div className={`w-3 h-3 rounded-full ${isActive ? 'bg-success' : 'bg-text-muted'}`}>

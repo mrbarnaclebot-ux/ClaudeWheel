@@ -114,3 +114,59 @@ export async function getRecentTransactions(limit: number = 20) {
 
   return data
 }
+
+export interface FlywheelConfig {
+  flywheel_active: boolean
+  market_making_enabled: boolean
+  fee_collection_enabled: boolean
+  fee_threshold_sol: number
+  fee_percentage: number
+  min_buy_amount_sol: number
+  max_buy_amount_sol: number
+  buy_interval_minutes: number
+  slippage_bps: number
+  algorithm_mode: 'simple' | 'smart' | 'rebalance'
+  target_sol_allocation: number
+  target_token_allocation: number
+  rebalance_threshold: number
+  use_twap: boolean
+  twap_threshold_usd: number
+}
+
+const DEFAULT_CONFIG: FlywheelConfig = {
+  flywheel_active: false,
+  market_making_enabled: false,
+  fee_collection_enabled: true,
+  fee_threshold_sol: 0.01,
+  fee_percentage: 50,
+  min_buy_amount_sol: 0.01,
+  max_buy_amount_sol: 0.1,
+  buy_interval_minutes: 5,
+  slippage_bps: 100,
+  algorithm_mode: 'simple',
+  target_sol_allocation: 30,
+  target_token_allocation: 70,
+  rebalance_threshold: 10,
+  use_twap: true,
+  twap_threshold_usd: 50,
+}
+
+export async function fetchConfig(): Promise<FlywheelConfig> {
+  if (!supabase) return DEFAULT_CONFIG
+
+  const { data, error } = await supabase
+    .from('config')
+    .select('*')
+    .eq('id', 'main')
+    .single()
+
+  if (error) {
+    console.error('Failed to fetch config:', error)
+    return DEFAULT_CONFIG
+  }
+
+  return {
+    ...DEFAULT_CONFIG,
+    ...data,
+  }
+}

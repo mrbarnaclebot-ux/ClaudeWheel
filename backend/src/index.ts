@@ -7,6 +7,7 @@ import { marketMaker } from './services/market-maker'
 import { walletMonitor } from './services/wallet-monitor'
 import { startFlywheelJob } from './jobs/flywheel.job'
 import statusRoutes from './routes/status.routes'
+import adminRoutes from './routes/admin.routes'
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CLAUDE FLYWHEEL BACKEND
@@ -21,6 +22,7 @@ app.use(express.json())
 
 // Routes
 app.use('/api/status', statusRoutes)
+app.use('/api/admin', adminRoutes)
 
 // Root endpoint
 app.get('/', (req, res) => {
@@ -33,6 +35,10 @@ app.get('/', (req, res) => {
       wallets: '/api/status/wallets',
       transactions: '/api/status/transactions',
       health: '/api/status/health',
+      admin: {
+        config: '/api/admin/config (POST - requires signature)',
+        nonce: '/api/admin/nonce (GET)',
+      },
     },
   })
 })
