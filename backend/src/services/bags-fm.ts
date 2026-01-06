@@ -150,37 +150,10 @@ class BagsFmService {
 
   /**
    * Get token info from Bags.fm
-   * Tries multiple endpoints to find token data
+   * Uses the working creator/v3 endpoint
    */
   async getTokenCreatorInfo(tokenMint: string): Promise<TokenCreatorInfo | null> {
-    // Try different token info endpoints
-    const endpoints = [
-      `/token/${tokenMint}`,
-      `/token-launch/token?tokenMint=${tokenMint}`,
-      `/token-launch/info?tokenMint=${tokenMint}`,
-    ]
-
-    for (const endpoint of endpoints) {
-      const tokenData = await this.fetch<any>(endpoint)
-      if (tokenData && !Array.isArray(tokenData) && (tokenData.name || tokenData.tokenName || tokenData.symbol)) {
-        console.log(`✅ Found token info at ${endpoint}`)
-        return {
-          tokenMint,
-          creatorWallet: tokenData.creatorWallet || tokenData.creator || '',
-          tokenName: tokenData.name || tokenData.tokenName || '',
-          tokenSymbol: tokenData.symbol || tokenData.tokenSymbol || '',
-          tokenImage: tokenData.image || tokenData.tokenImage || tokenData.logo || '',
-          bondingCurveProgress: tokenData.bondingCurveProgress || tokenData.progress || 0,
-          isGraduated: tokenData.isGraduated ?? tokenData.graduated ?? false,
-          marketCap: tokenData.marketCap || tokenData.mcap || 0,
-          volume24h: tokenData.volume24h || tokenData.volume || 0,
-          holders: tokenData.holders || tokenData.holderCount || 0,
-          createdAt: tokenData.createdAt || tokenData.created || '',
-        }
-      }
-    }
-
-    // Fall back to creator endpoint for basic info
+    // Use the creator endpoint which is the only working one on public-api-v2
     const creatorData = await this.fetch<any>(`/token-launch/creator/v3?tokenMint=${tokenMint}`)
 
     if (!creatorData) return null
@@ -192,10 +165,10 @@ class BagsFmService {
       return {
         tokenMint,
         creatorWallet: creator.wallet || '',
-        tokenName: '',  // Not available from creator endpoint
-        tokenSymbol: '',
+        tokenName: creator.username || '',  // Use username as fallback
+        tokenSymbol: '',  // Not available from creator endpoint
         tokenImage: creator.pfp || '',
-        bondingCurveProgress: 0,  // Actual progress not available
+        bondingCurveProgress: 0,  // Actual progress not available from this endpoint
         isGraduated: false,  // On bonding curve since we have creator data
         marketCap: 0,
         volume24h: 0,
