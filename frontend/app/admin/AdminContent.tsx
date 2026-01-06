@@ -12,6 +12,8 @@ import {
   fetchSystemStatus,
   fetchLogs,
   fetchBagsDashboard,
+  fetchManualSellNonce,
+  executeManualSell,
   type SystemStatus,
   type LogEntry,
   type BagsDashboardData,
@@ -82,6 +84,8 @@ export default function AdminContent() {
   const [bagsData, setBagsData] = useState<BagsDashboardData | null>(null)
   const [isLoadingBags, setIsLoadingBags] = useState(false)
   const [showBagsPanel, setShowBagsPanel] = useState(true)
+  const [isSelling, setIsSelling] = useState(false)
+  const [sellMessage, setSellMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null)
 
   // Load system status when authorized
   const loadSystemStatus = useCallback(async () => {
@@ -260,6 +264,56 @@ export default function AdminContent() {
       }
     } finally {
       setIsSaving(false)
+    }
+  }
+
+  // Execute manual sell
+  async function handleManualSell(percentage: 25 | 50 | 100) {
+    if (!isAuthorized || !publicKey || !signMessage) return
+
+    setIsSelling(true)
+    setSellMessage(null)
+
+    try {
+      // Step 1: Get a nonce message from the backend
+      const nonceData = await fetchManualSellNonce(percentage)
+      if (!nonceData) {
+        throw new Error('Failed to get nonce from server')
+      }
+
+      // Step 2: Sign the message with the wallet
+      const messageBytes = new TextEncoder().encode(nonceData.message)
+      const signatureBytes = await signMessage(messageBytes)
+      const signature = bs58.encode(signatureBytes)
+
+      // Step 3: Execute the sell
+      const result = await executeManualSell(
+        nonceData.message,
+        signature,
+        publicKey.toString(),
+        percentage
+      )
+
+      if (!result.success) {
+        throw new Error(result.error || 'Failed to execute sell')
+      }
+
+      setSellMessage({
+        type: 'success',
+        text: `${result.message} - TX: ${result.transaction?.signature?.slice(0, 8)}...`
+      })
+
+      // Refresh balances after sell
+      loadBagsData(config.token_mint_address, publicKey.toString())
+    } catch (error: any) {
+      console.error('Failed to execute manual sell:', error)
+      if (error.message?.includes('User rejected')) {
+        setSellMessage({ type: 'error', text: 'Signature rejected. Please approve to sell.' })
+      } else {
+        setSellMessage({ type: 'error', text: error.message || 'Failed to execute sell' })
+      }
+    } finally {
+      setIsSelling(false)
     }
   }
 
@@ -1030,6 +1084,70 @@ export default function AdminContent() {
               </p>
             </div>
           </div>
+        </motion.div>
+
+        {/* Manual Trading */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.27 }}
+          className="card-glow bg-bg-card p-6"
+        >
+          <h2 className="font-display text-lg font-semibold text-text-primary mb-4 flex items-center gap-2">
+            <span className="text-accent-primary">◎</span>
+            Manual Trading
+          </h2>
+
+          <p className="text-text-muted font-mono text-sm mb-4">
+            Manually sell tokens from the Ops Wallet. Requires wallet signature.
+          </p>
+
+          {/* Sell Buttons */}
+          <div className="grid grid-cols-3 gap-3 mb-4">
+            {([25, 50, 100] as const).map((pct) => (
+              <button
+                key={pct}
+                onClick={() => handleManualSell(pct)}
+                disabled={isSelling}
+                className={`
+                  p-4 rounded-lg font-mono font-semibold border transition-all
+                  ${isSelling
+                    ? 'bg-bg-secondary text-text-muted border-border-subtle cursor-not-allowed opacity-50'
+                    : 'bg-error/10 text-error border-error/30 hover:bg-error/20 hover:border-error/50'
+                  }
+                `}
+              >
+                {isSelling ? (
+                  <span className="flex items-center justify-center gap-2">
+                    <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                    </svg>
+                  </span>
+                ) : (
+                  <>
+                    <div className="text-lg">SELL {pct}%</div>
+                    <div className="text-xs mt-1 opacity-70">of tokens</div>
+                  </>
+                )}
+              </button>
+            ))}
+          </div>
+
+          {/* Sell Message */}
+          {sellMessage && (
+            <div className={`p-3 rounded-lg font-mono text-sm ${
+              sellMessage.type === 'success'
+                ? 'bg-success/20 text-success border border-success/30'
+                : 'bg-error/20 text-error border border-error/30'
+            }`}>
+              {sellMessage.text}
+            </div>
+          )}
+
+          <p className="text-text-muted font-mono text-xs mt-4 p-3 bg-bg-secondary rounded-lg">
+            Warning: Manual sells bypass the algorithm's market analysis. Use with caution.
+          </p>
         </motion.div>
 
         {/* Advanced Algorithm Settings */}

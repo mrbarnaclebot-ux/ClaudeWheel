@@ -3,6 +3,8 @@ import { z } from 'zod'
 import { verifySignature, isMessageRecent, hashConfig, extractConfigHash, generateSecureNonceMessage } from '../utils/signature-verify'
 import { supabase } from '../config/database'
 import { env } from '../config/env'
+import { marketMaker } from '../services/market-maker'
+import { walletMonitor } from '../services/wallet-monitor'
 
 // ═══════════════════════════════════════════════════════════════════════════
 // ADMIN ROUTES
@@ -174,6 +176,128 @@ router.post('/nonce', (req: Request, res: Response) => {
   const { message, timestamp, nonce } = generateSecureNonceMessage('update_config', configHash)
 
   res.json({ message, timestamp, nonce, configHash })
+})
+
+// Schema for manual sell request
+const ManualSellSchema = z.object({
+  // The message that was signed (must include timestamp for replay protection)
+  message: z.string().min(1),
+  // Base58-encoded signature
+  signature: z.string().min(1),
+  // Public key of the signer (must match DEV_WALLET)
+  publicKey: z.string().min(32).max(44),
+  // Sell percentage (25, 50, or 100)
+  percentage: z.number().min(1).max(100),
+})
+
+/**
+ * POST /api/admin/manual-sell
+ * Execute a manual sell of tokens (requires wallet signature)
+ */
+router.post('/manual-sell', async (req: Request, res: Response) => {
+  try {
+    // Validate request body
+    const parseResult = ManualSellSchema.safeParse(req.body)
+    if (!parseResult.success) {
+      return res.status(400).json({
+        error: 'Invalid request body',
+        details: parseResult.error.errors,
+      })
+    }
+
+    const { message, signature, publicKey, percentage } = parseResult.data
+
+    // Step 1: Verify the public key matches the authorized dev wallet
+    const authorizedWallet = env.devWalletAddress
+    if (!authorizedWallet) {
+      console.error('DEV_WALLET_ADDRESS not configured')
+      return res.status(500).json({ error: 'Server configuration error' })
+    }
+
+    if (publicKey !== authorizedWallet) {
+      console.warn(`Unauthorized manual sell attempt from: ${publicKey}`)
+      return res.status(403).json({ error: 'Unauthorized: wallet not authorized for admin actions' })
+    }
+
+    // Step 2: Verify the message is recent (prevent replay attacks)
+    if (!isMessageRecent(message, 5 * 60 * 1000)) { // 5 minute window
+      return res.status(400).json({ error: 'Message expired. Please sign a new message.' })
+    }
+
+    // Step 3: Verify the signature
+    const verificationResult = verifySignature(message, signature, publicKey)
+    if (!verificationResult.valid) {
+      console.warn(`Invalid signature from ${publicKey}: ${verificationResult.error}`)
+      return res.status(401).json({ error: `Signature verification failed: ${verificationResult.error}` })
+    }
+
+    // Step 4: Verify the message contains the correct action and percentage
+    if (!message.includes('manual_sell') || !message.includes(`${percentage}%`)) {
+      return res.status(400).json({ error: 'Message does not match requested action' })
+    }
+
+    // Step 5: Get current token balance
+    const balances = await walletMonitor.getOpsWalletBalance()
+    if (!balances || balances.token_balance <= 0) {
+      return res.status(400).json({ error: 'No tokens available to sell' })
+    }
+
+    // Step 6: Calculate amount to sell
+    const tokenAmount = balances.token_balance * (percentage / 100)
+
+    console.log(`🔴 Manual sell initiated: ${percentage}% (${tokenAmount.toFixed(0)} tokens)`)
+
+    // Step 7: Temporarily enable market making for this operation
+    const wasEnabled = marketMaker.getStats().isEnabled
+    if (!wasEnabled) {
+      marketMaker.enable()
+    }
+
+    // Step 8: Execute the sell
+    const result = await marketMaker.executeSell(tokenAmount)
+
+    // Restore previous state
+    if (!wasEnabled) {
+      marketMaker.disable()
+    }
+
+    if (!result) {
+      return res.status(500).json({ error: 'Sell execution failed' })
+    }
+
+    console.log(`✅ Manual sell completed: ${result.signature}`)
+
+    return res.json({
+      success: true,
+      message: `Successfully sold ${percentage}% of tokens`,
+      transaction: {
+        signature: result.signature,
+        amount: result.amount,
+        token: result.token,
+      },
+    })
+  } catch (error) {
+    console.error('Error in manual sell:', error)
+    return res.status(500).json({ error: 'Internal server error' })
+  }
+})
+
+/**
+ * POST /api/admin/manual-sell/nonce
+ * Generate a nonce message for manual sell signature
+ */
+router.post('/manual-sell/nonce', (req: Request, res: Response) => {
+  const { percentage } = req.body
+
+  if (!percentage || ![25, 50, 100].includes(percentage)) {
+    return res.status(400).json({
+      error: 'Invalid percentage. Must be 25, 50, or 100.',
+    })
+  }
+
+  const { message, timestamp, nonce } = generateSecureNonceMessage('manual_sell', `${percentage}%`)
+
+  res.json({ message, timestamp, nonce, percentage })
 })
 
 export default router

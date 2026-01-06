@@ -385,3 +385,86 @@ export async function fetchBagsDashboard(tokenMint?: string, wallet?: string): P
     return null
   }
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MANUAL TRADING API
+// ═══════════════════════════════════════════════════════════════════════════
+
+export interface ManualSellResult {
+  success: boolean
+  message?: string
+  transaction?: {
+    signature: string
+    amount: number
+    token: string
+  }
+  error?: string
+}
+
+// Get a nonce message to sign for manual sell
+export async function fetchManualSellNonce(percentage: number): Promise<{
+  message: string
+  timestamp: number
+  nonce: string
+  percentage: number
+} | null> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/admin/manual-sell/nonce`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ percentage }),
+    })
+
+    if (!response.ok) {
+      const json = await response.json()
+      console.error('Failed to fetch manual sell nonce:', json.error)
+      return null
+    }
+
+    const json = await response.json()
+    return json
+  } catch (error) {
+    console.error('Failed to fetch manual sell nonce:', error)
+    return null
+  }
+}
+
+// Execute manual sell with signed message
+export async function executeManualSell(
+  message: string,
+  signature: string,
+  publicKey: string,
+  percentage: number
+): Promise<ManualSellResult> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/admin/manual-sell`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        message,
+        signature,
+        publicKey,
+        percentage,
+      }),
+    })
+
+    const json = await response.json()
+
+    if (!response.ok) {
+      return { success: false, error: json.error || 'Failed to execute sell' }
+    }
+
+    return {
+      success: true,
+      message: json.message,
+      transaction: json.transaction,
+    }
+  } catch (error) {
+    console.error('Failed to execute manual sell:', error)
+    return { success: false, error: 'Network error' }
+  }
+}
