@@ -110,6 +110,79 @@ export async function updateFeeStats(data: {
   return result
 }
 
+export async function calculateAndUpdateFeeStats(): Promise<{
+  total_collected: number
+  today_collected: number
+  hour_collected: number
+} | null> {
+  if (!supabase) {
+    console.warn('⚠️ Supabase not configured - skipping fee stats calculation')
+    return null
+  }
+
+  try {
+    const now = new Date()
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString()
+    const hourAgo = new Date(now.getTime() - 60 * 60 * 1000).toISOString()
+
+    // Get all fee_collection transactions
+    const { data: allFees, error: allError } = await supabase
+      .from('transactions')
+      .select('amount')
+      .eq('type', 'fee_collection')
+      .eq('status', 'confirmed')
+
+    if (allError) {
+      console.error('Failed to fetch total fees:', allError)
+      return null
+    }
+
+    // Get today's fee collections
+    const { data: todayFees, error: todayError } = await supabase
+      .from('transactions')
+      .select('amount')
+      .eq('type', 'fee_collection')
+      .eq('status', 'confirmed')
+      .gte('created_at', todayStart)
+
+    if (todayError) {
+      console.error('Failed to fetch today fees:', todayError)
+      return null
+    }
+
+    // Get last hour's fee collections
+    const { data: hourFees, error: hourError } = await supabase
+      .from('transactions')
+      .select('amount')
+      .eq('type', 'fee_collection')
+      .eq('status', 'confirmed')
+      .gte('created_at', hourAgo)
+
+    if (hourError) {
+      console.error('Failed to fetch hour fees:', hourError)
+      return null
+    }
+
+    const total_collected = allFees?.reduce((sum, tx) => sum + Number(tx.amount), 0) || 0
+    const today_collected = todayFees?.reduce((sum, tx) => sum + Number(tx.amount), 0) || 0
+    const hour_collected = hourFees?.reduce((sum, tx) => sum + Number(tx.amount), 0) || 0
+
+    console.log(`📊 Fee stats: Total=${total_collected.toFixed(4)} SOL, Today=${today_collected.toFixed(4)} SOL, Hour=${hour_collected.toFixed(4)} SOL`)
+
+    // Update the fee_stats table
+    await updateFeeStats({
+      total_collected,
+      today_collected,
+      hour_collected,
+    })
+
+    return { total_collected, today_collected, hour_collected }
+  } catch (error) {
+    console.error('Failed to calculate fee stats:', error)
+    return null
+  }
+}
+
 export async function getRecentTransactions(limit: number = 20) {
   if (!supabase) return []
 

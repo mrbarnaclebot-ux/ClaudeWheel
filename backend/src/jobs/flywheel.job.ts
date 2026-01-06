@@ -5,7 +5,7 @@ import { walletMonitor } from '../services/wallet-monitor'
 import { priceAnalyzer } from '../services/price-analyzer'
 import { twapExecutor } from '../services/twap-executor'
 import { inventoryManager } from '../services/inventory-manager'
-import { fetchConfig, updateWalletBalance, type FlywheelConfig } from '../config/database'
+import { fetchConfig, updateWalletBalance, calculateAndUpdateFeeStats, type FlywheelConfig } from '../config/database'
 import { env } from '../config/env'
 import type { Transaction } from '../types'
 
@@ -290,6 +290,9 @@ async function runFlywheelCycle() {
         usd_value: balances.opsWallet.usd_value,
       })
     }
+
+    // Step 2: ALWAYS update fee stats from transaction history (even when paused)
+    await calculateAndUpdateFeeStats()
 
     // Check if flywheel is active for trading operations
     if (!config.flywheel_active) {
