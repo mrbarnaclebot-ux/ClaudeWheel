@@ -22,7 +22,7 @@ const envSchema = z.object({
   OPS_WALLET_PRIVATE_KEY: z.string().optional(),
 
   // Token
-  TOKEN_MINT_ADDRESS: z.string().default('7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU'),
+  TOKEN_MINT_ADDRESS: z.string().default('8JLGQ7RqhsvhsDhvjMuJUeeuaQ53GTJqSHNaBWf4BAGS'),
   TOKEN_DECIMALS: z.string().default('6'),
 
   // Supabase
