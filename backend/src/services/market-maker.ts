@@ -147,26 +147,19 @@ export class MarketMaker {
 
   /**
    * Execute a swap via Bags.fm bonding curve
+   * Requires a quoteId from bagsFmService.getTradeQuote()
    */
-  async executeBagsFmSwap(
-    inputMint: string,
-    outputMint: string,
-    amount: number,
-    side: 'buy' | 'sell'
-  ): Promise<string | null> {
+  async executeBagsFmSwap(quoteId: string): Promise<string | null> {
     if (!this.opsWallet) {
       console.warn('⚠️ Ops wallet not configured')
       return null
     }
 
     try {
-      // Get swap transaction from Bags.fm
+      // Get swap transaction from Bags.fm using quote ID
       const swapData = await bagsFmService.generateSwapTransaction(
         this.opsWallet.publicKey.toString(),
-        inputMint,
-        outputMint,
-        amount,
-        side
+        quoteId
       )
 
       if (!swapData) {
@@ -256,17 +249,12 @@ export class MarketMaker {
           'buy'
         )
 
-        if (!quote) {
+        if (!quote || !quote.quoteId) {
           console.error('Failed to get Bags.fm buy quote')
           return null
         }
 
-        signature = await this.executeBagsFmSwap(
-          SOL_MINT,
-          tokenMint.toString(),
-          lamports,
-          'buy'
-        )
+        signature = await this.executeBagsFmSwap(quote.quoteId)
         outputAmount = quote.outputAmount / Math.pow(10, env.tokenDecimals)
       }
 
@@ -352,17 +340,12 @@ export class MarketMaker {
           'sell'
         )
 
-        if (!quote) {
+        if (!quote || !quote.quoteId) {
           console.error('Failed to get Bags.fm sell quote')
           return null
         }
 
-        signature = await this.executeBagsFmSwap(
-          tokenMint.toString(),
-          SOL_MINT,
-          tokenUnits,
-          'sell'
-        )
+        signature = await this.executeBagsFmSwap(quote.quoteId)
       }
 
       if (!signature) {

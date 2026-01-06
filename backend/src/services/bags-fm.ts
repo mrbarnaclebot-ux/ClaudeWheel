@@ -57,6 +57,7 @@ export interface ClaimStats {
 }
 
 export interface TradeQuote {
+  quoteId: string // Required for swap execution
   inputMint: string
   outputMint: string
   inputAmount: number
@@ -229,7 +230,11 @@ class BagsFmService {
 
     if (!data) return null
 
+    // Quote ID may be in different fields depending on API version
+    const quoteId = data.quoteId || data.requestId || data.id || ''
+
     return {
+      quoteId,
       inputMint: data.inputMint || inputMint,
       outputMint: data.outputMint || outputMint,
       inputAmount: data.inputAmount || amount,
@@ -241,22 +246,17 @@ class BagsFmService {
 
   /**
    * Generate a swap transaction for bonding curve trades
-   * Note: side is determined by inputMint/outputMint (SOL→token = buy, token→SOL = sell)
+   * Requires a quoteId from getTradeQuote()
    */
   async generateSwapTransaction(
     walletAddress: string,
-    inputMint: string,
-    outputMint: string,
-    amount: number,
-    _side?: 'buy' | 'sell' // Kept for API compatibility but not sent to Bags.fm
+    quoteId: string
   ): Promise<SwapTransaction | null> {
     const data = await this.fetch<any>('/trade/swap', {
       method: 'POST',
       body: JSON.stringify({
         userPublicKey: walletAddress,
-        inputMint,
-        outputMint,
-        amount,
+        quoteId,
       }),
     })
 
