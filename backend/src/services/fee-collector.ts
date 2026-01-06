@@ -8,6 +8,7 @@ import {
 } from '@solana/web3.js'
 import { connection, getBalance } from '../config/solana'
 import { env } from '../config/env'
+import { insertTransaction } from '../config/database'
 import type { Transaction as TxRecord } from '../types'
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -93,6 +94,15 @@ export class FeeCollector {
         created_at: new Date(),
       }
 
+      // Record to Supabase for live feed
+      await insertTransaction({
+        type: 'fee_collection',
+        amount: transferAmount,
+        token: 'SOL',
+        signature,
+        status: 'confirmed',
+      })
+
       return txRecord
     } catch (error) {
       console.error('❌ Fee collection failed:', error)
@@ -149,6 +159,15 @@ export class FeeCollector {
         status: 'confirmed',
         created_at: new Date(),
       }
+
+      // Record to Supabase for live feed
+      await insertTransaction({
+        type: 'transfer',
+        amount,
+        token: 'SOL',
+        signature,
+        status: 'confirmed',
+      })
 
       return txRecord
     } catch (error) {

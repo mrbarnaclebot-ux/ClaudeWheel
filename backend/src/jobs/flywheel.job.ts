@@ -5,7 +5,7 @@ import { walletMonitor } from '../services/wallet-monitor'
 import { priceAnalyzer } from '../services/price-analyzer'
 import { twapExecutor } from '../services/twap-executor'
 import { inventoryManager } from '../services/inventory-manager'
-import { fetchConfig, type FlywheelConfig } from '../config/database'
+import { fetchConfig, updateWalletBalance, type FlywheelConfig } from '../config/database'
 import { env } from '../config/env'
 import type { Transaction } from '../types'
 
@@ -272,14 +272,30 @@ async function runFlywheelCycle() {
       return
     }
 
-    // Step 1: Get current balances
+    // Step 1: Get current balances and persist to Supabase
     const balances = await walletMonitor.getAllBalances()
     console.log('📊 Current balances:')
     if (balances.devWallet) {
       console.log(`   Dev: ${balances.devWallet.sol_balance.toFixed(6)} SOL`)
+      // Persist to Supabase for frontend display
+      await updateWalletBalance({
+        wallet_type: 'dev',
+        address: balances.devWallet.address,
+        sol_balance: balances.devWallet.sol_balance,
+        token_balance: balances.devWallet.token_balance,
+        usd_value: balances.devWallet.usd_value,
+      })
     }
     if (balances.opsWallet) {
       console.log(`   Ops: ${balances.opsWallet.sol_balance.toFixed(6)} SOL, ${balances.opsWallet.token_balance.toFixed(0)} tokens`)
+      // Persist to Supabase for frontend display
+      await updateWalletBalance({
+        wallet_type: 'ops',
+        address: balances.opsWallet.address,
+        sol_balance: balances.opsWallet.sol_balance,
+        token_balance: balances.opsWallet.token_balance,
+        usd_value: balances.opsWallet.usd_value,
+      })
     }
 
     // Step 2: Collect fees from dev wallet (if enabled)
