@@ -325,12 +325,14 @@ export async function loadFlywheelState(): Promise<FlywheelState> {
 
   console.log(`📂 Loaded flywheel state: ${data.cycle_phase} phase, buys: ${data.buy_count}, sells: ${data.sell_count}`)
 
+  // IMPORTANT: Supabase returns NUMERIC columns as strings for large values
+  // Must explicitly convert to numbers to avoid calculation issues
   return {
     cycle_phase: data.cycle_phase || 'buy',
-    buy_count: data.buy_count || 0,
-    sell_count: data.sell_count || 0,
-    sell_phase_token_snapshot: data.sell_phase_token_snapshot || 0,
-    sell_amount_per_tx: data.sell_amount_per_tx || 0,
+    buy_count: Number(data.buy_count) || 0,
+    sell_count: Number(data.sell_count) || 0,
+    sell_phase_token_snapshot: Number(data.sell_phase_token_snapshot) || 0,
+    sell_amount_per_tx: Number(data.sell_amount_per_tx) || 0,
     updated_at: data.updated_at || new Date().toISOString(),
   }
 }
