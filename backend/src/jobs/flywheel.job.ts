@@ -265,18 +265,11 @@ async function runFlywheelCycle() {
     // Fetch config from database
     const config = await fetchConfig()
 
-    // Check if flywheel is active
-    if (!config.flywheel_active) {
-      console.log('⏸️ Flywheel is paused - skipping cycle')
-      console.log('═══════════════════════════════════════════════════════════\n')
-      return
-    }
-
-    // Step 1: Get current balances and persist to Supabase
+    // Step 1: ALWAYS get current balances and persist to Supabase (even when paused)
     const balances = await walletMonitor.getAllBalances()
     console.log('📊 Current balances:')
     if (balances.devWallet) {
-      console.log(`   Dev: ${balances.devWallet.sol_balance.toFixed(6)} SOL`)
+      console.log(`   Dev: ${balances.devWallet.sol_balance.toFixed(6)} SOL, ${balances.devWallet.token_balance.toFixed(0)} tokens`)
       // Persist to Supabase for frontend display
       await updateWalletBalance({
         wallet_type: 'dev',
@@ -296,6 +289,13 @@ async function runFlywheelCycle() {
         token_balance: balances.opsWallet.token_balance,
         usd_value: balances.opsWallet.usd_value,
       })
+    }
+
+    // Check if flywheel is active for trading operations
+    if (!config.flywheel_active) {
+      console.log('⏸️ Flywheel is paused - skipping trading operations')
+      console.log('═══════════════════════════════════════════════════════════\n')
+      return
     }
 
     // Step 2: Collect fees from dev wallet (if enabled)

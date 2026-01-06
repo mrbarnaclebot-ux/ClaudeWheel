@@ -56,11 +56,17 @@ export class WalletMonitor {
 
     try {
       const tokenMint = getTokenMint()
+      if (!tokenMint) {
+        console.warn('⚠️ Token mint not configured - token balance will be 0')
+      }
+
       const [solBalance, tokenBalance, solPrice] = await Promise.all([
         getBalance(this.opsWalletAddress),
         tokenMint ? getTokenBalance(this.opsWalletAddress, tokenMint) : Promise.resolve(0),
         getSolPrice(),
       ])
+
+      console.log(`🔍 Ops wallet on-chain balance: ${solBalance.toFixed(6)} SOL, ${tokenBalance} tokens`)
 
       return {
         wallet_type: 'ops',

@@ -24,7 +24,12 @@ export async function insertTransaction(data: {
   signature: string
   status: string
 }) {
-  if (!supabase) return null
+  if (!supabase) {
+    console.warn('⚠️ Supabase not configured - skipping transaction insert')
+    return null
+  }
+
+  console.log(`📝 Inserting ${data.type} transaction to Supabase: ${data.amount} ${data.token}`)
 
   const { data: result, error } = await supabase
     .from('transactions')
@@ -36,10 +41,11 @@ export async function insertTransaction(data: {
     .single()
 
   if (error) {
-    console.error('Failed to insert transaction:', error)
+    console.error('❌ Failed to insert transaction:', error)
     return null
   }
 
+  console.log(`✅ Transaction inserted successfully`)
   return result
 }
 
@@ -50,7 +56,12 @@ export async function updateWalletBalance(data: {
   token_balance: number
   usd_value: number
 }) {
-  if (!supabase) return null
+  if (!supabase) {
+    console.warn('⚠️ Supabase not configured - skipping wallet balance update')
+    return null
+  }
+
+  console.log(`📝 Updating ${data.wallet_type} wallet balance in Supabase: ${data.sol_balance.toFixed(6)} SOL, ${data.token_balance} tokens`)
 
   const { data: result, error } = await supabase
     .from('wallet_balances')
@@ -64,10 +75,11 @@ export async function updateWalletBalance(data: {
     .single()
 
   if (error) {
-    console.error('Failed to update wallet balance:', error)
+    console.error('❌ Failed to update wallet balance:', error)
     return null
   }
 
+  console.log(`✅ Wallet balance updated successfully`)
   return result
 }
 
