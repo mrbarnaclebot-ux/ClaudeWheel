@@ -256,3 +256,132 @@ export async function fetchLogs(limit: number = 50): Promise<LogEntry[]> {
     return []
   }
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// BAGS.FM API
+// ═══════════════════════════════════════════════════════════════════════════
+
+export interface BagsTokenInfo {
+  tokenMint: string
+  creatorWallet: string
+  tokenName: string
+  tokenSymbol: string
+  tokenImage: string
+  bondingCurveProgress: number
+  isGraduated: boolean
+  marketCap: number
+  volume24h: number
+  holders: number
+  createdAt: string
+}
+
+export interface BagsLifetimeFees {
+  tokenMint: string
+  totalFeesCollected: number
+  totalFeesCollectedUsd: number
+  creatorFeesCollected: number
+  creatorFeesCollectedUsd: number
+  lastUpdated: string
+}
+
+export interface BagsClaimablePosition {
+  tokenMint: string
+  tokenSymbol: string
+  claimableAmount: number
+  claimableAmountUsd: number
+  lastClaimTime: string | null
+}
+
+export interface BagsClaimStats {
+  totalClaimed: number
+  totalClaimedUsd: number
+  pendingClaims: number
+  pendingClaimsUsd: number
+  lastClaimTime: string | null
+}
+
+export interface BagsDashboardData {
+  tokenInfo: BagsTokenInfo | null
+  lifetimeFees: BagsLifetimeFees | null
+  claimablePositions: BagsClaimablePosition[]
+  claimStats: BagsClaimStats | null
+}
+
+// Fetch token info from Bags.fm
+export async function fetchBagsTokenInfo(tokenMint: string): Promise<BagsTokenInfo | null> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/bags/token/${tokenMint}`)
+    const json: ApiResponse<BagsTokenInfo> = await response.json()
+    if (json.success && json.data) {
+      return json.data
+    }
+    return null
+  } catch (error) {
+    console.error('Failed to fetch Bags token info:', error)
+    return null
+  }
+}
+
+// Fetch lifetime fees from Bags.fm
+export async function fetchBagsLifetimeFees(tokenMint: string): Promise<BagsLifetimeFees | null> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/bags/fees/${tokenMint}`)
+    const json: ApiResponse<BagsLifetimeFees> = await response.json()
+    if (json.success && json.data) {
+      return json.data
+    }
+    return null
+  } catch (error) {
+    console.error('Failed to fetch Bags lifetime fees:', error)
+    return null
+  }
+}
+
+// Fetch claimable positions for a wallet
+export async function fetchBagsClaimablePositions(wallet: string): Promise<BagsClaimablePosition[]> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/bags/claimable/${wallet}`)
+    const json: ApiResponse<BagsClaimablePosition[]> = await response.json()
+    if (json.success && json.data) {
+      return json.data
+    }
+    return []
+  } catch (error) {
+    console.error('Failed to fetch Bags claimable positions:', error)
+    return []
+  }
+}
+
+// Fetch claim stats for a wallet
+export async function fetchBagsClaimStats(wallet: string): Promise<BagsClaimStats | null> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/bags/claim-stats/${wallet}`)
+    const json: ApiResponse<BagsClaimStats> = await response.json()
+    if (json.success && json.data) {
+      return json.data
+    }
+    return null
+  } catch (error) {
+    console.error('Failed to fetch Bags claim stats:', error)
+    return null
+  }
+}
+
+// Fetch comprehensive Bags.fm dashboard data
+export async function fetchBagsDashboard(tokenMint?: string, wallet?: string): Promise<BagsDashboardData | null> {
+  try {
+    const params = new URLSearchParams()
+    if (tokenMint) params.set('tokenMint', tokenMint)
+    if (wallet) params.set('wallet', wallet)
+
+    const response = await fetch(`${API_BASE_URL}/api/bags/dashboard?${params}`)
+    const json: ApiResponse<BagsDashboardData> = await response.json()
+    if (json.success && json.data) {
+      return json.data
+    }
+    return null
+  } catch (error) {
+    console.error('Failed to fetch Bags dashboard:', error)
+    return null
+  }
+}

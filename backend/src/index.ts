@@ -8,6 +8,7 @@ import { walletMonitor } from './services/wallet-monitor'
 import { startFlywheelJob } from './jobs/flywheel.job'
 import statusRoutes from './routes/status.routes'
 import adminRoutes from './routes/admin.routes'
+import bagsRoutes from './routes/bags.routes'
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CLAUDE FLYWHEEL BACKEND
@@ -23,6 +24,7 @@ app.use(express.json())
 // Routes
 app.use('/api/status', statusRoutes)
 app.use('/api/admin', adminRoutes)
+app.use('/api/bags', bagsRoutes)
 
 // Root endpoint
 app.get('/', (req, res) => {
@@ -38,6 +40,13 @@ app.get('/', (req, res) => {
       admin: {
         config: '/api/admin/config (POST - requires signature)',
         nonce: '/api/admin/nonce (GET)',
+      },
+      bags: {
+        token: '/api/bags/token/:mint',
+        fees: '/api/bags/fees/:mint',
+        claimable: '/api/bags/claimable/:wallet',
+        claimStats: '/api/bags/claim-stats/:wallet',
+        dashboard: '/api/bags/dashboard',
       },
     },
   })

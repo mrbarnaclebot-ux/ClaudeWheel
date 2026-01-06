@@ -1,0 +1,265 @@
+import { env } from '../config/env'
+
+// ═══════════════════════════════════════════════════════════════════════════
+// BAGS.FM API SERVICE
+// Integration with Bags.fm token launchpad for fee tracking and claiming
+// ═══════════════════════════════════════════════════════════════════════════
+
+const BAGS_API_BASE = 'https://public-api-v2.bags.fm/api/v1'
+
+interface BagsApiResponse<T> {
+  success: boolean
+  response?: T
+  error?: string
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// TYPES
+// ═══════════════════════════════════════════════════════════════════════════
+
+export interface TokenLifetimeFees {
+  tokenMint: string
+  totalFeesCollected: number
+  totalFeesCollectedUsd: number
+  creatorFeesCollected: number
+  creatorFeesCollectedUsd: number
+  lastUpdated: string
+}
+
+export interface TokenCreatorInfo {
+  tokenMint: string
+  creatorWallet: string
+  tokenName: string
+  tokenSymbol: string
+  tokenImage: string
+  bondingCurveProgress: number
+  isGraduated: boolean
+  marketCap: number
+  volume24h: number
+  holders: number
+  createdAt: string
+}
+
+export interface ClaimablePosition {
+  tokenMint: string
+  tokenSymbol: string
+  claimableAmount: number
+  claimableAmountUsd: number
+  lastClaimTime: string | null
+}
+
+export interface ClaimStats {
+  totalClaimed: number
+  totalClaimedUsd: number
+  pendingClaims: number
+  pendingClaimsUsd: number
+  lastClaimTime: string | null
+}
+
+export interface TradeQuote {
+  inputMint: string
+  outputMint: string
+  inputAmount: number
+  outputAmount: number
+  priceImpact: number
+  fee: number
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// API CLIENT
+// ═══════════════════════════════════════════════════════════════════════════
+
+class BagsFmService {
+  private apiKey: string | null = null
+
+  setApiKey(key: string) {
+    this.apiKey = key
+  }
+
+  private async fetch<T>(endpoint: string, options: RequestInit = {}): Promise<T | null> {
+    try {
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        ...(this.apiKey ? { 'Authorization': `Bearer ${this.apiKey}` } : {}),
+        ...(options.headers as Record<string, string> || {}),
+      }
+
+      const response = await fetch(`${BAGS_API_BASE}${endpoint}`, {
+        ...options,
+        headers,
+      })
+
+      if (!response.ok) {
+        console.error(`Bags.fm API error: ${response.status} ${response.statusText}`)
+        return null
+      }
+
+      const data = await response.json() as BagsApiResponse<T>
+
+      if (!data.success) {
+        console.error(`Bags.fm API error: ${data.error}`)
+        return null
+      }
+
+      return data.response || null
+    } catch (error) {
+      console.error('Bags.fm API request failed:', error)
+      return null
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // PUBLIC METHODS
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * Get lifetime fees collected for a token
+   */
+  async getLifetimeFees(tokenMint: string): Promise<TokenLifetimeFees | null> {
+    const data = await this.fetch<any>(`/token-launch/lifetime-fees?tokenMint=${tokenMint}`)
+
+    if (!data) return null
+
+    return {
+      tokenMint,
+      totalFeesCollected: data.totalFeesCollected || 0,
+      totalFeesCollectedUsd: data.totalFeesCollectedUsd || 0,
+      creatorFeesCollected: data.creatorFeesCollected || 0,
+      creatorFeesCollectedUsd: data.creatorFeesCollectedUsd || 0,
+      lastUpdated: new Date().toISOString(),
+    }
+  }
+
+  /**
+   * Get token creator/launch info
+   */
+  async getTokenCreatorInfo(tokenMint: string): Promise<TokenCreatorInfo | null> {
+    const data = await this.fetch<any>(`/token-launch/creator/v3?tokenMint=${tokenMint}`)
+
+    if (!data) return null
+
+    return {
+      tokenMint,
+      creatorWallet: data.creatorWallet || '',
+      tokenName: data.tokenName || '',
+      tokenSymbol: data.tokenSymbol || '',
+      tokenImage: data.tokenImage || '',
+      bondingCurveProgress: data.bondingCurveProgress || 0,
+      isGraduated: data.isGraduated || false,
+      marketCap: data.marketCap || 0,
+      volume24h: data.volume24h || 0,
+      holders: data.holders || 0,
+      createdAt: data.createdAt || '',
+    }
+  }
+
+  /**
+   * Get claimable fee positions for a wallet
+   */
+  async getClaimablePositions(walletAddress: string): Promise<ClaimablePosition[]> {
+    const data = await this.fetch<any[]>(`/token-launch/claimable-positions?wallet=${walletAddress}`)
+
+    if (!data || !Array.isArray(data)) return []
+
+    return data.map(item => ({
+      tokenMint: item.tokenMint || '',
+      tokenSymbol: item.tokenSymbol || '',
+      claimableAmount: item.claimableAmount || 0,
+      claimableAmountUsd: item.claimableAmountUsd || 0,
+      lastClaimTime: item.lastClaimTime || null,
+    }))
+  }
+
+  /**
+   * Get claim statistics for a wallet
+   */
+  async getClaimStats(walletAddress: string): Promise<ClaimStats | null> {
+    const data = await this.fetch<any>(`/token-launch/claim-stats?wallet=${walletAddress}`)
+
+    if (!data) return null
+
+    return {
+      totalClaimed: data.totalClaimed || 0,
+      totalClaimedUsd: data.totalClaimedUsd || 0,
+      pendingClaims: data.pendingClaims || 0,
+      pendingClaimsUsd: data.pendingClaimsUsd || 0,
+      lastClaimTime: data.lastClaimTime || null,
+    }
+  }
+
+  /**
+   * Get a trade quote
+   */
+  async getTradeQuote(
+    inputMint: string,
+    outputMint: string,
+    amount: number,
+    side: 'buy' | 'sell'
+  ): Promise<TradeQuote | null> {
+    const params = new URLSearchParams({
+      inputMint,
+      outputMint,
+      amount: amount.toString(),
+      side,
+    })
+
+    const data = await this.fetch<any>(`/trade/quote?${params}`)
+
+    if (!data) return null
+
+    return {
+      inputMint: data.inputMint || inputMint,
+      outputMint: data.outputMint || outputMint,
+      inputAmount: data.inputAmount || amount,
+      outputAmount: data.outputAmount || 0,
+      priceImpact: data.priceImpact || 0,
+      fee: data.fee || 0,
+    }
+  }
+
+  /**
+   * Generate claim transactions for claimable fees
+   */
+  async generateClaimTransactions(
+    walletAddress: string,
+    tokenMints: string[]
+  ): Promise<string[] | null> {
+    const data = await this.fetch<any>('/token-launch/claim-txs/v2', {
+      method: 'POST',
+      body: JSON.stringify({
+        wallet: walletAddress,
+        tokenMints,
+      }),
+    })
+
+    if (!data || !Array.isArray(data.transactions)) return null
+
+    return data.transactions
+  }
+
+  /**
+   * Get comprehensive token data combining multiple endpoints
+   */
+  async getTokenDashboardData(tokenMint: string, creatorWallet: string): Promise<{
+    tokenInfo: TokenCreatorInfo | null
+    lifetimeFees: TokenLifetimeFees | null
+    claimablePositions: ClaimablePosition[]
+    claimStats: ClaimStats | null
+  }> {
+    const [tokenInfo, lifetimeFees, claimablePositions, claimStats] = await Promise.all([
+      this.getTokenCreatorInfo(tokenMint),
+      this.getLifetimeFees(tokenMint),
+      this.getClaimablePositions(creatorWallet),
+      this.getClaimStats(creatorWallet),
+    ])
+
+    return {
+      tokenInfo,
+      lifetimeFees,
+      claimablePositions,
+      claimStats,
+    }
+  }
+}
+
+export const bagsFmService = new BagsFmService()
