@@ -96,12 +96,12 @@ export async function getTokenBalance(
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// SOL PRICE - Fetches real price with caching
+// SOL PRICE - Fetches real price with caching and multiple fallbacks
 // ═══════════════════════════════════════════════════════════════════════════
 
 let cachedSolPrice: number = 200
 let lastPriceFetch: Date | null = null
-const PRICE_CACHE_MS = 60000 // Cache for 1 minute
+const PRICE_CACHE_MS = 5 * 60 * 1000 // Cache for 5 minutes to reduce API calls
 
 export async function getSolPrice(): Promise<number> {
   // Return cached price if fresh
@@ -109,41 +109,61 @@ export async function getSolPrice(): Promise<number> {
     return cachedSolPrice
   }
 
-  try {
-    // Try CoinGecko first (free, no API key)
-    const response = await fetch(
-      'https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd',
-      { signal: AbortSignal.timeout(5000) }
-    )
+  // Try multiple price sources in order of reliability
+  const priceSources = [
+    // Binance - most reliable, high rate limits
+    async () => {
+      const response = await fetch(
+        'https://api.binance.com/api/v3/ticker/price?symbol=SOLUSDT',
+        { signal: AbortSignal.timeout(5000) }
+      )
+      if (response.ok) {
+        const data = await response.json() as { price?: string }
+        if (data.price) return parseFloat(data.price)
+      }
+      return null
+    },
+    // CoinGecko - free tier has rate limits
+    async () => {
+      const response = await fetch(
+        'https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd',
+        { signal: AbortSignal.timeout(5000) }
+      )
+      if (response.ok) {
+        const data = await response.json() as { solana?: { usd?: number } }
+        if (data.solana?.usd) return data.solana.usd
+      }
+      return null
+    },
+    // Jupiter price API
+    async () => {
+      const response = await fetch(
+        'https://price.jup.ag/v6/price?ids=SOL',
+        { signal: AbortSignal.timeout(5000) }
+      )
+      if (response.ok) {
+        const data = await response.json() as { data?: { SOL?: { price?: number } } }
+        if (data.data?.SOL?.price) return data.data.SOL.price
+      }
+      return null
+    },
+  ]
 
-    if (response.ok) {
-      const data = await response.json() as { solana?: { usd?: number } }
-      if (data.solana?.usd) {
-        cachedSolPrice = data.solana.usd
+  for (const getPrice of priceSources) {
+    try {
+      const price = await getPrice()
+      if (price && price > 0) {
+        cachedSolPrice = price
         lastPriceFetch = new Date()
         return cachedSolPrice
       }
+    } catch {
+      // Try next source
     }
-
-    // Fallback: Try Jupiter price API
-    const jupResponse = await fetch(
-      'https://price.jup.ag/v6/price?ids=SOL',
-      { signal: AbortSignal.timeout(5000) }
-    )
-
-    if (jupResponse.ok) {
-      const jupData = await jupResponse.json() as { data?: { SOL?: { price?: number } } }
-      if (jupData.data?.SOL?.price) {
-        cachedSolPrice = jupData.data.SOL.price
-        lastPriceFetch = new Date()
-        return cachedSolPrice
-      }
-    }
-
-    // Return cached price if API calls fail
-    return cachedSolPrice
-  } catch (error) {
-    console.warn('⚠️ Failed to fetch SOL price, using cached:', cachedSolPrice)
-    return cachedSolPrice
   }
+
+  // All sources failed - use cached price but don't update timestamp
+  // so we retry on next call
+  console.warn('⚠️ All SOL price sources failed, using cached:', cachedSolPrice)
+  return cachedSolPrice
 }
