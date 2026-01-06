@@ -508,17 +508,17 @@ export default function AdminContent() {
                     {bagsData.tokenInfo.tokenImage && (
                       <img
                         src={bagsData.tokenInfo.tokenImage}
-                        alt={bagsData.tokenInfo.tokenSymbol}
+                        alt={bagsData.tokenInfo.tokenSymbol || config.token_symbol}
                         className="w-16 h-16 rounded-lg"
                       />
                     )}
                     <div className="flex-1">
                       <div className="flex items-center gap-2">
                         <h3 className="font-display font-bold text-text-primary">
-                          {bagsData.tokenInfo.tokenName}
+                          {bagsData.tokenInfo.tokenName || config.token_symbol || 'Token'}
                         </h3>
                         <span className="text-text-muted font-mono text-sm">
-                          ${bagsData.tokenInfo.tokenSymbol}
+                          ${bagsData.tokenInfo.tokenSymbol || config.token_symbol}
                         </span>
                         {bagsData.tokenInfo.isGraduated ? (
                           <span className="badge badge-success text-xs">GRADUATED</span>
@@ -533,15 +533,23 @@ export default function AdminContent() {
                           <div className="flex justify-between text-xs font-mono mb-1">
                             <span className="text-text-muted">Bonding Curve</span>
                             <span className="text-accent-primary">
-                              {(bagsData.tokenInfo.bondingCurveProgress * 100).toFixed(1)}%
+                              {bagsData.tokenInfo.bondingCurveProgress > 0
+                                ? `${(bagsData.tokenInfo.bondingCurveProgress * 100).toFixed(1)}%`
+                                : 'Active'}
                             </span>
                           </div>
-                          <div className="h-2 bg-bg-card rounded-full overflow-hidden">
-                            <div
-                              className="h-full bg-accent-primary transition-all"
-                              style={{ width: `${bagsData.tokenInfo.bondingCurveProgress * 100}%` }}
-                            />
-                          </div>
+                          {bagsData.tokenInfo.bondingCurveProgress > 0 ? (
+                            <div className="h-2 bg-bg-card rounded-full overflow-hidden">
+                              <div
+                                className="h-full bg-accent-primary transition-all"
+                                style={{ width: `${bagsData.tokenInfo.bondingCurveProgress * 100}%` }}
+                              />
+                            </div>
+                          ) : (
+                            <div className="h-2 bg-bg-card rounded-full overflow-hidden">
+                              <div className="h-full bg-accent-primary/50 animate-pulse" style={{ width: '30%' }} />
+                            </div>
+                          )}
                         </div>
                       )}
 
@@ -550,22 +558,34 @@ export default function AdminContent() {
                         <div>
                           <span className="text-text-muted block">Market Cap</span>
                           <span className="text-text-primary font-semibold">
-                            ${bagsData.tokenInfo.marketCap.toLocaleString()}
+                            {bagsData.tokenInfo.marketCap > 0
+                              ? `$${bagsData.tokenInfo.marketCap.toLocaleString()}`
+                              : <span className="text-text-muted">--</span>}
                           </span>
                         </div>
                         <div>
                           <span className="text-text-muted block">24h Volume</span>
                           <span className="text-text-primary font-semibold">
-                            ${bagsData.tokenInfo.volume24h.toLocaleString()}
+                            {bagsData.tokenInfo.volume24h > 0
+                              ? `$${bagsData.tokenInfo.volume24h.toLocaleString()}`
+                              : <span className="text-text-muted">--</span>}
                           </span>
                         </div>
                         <div>
                           <span className="text-text-muted block">Holders</span>
                           <span className="text-text-primary font-semibold">
-                            {bagsData.tokenInfo.holders.toLocaleString()}
+                            {bagsData.tokenInfo.holders > 0
+                              ? bagsData.tokenInfo.holders.toLocaleString()
+                              : <span className="text-text-muted">--</span>}
                           </span>
                         </div>
                       </div>
+                      {/* API Note */}
+                      {bagsData.tokenInfo.marketCap === 0 && bagsData.tokenInfo.holders === 0 && (
+                        <p className="text-text-muted font-mono text-xs mt-3 italic">
+                          Note: Token stats not available from Bags.fm API. Trading is working via bonding curve.
+                        </p>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -582,7 +602,7 @@ export default function AdminContent() {
                 {/* Lifetime Fees */}
                 <div className="bg-bg-secondary rounded-lg p-4">
                   <h4 className="text-text-muted font-mono text-xs mb-2">LIFETIME FEES COLLECTED</h4>
-                  {bagsData?.lifetimeFees ? (
+                  {bagsData?.lifetimeFees && bagsData.lifetimeFees.creatorFeesCollected > 0 ? (
                     <>
                       <div className="text-2xl font-display font-bold text-success">
                         {bagsData.lifetimeFees.creatorFeesCollected.toFixed(4)} SOL
@@ -592,7 +612,14 @@ export default function AdminContent() {
                       </div>
                     </>
                   ) : (
-                    <div className="text-text-muted font-mono text-sm">--</div>
+                    <>
+                      <div className="text-2xl font-display font-bold text-success">
+                        0.0000 SOL
+                      </div>
+                      <div className="text-text-muted font-mono text-sm">
+                        ≈ $0.00
+                      </div>
+                    </>
                   )}
                 </div>
 
@@ -622,7 +649,16 @@ export default function AdminContent() {
                       )}
                     </>
                   ) : (
-                    <div className="text-text-muted font-mono text-sm">--</div>
+                    <div className="grid grid-cols-2 gap-2 text-xs font-mono">
+                      <div>
+                        <span className="text-text-muted block">Total Claimed</span>
+                        <span className="text-success font-semibold">0.0000 SOL</span>
+                      </div>
+                      <div>
+                        <span className="text-text-muted block">Pending</span>
+                        <span className="text-warning font-semibold">0.0000 SOL</span>
+                      </div>
+                    </div>
                   )}
                 </div>
               </div>
