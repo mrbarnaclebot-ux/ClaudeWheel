@@ -71,24 +71,61 @@ INSERT INTO fee_stats (id) VALUES ('main') ON CONFLICT (id) DO NOTHING;
 -- ═══════════════════════════════════════════════════════════════════════════
 -- ENABLE REALTIME FOR LIVE UPDATES
 -- Go to Supabase Dashboard -> Database -> Replication and enable these tables
--- OR run these commands:
+-- OR run these commands (wrapped in DO block to handle "already exists" errors):
 -- ═══════════════════════════════════════════════════════════════════════════
 
--- Enable realtime for all tables
-ALTER PUBLICATION supabase_realtime ADD TABLE wallet_balances;
-ALTER PUBLICATION supabase_realtime ADD TABLE transactions;
-ALTER PUBLICATION supabase_realtime ADD TABLE fee_stats;
-ALTER PUBLICATION supabase_realtime ADD TABLE config;
+-- Enable realtime for all tables (ignore if already enabled)
+DO $$
+BEGIN
+  ALTER PUBLICATION supabase_realtime ADD TABLE wallet_balances;
+EXCEPTION WHEN duplicate_object THEN
+  NULL;
+END $$;
+
+DO $$
+BEGIN
+  ALTER PUBLICATION supabase_realtime ADD TABLE transactions;
+EXCEPTION WHEN duplicate_object THEN
+  NULL;
+END $$;
+
+DO $$
+BEGIN
+  ALTER PUBLICATION supabase_realtime ADD TABLE fee_stats;
+EXCEPTION WHEN duplicate_object THEN
+  NULL;
+END $$;
+
+DO $$
+BEGIN
+  ALTER PUBLICATION supabase_realtime ADD TABLE config;
+EXCEPTION WHEN duplicate_object THEN
+  NULL;
+END $$;
 
 -- ═══════════════════════════════════════════════════════════════════════════
--- ROW LEVEL SECURITY (RLS) - Allow public read, authenticated write
+-- ROW LEVEL SECURITY (RLS) - Allow public read, service role write
 -- ═══════════════════════════════════════════════════════════════════════════
 
--- Enable RLS
+-- Enable RLS (safe to run multiple times)
 ALTER TABLE wallet_balances ENABLE ROW LEVEL SECURITY;
 ALTER TABLE transactions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE fee_stats ENABLE ROW LEVEL SECURITY;
 ALTER TABLE config ENABLE ROW LEVEL SECURITY;
+
+-- Drop existing policies if they exist, then recreate
+DROP POLICY IF EXISTS "Allow public read" ON wallet_balances;
+DROP POLICY IF EXISTS "Allow public read" ON transactions;
+DROP POLICY IF EXISTS "Allow public read" ON fee_stats;
+DROP POLICY IF EXISTS "Allow public read" ON config;
+DROP POLICY IF EXISTS "Allow service role insert" ON wallet_balances;
+DROP POLICY IF EXISTS "Allow service role update" ON wallet_balances;
+DROP POLICY IF EXISTS "Allow service role insert" ON transactions;
+DROP POLICY IF EXISTS "Allow service role update" ON transactions;
+DROP POLICY IF EXISTS "Allow service role insert" ON fee_stats;
+DROP POLICY IF EXISTS "Allow service role update" ON fee_stats;
+DROP POLICY IF EXISTS "Allow service role insert" ON config;
+DROP POLICY IF EXISTS "Allow service role update" ON config;
 
 -- Allow public read access (for frontend)
 CREATE POLICY "Allow public read" ON wallet_balances FOR SELECT USING (true);
