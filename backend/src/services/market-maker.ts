@@ -3,6 +3,7 @@ import bs58 from 'bs58'
 import { connection, getTokenMint, getBalance, getTokenBalance } from '../config/solana'
 import { env } from '../config/env'
 import { bagsFmService } from './bags-fm'
+import { insertTransaction } from '../config/database'
 import type { Transaction as TxRecord, MarketMakingOrder } from '../types'
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -276,11 +277,20 @@ export class MarketMaker {
         id: signature,
         type: 'buy',
         amount: outputAmount,
-        token: 'CLAUDE',
+        token: env.tokenSymbol || 'TOKEN',
         signature,
         status: 'confirmed',
         created_at: new Date(),
       }
+
+      // Record transaction to Supabase for live feed
+      await insertTransaction({
+        type: 'buy',
+        amount: outputAmount,
+        token: env.tokenSymbol || 'TOKEN',
+        signature,
+        status: 'confirmed',
+      })
 
       return txRecord
     } catch (error) {
@@ -366,11 +376,20 @@ export class MarketMaker {
         id: signature,
         type: 'sell',
         amount: cappedAmount,
-        token: 'CLAUDE',
+        token: env.tokenSymbol || 'TOKEN',
         signature,
         status: 'confirmed',
         created_at: new Date(),
       }
+
+      // Record transaction to Supabase for live feed
+      await insertTransaction({
+        type: 'sell',
+        amount: cappedAmount,
+        token: env.tokenSymbol || 'TOKEN',
+        signature,
+        status: 'confirmed',
+      })
 
       return txRecord
     } catch (error) {

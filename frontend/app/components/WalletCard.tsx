@@ -9,6 +9,7 @@ interface WalletCardProps {
   solBalance: number
   usdValue: number
   tokenBalance?: number
+  tokenSymbol?: string
   lastFee?: number
   lastFeeTime?: Date
 }
@@ -19,6 +20,7 @@ export default function WalletCard({
   solBalance,
   usdValue,
   tokenBalance,
+  tokenSymbol = 'TOKEN',
   lastFee,
   lastFeeTime,
 }: WalletCardProps) {
@@ -83,7 +85,7 @@ export default function WalletCard({
         <div className="mb-4 p-3 bg-bg-secondary rounded-lg border border-border-subtle">
           <div className="text-xs font-mono text-text-muted mb-1">Token Holdings</div>
           <div className="text-lg font-mono font-semibold text-accent-cyan">
-            {(tokenBalance / 1000).toFixed(0)}K <span className="text-sm">CLAUDE</span>
+            {(tokenBalance / 1000).toFixed(0)}K <span className="text-sm">{tokenSymbol}</span>
           </div>
         </div>
       )}

@@ -23,6 +23,7 @@ const envSchema = z.object({
 
   // Token
   TOKEN_MINT_ADDRESS: z.string().default('8JLGQ7RqhsvhsDhvjMuJUeeuaQ53GTJqSHNaBWf4BAGS'),
+  TOKEN_SYMBOL: z.string().default('TOKEN'),
   TOKEN_DECIMALS: z.string().default('6'),
 
   // Supabase
@@ -73,6 +74,7 @@ export const env = {
 
   // Token
   tokenMintAddress: parsed.data.TOKEN_MINT_ADDRESS,
+  tokenSymbol: parsed.data.TOKEN_SYMBOL,
   tokenDecimals: parseInt(parsed.data.TOKEN_DECIMALS, 10),
 
   // Supabase

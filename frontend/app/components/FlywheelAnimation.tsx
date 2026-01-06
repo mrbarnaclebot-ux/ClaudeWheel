@@ -8,6 +8,7 @@ interface FlywheelProps {
   devBalance: number
   opsBalance: number
   tokenBalance: number
+  tokenSymbol?: string
   isActive?: boolean
 }
 
@@ -15,6 +16,7 @@ export default function FlywheelAnimation({
   devBalance,
   opsBalance,
   tokenBalance,
+  tokenSymbol = 'TOKEN',
   isActive = true,
 }: FlywheelProps) {
   const [particles, setParticles] = useState<number[]>([0, 1, 2, 3, 4, 5])
@@ -23,7 +25,7 @@ export default function FlywheelAnimation({
   const nodes = [
     { id: 'dev', label: 'DEV WALLET', value: devBalance, unit: 'SOL', x: 50, y: 15 },
     { id: 'ops', label: 'OPS WALLET', value: opsBalance, unit: 'SOL', x: 20, y: 75 },
-    { id: 'token', label: 'TOKEN', value: tokenBalance, unit: 'CLAUDE', x: 80, y: 75 },
+    { id: 'token', label: 'TOKEN', value: tokenBalance, unit: tokenSymbol, x: 80, y: 75 },
   ]
 
   return (

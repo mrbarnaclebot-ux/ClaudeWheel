@@ -282,6 +282,7 @@ export default function Dashboard() {
             devBalance={walletData.devWallet.solBalance}
             opsBalance={walletData.opsWallet.solBalance}
             tokenBalance={walletData.opsWallet.tokenBalance}
+            tokenSymbol={tokenSymbol}
             isActive={isActive}
           />
         </section>
@@ -314,6 +315,7 @@ export default function Dashboard() {
             solBalance={walletData.opsWallet.solBalance}
             usdValue={walletData.opsWallet.usdValue}
             tokenBalance={walletData.opsWallet.tokenBalance}
+            tokenSymbol={tokenSymbol}
           />
         </section>
 
