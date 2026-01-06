@@ -1,5 +1,4 @@
 import { Keypair, PublicKey, VersionedTransaction } from '@solana/web3.js'
-import bs58 from 'bs58'
 import { connection, getTokenMint, getBalance, getTokenBalance } from '../config/solana'
 import { env } from '../config/env'
 import { bagsFmService } from './bags-fm'
@@ -168,8 +167,8 @@ export class MarketMaker {
         return null
       }
 
-      // Deserialize and sign transaction (Bags.fm returns Base58 encoded)
-      const transactionBuf = bs58.decode(swapData.transaction)
+      // Deserialize and sign transaction (Bags.fm returns Base64 encoded)
+      const transactionBuf = Buffer.from(swapData.transaction, 'base64')
       const transaction = VersionedTransaction.deserialize(transactionBuf)
       transaction.sign([this.opsWallet])
 
@@ -183,8 +182,15 @@ export class MarketMaker {
 
       console.log(`✅ Bags.fm swap executed! Signature: ${signature}`)
       return signature
-    } catch (error) {
-      console.error('❌ Bags.fm swap execution failed:', error)
+    } catch (error: any) {
+      console.error('❌ Bags.fm swap execution failed:')
+      if (error?.logs) {
+        console.error('Transaction logs:', error.logs)
+      }
+      if (error?.message) {
+        console.error('Error message:', error.message)
+      }
+      console.error('Full error:', JSON.stringify(error, Object.getOwnPropertyNames(error), 2))
       return null
     }
   }
