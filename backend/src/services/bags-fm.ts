@@ -211,18 +211,18 @@ class BagsFmService {
 
   /**
    * Get a trade quote
+   * Note: side is determined by inputMint/outputMint (SOL→token = buy, token→SOL = sell)
    */
   async getTradeQuote(
     inputMint: string,
     outputMint: string,
     amount: number,
-    side: 'buy' | 'sell'
+    _side?: 'buy' | 'sell' // Kept for API compatibility but not sent to Bags.fm
   ): Promise<TradeQuote | null> {
     const params = new URLSearchParams({
       inputMint,
       outputMint,
       amount: amount.toString(),
-      side,
     })
 
     const data = await this.fetch<any>(`/trade/quote?${params}`)
@@ -241,13 +241,14 @@ class BagsFmService {
 
   /**
    * Generate a swap transaction for bonding curve trades
+   * Note: side is determined by inputMint/outputMint (SOL→token = buy, token→SOL = sell)
    */
   async generateSwapTransaction(
     walletAddress: string,
     inputMint: string,
     outputMint: string,
     amount: number,
-    side: 'buy' | 'sell'
+    _side?: 'buy' | 'sell' // Kept for API compatibility but not sent to Bags.fm
   ): Promise<SwapTransaction | null> {
     const data = await this.fetch<any>('/trade/swap', {
       method: 'POST',
@@ -256,7 +257,6 @@ class BagsFmService {
         inputMint,
         outputMint,
         amount,
-        side,
       }),
     })
 
