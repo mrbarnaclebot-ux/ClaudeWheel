@@ -1,7 +1,7 @@
 'use client'
 
 import { motion } from 'framer-motion'
-import { formatSOL, formatUSD, formatTimeAgo, shortenAddress } from '@/lib/utils'
+import { formatSOL, formatUSD, formatTimeAgo, shortenAddress, formatNumber } from '@/lib/utils'
 
 interface WalletCardProps {
   type: 'dev' | 'ops'
@@ -85,7 +85,7 @@ export default function WalletCard({
         <div className="mb-4 p-3 bg-bg-secondary rounded-lg border border-border-subtle">
           <div className="text-xs font-mono text-text-muted mb-1">Token Holdings</div>
           <div className="text-lg font-mono font-semibold text-accent-cyan">
-            {(tokenBalance / 1000).toFixed(0)}K <span className="text-sm">{tokenSymbol}</span>
+            {formatNumber(tokenBalance)} <span className="text-sm">{tokenSymbol}</span>
           </div>
         </div>
       )}

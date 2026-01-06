@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
-import { formatSOL } from '@/lib/utils'
+import { formatSOL, formatNumber } from '@/lib/utils'
 
 interface FlywheelProps {
   devBalance: number
@@ -169,7 +169,7 @@ export default function FlywheelAnimation({
             <div className="text-base md:text-lg font-mono font-bold text-text-primary">
               {node.unit === 'SOL'
                 ? formatSOL(node.value)
-                : (node.value / 1000).toFixed(0) + 'K'
+                : formatNumber(node.value)
               }
             </div>
 

@@ -21,11 +21,20 @@ export function formatUSD(amount: number): string {
 }
 
 export function formatNumber(num: number): string {
+  if (num >= 1_000_000_000) {
+    const val = num / 1_000_000_000
+    return val >= 100 ? val.toFixed(0) + 'B' : val >= 10 ? val.toFixed(1) + 'B' : val.toFixed(2) + 'B'
+  }
   if (num >= 1_000_000) {
-    return (num / 1_000_000).toFixed(2) + 'M'
+    const val = num / 1_000_000
+    return val >= 100 ? val.toFixed(0) + 'M' : val >= 10 ? val.toFixed(1) + 'M' : val.toFixed(2) + 'M'
   }
   if (num >= 1_000) {
-    return (num / 1_000).toFixed(2) + 'K'
+    const val = num / 1_000
+    return val >= 100 ? val.toFixed(0) + 'K' : val >= 10 ? val.toFixed(1) + 'K' : val.toFixed(2) + 'K'
+  }
+  if (num >= 100) {
+    return num.toFixed(0)
   }
   return num.toFixed(2)
 }
