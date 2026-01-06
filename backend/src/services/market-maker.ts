@@ -299,7 +299,7 @@ export class MarketMaker {
     }
   }
 
-  async executeSell(tokenAmount: number): Promise<TxRecord | null> {
+  async executeSell(tokenAmount: number, options?: { bypassCap?: boolean }): Promise<TxRecord | null> {
     if (!this.isEnabled) {
       console.log('ℹ️ Market making is disabled')
       return null
@@ -323,8 +323,8 @@ export class MarketMaker {
       return null
     }
 
-    // Cap the sell amount
-    const cappedAmount = Math.min(tokenAmount, env.maxSellAmountTokens)
+    // Cap the sell amount (unless bypassed for internal flywheel operations)
+    const cappedAmount = options?.bypassCap ? tokenAmount : Math.min(tokenAmount, env.maxSellAmountTokens)
     const tokenUnits = Math.floor(cappedAmount * Math.pow(10, env.tokenDecimals))
 
     console.log(`🔴 Executing SELL: ${cappedAmount.toFixed(0)} CLAUDE → SOL`)

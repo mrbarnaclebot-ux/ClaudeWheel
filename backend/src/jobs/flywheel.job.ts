@@ -206,7 +206,7 @@ async function runSimpleMarketMaking(config: FlywheelConfig) {
       return
     }
 
-    const sellResult = await marketMaker.executeSell(sellAmount)
+    const sellResult = await marketMaker.executeSell(sellAmount, { bypassCap: true })
     if (sellResult) {
       addTransaction(sellResult)
       simpleSellCount++
