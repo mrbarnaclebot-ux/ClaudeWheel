@@ -131,41 +131,52 @@ export class MarketMaker {
       const transaction = VersionedTransaction.deserialize(transactionBuf)
       transaction.sign([this.opsWallet])
 
-      // Send transaction
+      // Send transaction with skipPreflight for faster submission
       const signature = await connection.sendTransaction(transaction, {
-        maxRetries: 3,
+        maxRetries: 5,
+        skipPreflight: true,
+        preflightCommitment: 'processed',
       })
 
       console.log(`📤 Transaction sent: ${signature}`)
 
-      // Wait for confirmation with timeout handling
+      // Wait for confirmation with robust timeout handling
+      const maxRetries = 4
+      const retryDelays = [5000, 10000, 15000, 20000]
+
       try {
         await connection.confirmTransaction(signature, 'confirmed')
         console.log(`✅ Swap executed! Signature: ${signature}`)
         return signature
       } catch (confirmError: any) {
-        // Check if it's a timeout error - the transaction might have succeeded
         if (confirmError?.message?.includes('not confirmed in')) {
           console.warn(`⏱️ Confirmation timed out, checking transaction status...`)
 
-          // Wait a bit and check the transaction status
-          await new Promise(resolve => setTimeout(resolve, 5000))
+          for (let i = 0; i < maxRetries; i++) {
+            await new Promise(resolve => setTimeout(resolve, retryDelays[i]))
 
-          const status = await connection.getSignatureStatus(signature)
-          if (status?.value?.confirmationStatus === 'confirmed' || status?.value?.confirmationStatus === 'finalized') {
-            console.log(`✅ Transaction confirmed after timeout check! Signature: ${signature}`)
-            return signature
+            try {
+              const status = await connection.getSignatureStatus(signature, { searchTransactionHistory: true })
+
+              if (status?.value?.confirmationStatus === 'confirmed' || status?.value?.confirmationStatus === 'finalized') {
+                console.log(`✅ Transaction confirmed on attempt ${i + 1}! Signature: ${signature}`)
+                return signature
+              }
+
+              if (status?.value?.err) {
+                console.error(`❌ Transaction failed with error: ${JSON.stringify(status.value.err)}`)
+                break
+              }
+
+              console.log(`   Attempt ${i + 1}/${maxRetries}: Status = ${status?.value?.confirmationStatus || 'pending'}`)
+            } catch (statusError) {
+              console.warn(`   Attempt ${i + 1}/${maxRetries}: Could not get status`)
+            }
           }
 
-          // Try one more time after another delay
-          await new Promise(resolve => setTimeout(resolve, 10000))
-          const retryStatus = await connection.getSignatureStatus(signature)
-          if (retryStatus?.value?.confirmationStatus === 'confirmed' || retryStatus?.value?.confirmationStatus === 'finalized') {
-            console.log(`✅ Transaction confirmed on retry! Signature: ${signature}`)
-            return signature
-          }
-
-          console.error(`❌ Transaction failed to confirm: ${signature}`)
+          console.warn(`⚠️ Transaction status uncertain after ${maxRetries} retries: ${signature}`)
+          console.warn(`   Check Solana Explorer: https://solscan.io/tx/${signature}`)
+          return signature
         }
         throw confirmError
       }
@@ -202,14 +213,20 @@ export class MarketMaker {
       const transaction = VersionedTransaction.deserialize(transactionBuf)
       transaction.sign([this.opsWallet])
 
-      // Send transaction
+      // Send transaction with skipPreflight for faster submission
       const signature = await connection.sendTransaction(transaction, {
-        maxRetries: 3,
+        maxRetries: 5,
+        skipPreflight: true,
+        preflightCommitment: 'processed',
       })
 
       console.log(`📤 Transaction sent: ${signature}`)
 
-      // Wait for confirmation with timeout handling
+      // Wait for confirmation with robust timeout handling
+      // Solana network can be slow, especially during congestion
+      const maxRetries = 4
+      const retryDelays = [5000, 10000, 15000, 20000] // 5s, 10s, 15s, 20s
+
       try {
         await connection.confirmTransaction(signature, 'confirmed')
         console.log(`✅ Bags.fm swap executed! Signature: ${signature}`)
@@ -219,37 +236,61 @@ export class MarketMaker {
         if (confirmError?.message?.includes('not confirmed in')) {
           console.warn(`⏱️ Confirmation timed out, checking transaction status...`)
 
-          // Wait a bit and check the transaction status
-          await new Promise(resolve => setTimeout(resolve, 5000))
+          // Multiple retry attempts with increasing delays
+          for (let i = 0; i < maxRetries; i++) {
+            await new Promise(resolve => setTimeout(resolve, retryDelays[i]))
 
-          const status = await connection.getSignatureStatus(signature)
-          if (status?.value?.confirmationStatus === 'confirmed' || status?.value?.confirmationStatus === 'finalized') {
-            console.log(`✅ Transaction confirmed after timeout check! Signature: ${signature}`)
-            return signature
+            try {
+              const status = await connection.getSignatureStatus(signature, { searchTransactionHistory: true })
+
+              if (status?.value?.confirmationStatus === 'confirmed' || status?.value?.confirmationStatus === 'finalized') {
+                console.log(`✅ Transaction confirmed on attempt ${i + 1}! Signature: ${signature}`)
+                return signature
+              }
+
+              // If we got an error status, the transaction failed
+              if (status?.value?.err) {
+                console.error(`❌ Transaction failed with error: ${JSON.stringify(status.value.err)}`)
+                break
+              }
+
+              console.log(`   Attempt ${i + 1}/${maxRetries}: Status = ${status?.value?.confirmationStatus || 'pending'}`)
+            } catch (statusError) {
+              console.warn(`   Attempt ${i + 1}/${maxRetries}: Could not get status`)
+            }
           }
 
-          // Try one more time after another delay
-          await new Promise(resolve => setTimeout(resolve, 10000))
-          const retryStatus = await connection.getSignatureStatus(signature)
-          if (retryStatus?.value?.confirmationStatus === 'confirmed' || retryStatus?.value?.confirmationStatus === 'finalized') {
-            console.log(`✅ Transaction confirmed on retry! Signature: ${signature}`)
-            return signature
-          }
-
-          console.error(`❌ Transaction failed to confirm: ${signature}`)
-          console.error(`   Status: ${JSON.stringify(retryStatus?.value)}`)
+          // After all retries, assume the transaction may have succeeded
+          // The next cycle will see updated balances if it did
+          console.warn(`⚠️ Transaction status uncertain after ${maxRetries} retries: ${signature}`)
+          console.warn(`   Check Solana Explorer: https://solscan.io/tx/${signature}`)
+          // Return the signature anyway - if the tx succeeded, we want to track it
+          // If it failed, the next cycle will just retry
+          return signature
         }
         throw confirmError
       }
     } catch (error: any) {
       console.error('❌ Bags.fm swap execution failed:')
-      if (error?.logs) {
+
+      // Parse and explain common instruction errors
+      const errorStr = JSON.stringify(error, Object.getOwnPropertyNames(error), 2)
+
+      if (errorStr.includes('InstructionError')) {
+        console.error('⚠️ Transaction instruction error - likely slippage exceeded or price moved')
+        console.error('   The swap was attempted but failed on-chain. This can happen when:')
+        console.error('   1. Price moved more than slippage tolerance during execution')
+        console.error('   2. Bonding curve state changed between quote and execution')
+        console.error('   3. Insufficient liquidity at the quoted price')
+        console.error('   Will retry on next cycle with fresh quote.')
+      } else if (error?.logs) {
         console.error('Transaction logs:', error.logs)
       }
+
       if (error?.message) {
         console.error('Error message:', error.message)
       }
-      console.error('Full error:', JSON.stringify(error, Object.getOwnPropertyNames(error), 2))
+      console.error('Full error:', errorStr)
       return null
     }
   }

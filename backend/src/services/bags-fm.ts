@@ -222,14 +222,16 @@ class BagsFmService {
     inputMint: string,
     outputMint: string,
     amount: number,
-    _side?: 'buy' | 'sell' // Kept for API compatibility but not sent to Bags.fm
+    _side?: 'buy' | 'sell', // Kept for API compatibility but not sent to Bags.fm
+    slippageBps: number = 300 // Default 3% slippage for bonding curve trades
   ): Promise<TradeQuote | null> {
     // GET request with query params (API does not support POST for quote)
+    // Use explicit slippage instead of 'auto' which only gives 1%
     const params = new URLSearchParams({
       inputMint,
       outputMint,
       amount: amount.toString(),
-      slippageMode: 'auto',
+      slippageBps: slippageBps.toString(),
     })
 
     const data = await this.fetch<any>(`/trade/quote?${params}`)
