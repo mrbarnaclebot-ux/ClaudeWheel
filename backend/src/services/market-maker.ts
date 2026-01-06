@@ -1,4 +1,5 @@
 import { Keypair, PublicKey, VersionedTransaction } from '@solana/web3.js'
+import bs58 from 'bs58'
 import { connection, getTokenMint, getBalance, getTokenBalance } from '../config/solana'
 import { env } from '../config/env'
 import { bagsFmService } from './bags-fm'
@@ -167,8 +168,8 @@ export class MarketMaker {
         return null
       }
 
-      // Deserialize and sign transaction
-      const transactionBuf = Buffer.from(swapData.transaction, 'base64')
+      // Deserialize and sign transaction (Bags.fm returns Base58 encoded)
+      const transactionBuf = bs58.decode(swapData.transaction)
       const transaction = VersionedTransaction.deserialize(transactionBuf)
       transaction.sign([this.opsWallet])
 
