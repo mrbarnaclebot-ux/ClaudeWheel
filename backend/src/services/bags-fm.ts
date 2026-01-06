@@ -223,16 +223,15 @@ class BagsFmService {
     amount: number,
     _side?: 'buy' | 'sell' // Kept for API compatibility but not sent to Bags.fm
   ): Promise<TradeQuote | null> {
-    // POST request with body params per Bags.fm API docs
-    const data = await this.fetch<any>('/trade/quote', {
-      method: 'POST',
-      body: JSON.stringify({
-        inputMint,
-        outputMint,
-        amount,
-        slippageMode: 'auto',
-      }),
+    // GET request with query params (API does not support POST for quote)
+    const params = new URLSearchParams({
+      inputMint,
+      outputMint,
+      amount: amount.toString(),
+      slippageMode: 'auto',
     })
+
+    const data = await this.fetch<any>(`/trade/quote?${params}`)
 
     if (!data) return null
 
