@@ -326,12 +326,12 @@ export default function Dashboard() {
             <div className="flex items-center gap-2">
               <Image
                 src="/logo.png"
-                alt="Claude Flywheel"
+                alt="Claude Wheel"
                 width={20}
                 height={20}
                 className="opacity-70"
               />
-              <span>Claude Flywheel</span>
+              <span>Claude Wheel</span>
               <span className="text-text-muted">•</span>
               <span>Autonomous Market Making</span>
             </div>

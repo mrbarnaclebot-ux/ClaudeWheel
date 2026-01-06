@@ -23,7 +23,7 @@ export default function Header({ isActive = true }: HeaderProps) {
             <div className="w-10 h-10 rounded-lg overflow-hidden">
               <Image
                 src="/logo.png"
-                alt="Claude Flywheel"
+                alt="Claude Wheel"
                 width={40}
                 height={40}
                 className="w-full h-full object-contain"
@@ -44,7 +44,7 @@ export default function Header({ isActive = true }: HeaderProps) {
 
           <div>
             <h1 className="font-display text-xl font-bold text-text-primary">
-              CLAUDE <span className="text-accent-primary">FLYWHEEL</span>
+              CLAUDE <span className="text-accent-primary">WHEEL</span>
             </h1>
             <p className="text-xs font-mono text-text-muted">
               Autonomous Market Making

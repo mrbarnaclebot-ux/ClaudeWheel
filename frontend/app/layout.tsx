@@ -3,8 +3,8 @@ import './globals.css'
 import { WalletProvider } from './providers/WalletProvider'
 
 export const metadata: Metadata = {
-  title: 'Claude Flywheel | Autonomous Market Making',
-  description: 'Real-time visualization of the Claude token flywheel - automated fee collection and market making on Solana',
+  title: 'Claude Wheel | Autonomous Market Making',
+  description: 'Real-time visualization of the Claude Wheel - automated fee collection and market making on Solana',
   icons: {
     icon: '/logo.png',
     apple: '/logo.png',

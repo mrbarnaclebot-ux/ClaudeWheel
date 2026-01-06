@@ -270,7 +270,7 @@ export default function AdminPage() {
               Admin Panel
             </h1>
             <p className="text-text-muted font-mono text-sm mt-1">
-              Claude Flywheel Configuration
+              Claude Wheel Configuration
             </p>
           </div>
           <WalletMultiButton className="!bg-success/20 !text-success !font-mono !rounded-lg !border !border-success/30 !text-sm" />
