@@ -46,13 +46,16 @@ export class FeeCollector {
       console.log(`📊 Dev wallet balance: ${devBalance.toFixed(6)} SOL`)
 
       // Check if balance exceeds threshold
-      // Keep some SOL for transaction fees (0.01 SOL buffer)
-      const transferAmount = devBalance - 0.01
+      // Keep minimum reserve SOL for claiming fees (default: 0.03 SOL)
+      const minReserve = env.devWalletMinReserveSol
+      const transferAmount = devBalance - minReserve
 
       if (transferAmount < env.minFeeThresholdSol) {
-        console.log(`ℹ️ Balance below threshold (${env.minFeeThresholdSol} SOL), skipping collection`)
+        console.log(`ℹ️ Balance below threshold (need ${(env.minFeeThresholdSol + minReserve).toFixed(3)} SOL, have ${devBalance.toFixed(3)} SOL), skipping collection`)
         return null
       }
+
+      console.log(`📌 Keeping ${minReserve} SOL reserve for fee claims`)
 
       console.log(`💸 Collecting ${transferAmount.toFixed(6)} SOL from dev wallet...`)
 
@@ -104,6 +107,20 @@ export class FeeCollector {
     }
 
     try {
+      // Ensure we don't drain below the minimum reserve
+      const devBalance = await getBalance(this.devWallet.publicKey)
+      const minReserve = env.devWalletMinReserveSol
+      const maxTransferable = devBalance - minReserve
+
+      if (amount > maxTransferable) {
+        console.warn(`⚠️ Capping transfer to ${maxTransferable.toFixed(6)} SOL to maintain ${minReserve} SOL reserve`)
+        amount = Math.max(0, maxTransferable)
+        if (amount <= 0) {
+          console.log('ℹ️ No funds available after maintaining reserve')
+          return null
+        }
+      }
+
       console.log(`📤 Transferring ${amount.toFixed(6)} SOL to ops wallet...`)
 
       const transaction = new Transaction().add(

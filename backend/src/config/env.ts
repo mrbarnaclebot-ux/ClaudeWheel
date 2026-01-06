@@ -34,6 +34,7 @@ const envSchema = z.object({
   FEE_COLLECTION_INTERVAL_MS: z.string().default('60000'),
   MARKET_MAKING_ENABLED: z.string().default('true'),
   MIN_FEE_THRESHOLD_SOL: z.string().default('0.01'),
+  DEV_WALLET_MIN_RESERVE_SOL: z.string().default('0.03'), // Keep this much SOL for claiming fees
   MAX_BUY_AMOUNT_SOL: z.string().default('0.5'),
   MAX_SELL_AMOUNT_TOKENS: z.string().default('100000'),
 
@@ -85,6 +86,7 @@ export const env = {
   feeCollectionIntervalMs: parseInt(parsed.data.FEE_COLLECTION_INTERVAL_MS, 10),
   marketMakingEnabled: parsed.data.MARKET_MAKING_ENABLED === 'true',
   minFeeThresholdSol: parseFloat(parsed.data.MIN_FEE_THRESHOLD_SOL),
+  devWalletMinReserveSol: parseFloat(parsed.data.DEV_WALLET_MIN_RESERVE_SOL),
   maxBuyAmountSol: parseFloat(parsed.data.MAX_BUY_AMOUNT_SOL),
   maxSellAmountTokens: parseFloat(parsed.data.MAX_SELL_AMOUNT_TOKENS),
 
