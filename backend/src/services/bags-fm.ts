@@ -253,7 +253,7 @@ class BagsFmService {
     const data = await this.fetch<any>('/trade/swap', {
       method: 'POST',
       body: JSON.stringify({
-        wallet: walletAddress,
+        userPublicKey: walletAddress,
         inputMint,
         outputMint,
         amount,
