@@ -38,6 +38,9 @@ const envSchema = z.object({
 
   // Jupiter
   JUPITER_API_URL: z.string().url().default('https://quote-api.jup.ag/v6'),
+
+  // Bags.fm
+  BAGS_FM_API_KEY: z.string().optional(),
 })
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -85,6 +88,9 @@ export const env = {
 
   // Jupiter
   jupiterApiUrl: parsed.data.JUPITER_API_URL,
+
+  // Bags.fm
+  bagsFmApiKey: parsed.data.BAGS_FM_API_KEY,
 }
 
 export type Env = typeof env

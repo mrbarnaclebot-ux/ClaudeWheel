@@ -9,6 +9,7 @@ import { startFlywheelJob } from './jobs/flywheel.job'
 import statusRoutes from './routes/status.routes'
 import adminRoutes from './routes/admin.routes'
 import bagsRoutes from './routes/bags.routes'
+import { bagsFmService } from './services/bags-fm'
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CLAUDE FLYWHEEL BACKEND
@@ -79,6 +80,14 @@ async function initializeServices() {
     feeCollector.setOpsWalletAddress(opsWallet.publicKey)
   } else {
     console.log('⚠️ Ops wallet not configured (running in demo mode)')
+  }
+
+  // Initialize Bags.fm API key if configured
+  if (env.bagsFmApiKey) {
+    bagsFmService.setApiKey(env.bagsFmApiKey)
+    console.log('✅ Bags.fm API key configured')
+  } else {
+    console.log('⚠️ Bags.fm API key not set (BAGS_FM_API_KEY)')
   }
 
   // Log configuration
