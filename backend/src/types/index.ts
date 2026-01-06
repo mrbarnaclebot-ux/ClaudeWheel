@@ -10,7 +10,7 @@ export interface Transaction {
   id: string
   type: TransactionType
   amount: number
-  token: 'SOL' | 'CLAUDE'
+  token: string
   signature: string
   status: 'pending' | 'confirmed' | 'failed'
   created_at: Date
