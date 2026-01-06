@@ -57,7 +57,9 @@ export interface ClaimStats {
 }
 
 export interface TradeQuote {
-  quoteId: string // Required for swap execution
+  // Raw quote response - needed for swap execution
+  rawQuoteResponse: any
+  // Parsed fields for convenience
   inputMint: string
   outputMint: string
   inputAmount: number
@@ -231,33 +233,30 @@ class BagsFmService {
 
     if (!data) return null
 
-    // Quote ID may be in different fields depending on API version
-    const quoteId = data.quoteId || data.requestId || data.id || ''
-
     return {
-      quoteId,
+      rawQuoteResponse: data, // Store full response for swap
       inputMint: data.inputMint || inputMint,
       outputMint: data.outputMint || outputMint,
-      inputAmount: data.inputAmount || amount,
-      outputAmount: data.outputAmount || 0,
-      priceImpact: data.priceImpact || 0,
-      fee: data.fee || 0,
+      inputAmount: parseInt(data.inAmount) || amount,
+      outputAmount: parseInt(data.outAmount) || 0,
+      priceImpact: parseFloat(data.priceImpactPct) || 0,
+      fee: data.platformFee?.amount ? parseInt(data.platformFee.amount) : 0,
     }
   }
 
   /**
    * Generate a swap transaction for bonding curve trades
-   * Requires a quoteId from getTradeQuote()
+   * Requires the full quote response from getTradeQuote()
    */
   async generateSwapTransaction(
     walletAddress: string,
-    quoteId: string
+    quoteResponse: any
   ): Promise<SwapTransaction | null> {
     const data = await this.fetch<any>('/trade/swap', {
       method: 'POST',
       body: JSON.stringify({
         userPublicKey: walletAddress,
-        quoteId,
+        quoteResponse,
       }),
     })
 
