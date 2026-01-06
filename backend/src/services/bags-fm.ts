@@ -124,6 +124,7 @@ class BagsFmService {
       // Return response field if exists, otherwise return data directly
       const result = data.response ?? data.data ?? data
       console.log(`✅ Bags.fm API response received`)
+      console.log(`📦 Response data: ${JSON.stringify(result).slice(0, 500)}`)
       return result as T
     } catch (error) {
       console.error('Bags.fm API request failed:', error)
