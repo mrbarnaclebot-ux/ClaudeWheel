@@ -96,16 +96,54 @@ export async function getTokenBalance(
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// SOL PRICE (simplified - would use oracle in production)
+// SOL PRICE - Fetches real price with caching
 // ═══════════════════════════════════════════════════════════════════════════
 
+let cachedSolPrice: number = 200
+let lastPriceFetch: Date | null = null
+const PRICE_CACHE_MS = 60000 // Cache for 1 minute
+
 export async function getSolPrice(): Promise<number> {
+  // Return cached price if fresh
+  if (lastPriceFetch && Date.now() - lastPriceFetch.getTime() < PRICE_CACHE_MS) {
+    return cachedSolPrice
+  }
+
   try {
-    // In production, use Pyth, Switchboard, or a price API
-    // For now, return a mock price
-    return 227.50 // Mock SOL price in USD
+    // Try CoinGecko first (free, no API key)
+    const response = await fetch(
+      'https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd',
+      { signal: AbortSignal.timeout(5000) }
+    )
+
+    if (response.ok) {
+      const data = await response.json() as { solana?: { usd?: number } }
+      if (data.solana?.usd) {
+        cachedSolPrice = data.solana.usd
+        lastPriceFetch = new Date()
+        return cachedSolPrice
+      }
+    }
+
+    // Fallback: Try Jupiter price API
+    const jupResponse = await fetch(
+      'https://price.jup.ag/v6/price?ids=SOL',
+      { signal: AbortSignal.timeout(5000) }
+    )
+
+    if (jupResponse.ok) {
+      const jupData = await jupResponse.json() as { data?: { SOL?: { price?: number } } }
+      if (jupData.data?.SOL?.price) {
+        cachedSolPrice = jupData.data.SOL.price
+        lastPriceFetch = new Date()
+        return cachedSolPrice
+      }
+    }
+
+    // Return cached price if API calls fail
+    return cachedSolPrice
   } catch (error) {
-    console.error('Failed to get SOL price:', error)
-    return 0
+    console.warn('⚠️ Failed to fetch SOL price, using cached:', cachedSolPrice)
+    return cachedSolPrice
   }
 }

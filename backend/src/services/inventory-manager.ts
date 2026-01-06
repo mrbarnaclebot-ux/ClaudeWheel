@@ -2,6 +2,7 @@ import { walletMonitor } from './wallet-monitor'
 import { priceAnalyzer } from './price-analyzer'
 import { marketMaker } from './market-maker'
 import { twapExecutor } from './twap-executor'
+import { getSolPrice } from '../config/solana'
 import { env } from '../config/env'
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -74,8 +75,10 @@ export class InventoryManager {
       const balances = await walletMonitor.getOpsWalletBalance()
       if (!balances) return null
 
-      const priceData = await priceAnalyzer.fetchCurrentPrice()
-      const solPrice = 200 // TODO: Fetch real SOL price
+      const [priceData, solPrice] = await Promise.all([
+        priceAnalyzer.fetchCurrentPrice(),
+        getSolPrice(),
+      ])
       const tokenPriceUsd = priceData?.price || 0
 
       const solValueUsd = balances.sol_balance * solPrice
@@ -143,7 +146,8 @@ export class InventoryManager {
 
     if (solDifferenceUsd > 0) {
       // Too much SOL - need to buy tokens
-      const solAmount = cappedDifferenceUsd / 200 // Convert USD to SOL
+      const solPrice = await getSolPrice()
+      const solAmount = cappedDifferenceUsd / solPrice
       return {
         type: 'buy',
         amount: solAmount,
@@ -202,8 +206,9 @@ export class InventoryManager {
     // Execute the rebalance
     try {
       const portfolio = await this.getPortfolioState()
+      const solPrice = await getSolPrice()
       const estimatedUsd = action.type === 'buy'
-        ? action.amount * 200
+        ? action.amount * solPrice
         : action.amount * (priceAnalyzer.getLastPrice()?.price || 0)
 
       // Use TWAP for large orders

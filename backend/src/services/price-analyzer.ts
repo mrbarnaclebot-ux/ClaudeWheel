@@ -3,7 +3,7 @@ import { env } from '../config/env'
 
 // ═══════════════════════════════════════════════════════════════════════════
 // PRICE ANALYZER SERVICE
-// Fetches price data and analyzes trends for smarter trading decisions
+// Advanced price analysis with volatility, Bollinger Bands, and dynamic sizing
 // ═══════════════════════════════════════════════════════════════════════════
 
 export interface PriceData {
@@ -17,6 +17,7 @@ export interface PriceData {
 interface PriceHistory {
   timestamp: number
   price: number
+  volume?: number
 }
 
 export interface TrendAnalysis {
@@ -27,6 +28,24 @@ export interface TrendAnalysis {
   rsi: number
   recommendation: 'buy' | 'sell' | 'hold'
   confidence: number // 0-100
+}
+
+export interface VolatilityMetrics {
+  volatility: number // Standard deviation as percentage
+  atr: number // Average True Range
+  bollingerUpper: number
+  bollingerLower: number
+  bollingerMiddle: number
+  isHighVolatility: boolean
+}
+
+export interface TradingSignals {
+  trend: TrendAnalysis | null
+  volatility: VolatilityMetrics | null
+  suggestedSlippageBps: number
+  suggestedPositionSizePct: number // % of available balance
+  priceVsMA: 'above' | 'below' | 'at'
+  momentumStrength: number // -100 to 100
 }
 
 export class PriceAnalyzer {
@@ -274,6 +293,273 @@ export class PriceAnalyzer {
       lastPrice: this.lastPrice,
       historyLength: this.priceHistory.length,
       analysis: this.analyzeTrend(),
+      volatility: this.calculateVolatility(),
+      signals: this.getTradingSignals(),
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // ADVANCED ANALYTICS
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * Calculate standard deviation of prices (volatility)
+   */
+  private calculateStdDev(periods: number): number | null {
+    if (this.priceHistory.length < periods) return null
+
+    const prices = this.priceHistory.slice(-periods).map(p => p.price)
+    const mean = prices.reduce((a, b) => a + b, 0) / prices.length
+    const squaredDiffs = prices.map(p => Math.pow(p - mean, 2))
+    const variance = squaredDiffs.reduce((a, b) => a + b, 0) / prices.length
+    return Math.sqrt(variance)
+  }
+
+  /**
+   * Calculate Bollinger Bands
+   */
+  calculateBollingerBands(periods: number = 20, stdDevMultiplier: number = 2): {
+    upper: number
+    middle: number
+    lower: number
+  } | null {
+    const sma = this.calculateSMA(periods)
+    const stdDev = this.calculateStdDev(periods)
+
+    if (!sma || !stdDev) return null
+
+    return {
+      upper: sma + (stdDev * stdDevMultiplier),
+      middle: sma,
+      lower: sma - (stdDev * stdDevMultiplier),
+    }
+  }
+
+  /**
+   * Calculate volatility metrics
+   */
+  calculateVolatility(periods: number = 20): VolatilityMetrics | null {
+    if (this.priceHistory.length < periods) return null
+
+    const prices = this.priceHistory.slice(-periods).map(p => p.price)
+    const currentPrice = prices[prices.length - 1]
+
+    // Calculate percentage returns
+    const returns: number[] = []
+    for (let i = 1; i < prices.length; i++) {
+      returns.push((prices[i] - prices[i - 1]) / prices[i - 1] * 100)
+    }
+
+    // Calculate standard deviation of returns (volatility)
+    const meanReturn = returns.reduce((a, b) => a + b, 0) / returns.length
+    const squaredDiffs = returns.map(r => Math.pow(r - meanReturn, 2))
+    const volatility = Math.sqrt(squaredDiffs.reduce((a, b) => a + b, 0) / returns.length)
+
+    // Calculate ATR (simplified - using price range)
+    let atrSum = 0
+    for (let i = 1; i < prices.length; i++) {
+      atrSum += Math.abs(prices[i] - prices[i - 1])
+    }
+    const atr = atrSum / (prices.length - 1)
+
+    // Bollinger Bands
+    const bands = this.calculateBollingerBands(periods)
+
+    return {
+      volatility,
+      atr,
+      bollingerUpper: bands?.upper || currentPrice * 1.1,
+      bollingerLower: bands?.lower || currentPrice * 0.9,
+      bollingerMiddle: bands?.middle || currentPrice,
+      isHighVolatility: volatility > 5, // >5% daily volatility is high
+    }
+  }
+
+  /**
+   * Calculate suggested slippage based on liquidity and volatility
+   */
+  calculateDynamicSlippage(tradeAmountUsd: number): number {
+    const volatility = this.calculateVolatility()
+    const liquidity = this.lastPrice?.liquidity || 10000
+
+    // Base slippage: 50 bps (0.5%)
+    let slippageBps = 50
+
+    // Adjust for volatility
+    if (volatility) {
+      if (volatility.isHighVolatility) {
+        slippageBps += 50 // Add 0.5% for high volatility
+      }
+      slippageBps += Math.floor(volatility.volatility * 10) // Add based on actual volatility
+    }
+
+    // Adjust for trade size relative to liquidity (price impact)
+    const priceImpactPct = (tradeAmountUsd / liquidity) * 100
+    if (priceImpactPct > 1) {
+      slippageBps += Math.floor(priceImpactPct * 50) // Add 50 bps per 1% of liquidity
+    }
+
+    // Cap at 500 bps (5%)
+    return Math.min(slippageBps, 500)
+  }
+
+  /**
+   * Calculate suggested position size based on volatility and confidence
+   */
+  calculatePositionSize(
+    availableBalance: number,
+    maxPositionPct: number = 20
+  ): number {
+    const analysis = this.analyzeTrend()
+    const volatility = this.calculateVolatility()
+
+    // Base position: 10% of available
+    let positionPct = 10
+
+    // Adjust based on confidence
+    if (analysis) {
+      positionPct = Math.min(maxPositionPct, positionPct * (analysis.confidence / 50))
+    }
+
+    // Reduce position in high volatility
+    if (volatility?.isHighVolatility) {
+      positionPct *= 0.5
+    }
+
+    // Ensure minimum 2%, maximum as specified
+    positionPct = Math.max(2, Math.min(positionPct, maxPositionPct))
+
+    return (availableBalance * positionPct) / 100
+  }
+
+  /**
+   * Get comprehensive trading signals
+   */
+  getTradingSignals(): TradingSignals {
+    const trend = this.analyzeTrend()
+    const volatility = this.calculateVolatility()
+    const currentPrice = this.lastPrice?.price || 0
+    const liquidity = this.lastPrice?.liquidity || 10000
+
+    // Calculate momentum (-100 to 100)
+    let momentumStrength = 0
+    if (trend) {
+      momentumStrength = trend.trend === 'bullish'
+        ? trend.strength * (trend.confidence / 100)
+        : trend.trend === 'bearish'
+          ? -trend.strength * (trend.confidence / 100)
+          : 0
+    }
+
+    // Price vs MA position
+    let priceVsMA: 'above' | 'below' | 'at' = 'at'
+    if (trend && currentPrice > 0) {
+      if (currentPrice > trend.shortTermMA * 1.01) priceVsMA = 'above'
+      else if (currentPrice < trend.shortTermMA * 0.99) priceVsMA = 'below'
+    }
+
+    // Dynamic slippage (assume $100 trade for estimation)
+    const suggestedSlippageBps = this.calculateDynamicSlippage(100)
+
+    // Position size as percentage
+    let suggestedPositionSizePct = 10
+    if (trend) {
+      suggestedPositionSizePct = Math.min(20, 5 + (trend.confidence / 10))
+    }
+    if (volatility?.isHighVolatility) {
+      suggestedPositionSizePct *= 0.5
+    }
+
+    return {
+      trend,
+      volatility,
+      suggestedSlippageBps,
+      suggestedPositionSizePct,
+      priceVsMA,
+      momentumStrength,
+    }
+  }
+
+  /**
+   * Check if price is near Bollinger Band (potential reversal)
+   */
+  isNearBollingerBand(): 'upper' | 'lower' | 'middle' | null {
+    const bands = this.calculateBollingerBands()
+    const currentPrice = this.lastPrice?.price
+
+    if (!bands || !currentPrice) return null
+
+    const range = bands.upper - bands.lower
+    const upperThreshold = bands.upper - (range * 0.1)
+    const lowerThreshold = bands.lower + (range * 0.1)
+
+    if (currentPrice >= upperThreshold) return 'upper' // Potential overbought
+    if (currentPrice <= lowerThreshold) return 'lower' // Potential oversold
+    return 'middle'
+  }
+
+  /**
+   * Get optimal entry/exit signals combining all indicators
+   */
+  getOptimalSignal(): {
+    action: 'strong_buy' | 'buy' | 'hold' | 'sell' | 'strong_sell'
+    confidence: number
+    reasons: string[]
+  } {
+    const signals = this.getTradingSignals()
+    const bollingerPosition = this.isNearBollingerBand()
+    const reasons: string[] = []
+    let score = 0 // -100 to +100
+
+    // RSI contribution
+    if (signals.trend) {
+      if (signals.trend.rsi < 30) {
+        score += 30
+        reasons.push('RSI oversold (<30)')
+      } else if (signals.trend.rsi > 70) {
+        score -= 30
+        reasons.push('RSI overbought (>70)')
+      }
+    }
+
+    // Trend contribution
+    if (signals.trend) {
+      if (signals.trend.trend === 'bullish') {
+        score += signals.trend.strength * 0.3
+        reasons.push(`Bullish trend (strength: ${signals.trend.strength.toFixed(0)})`)
+      } else if (signals.trend.trend === 'bearish') {
+        score -= signals.trend.strength * 0.3
+        reasons.push(`Bearish trend (strength: ${signals.trend.strength.toFixed(0)})`)
+      }
+    }
+
+    // Bollinger Band contribution
+    if (bollingerPosition === 'lower') {
+      score += 20
+      reasons.push('Price near lower Bollinger Band')
+    } else if (bollingerPosition === 'upper') {
+      score -= 20
+      reasons.push('Price near upper Bollinger Band')
+    }
+
+    // Volatility adjustment
+    if (signals.volatility?.isHighVolatility) {
+      score *= 0.7 // Reduce conviction in high volatility
+      reasons.push('High volatility - reduced position size recommended')
+    }
+
+    // Determine action
+    let action: 'strong_buy' | 'buy' | 'hold' | 'sell' | 'strong_sell'
+    if (score >= 50) action = 'strong_buy'
+    else if (score >= 20) action = 'buy'
+    else if (score <= -50) action = 'strong_sell'
+    else if (score <= -20) action = 'sell'
+    else action = 'hold'
+
+    return {
+      action,
+      confidence: Math.min(100, Math.abs(score)),
+      reasons,
     }
   }
 }

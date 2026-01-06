@@ -6,8 +6,51 @@ import { priceAnalyzer } from '../services/price-analyzer'
 import { twapExecutor } from '../services/twap-executor'
 import { inventoryManager } from '../services/inventory-manager'
 import { fetchConfig, updateWalletBalance, calculateAndUpdateFeeStats, type FlywheelConfig } from '../config/database'
+import { getSolPrice } from '../config/solana'
 import { env } from '../config/env'
 import type { Transaction } from '../types'
+
+// ═══════════════════════════════════════════════════════════════════════════
+// TRADE COOLDOWN TRACKING
+// Prevents overtrading by enforcing minimum time between trades
+// ═══════════════════════════════════════════════════════════════════════════
+
+let lastBuyTime: Date | null = null
+let lastSellTime: Date | null = null
+const MIN_TRADE_COOLDOWN_MS = 5 * 60 * 1000 // 5 minutes between same-direction trades
+const MIN_ANY_TRADE_COOLDOWN_MS = 2 * 60 * 1000 // 2 minutes between any trades
+
+function canExecuteTrade(type: 'buy' | 'sell'): boolean {
+  const now = Date.now()
+
+  // Check any-trade cooldown
+  const lastAnyTrade = Math.max(
+    lastBuyTime?.getTime() || 0,
+    lastSellTime?.getTime() || 0
+  )
+  if (lastAnyTrade && now - lastAnyTrade < MIN_ANY_TRADE_COOLDOWN_MS) {
+    return false
+  }
+
+  // Check same-direction cooldown
+  if (type === 'buy' && lastBuyTime) {
+    if (now - lastBuyTime.getTime() < MIN_TRADE_COOLDOWN_MS) {
+      return false
+    }
+  }
+  if (type === 'sell' && lastSellTime) {
+    if (now - lastSellTime.getTime() < MIN_TRADE_COOLDOWN_MS) {
+      return false
+    }
+  }
+
+  return true
+}
+
+function recordTrade(type: 'buy' | 'sell') {
+  if (type === 'buy') lastBuyTime = new Date()
+  else lastSellTime = new Date()
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // FLYWHEEL JOB
@@ -129,9 +172,9 @@ async function runSimpleMarketMaking(config: FlywheelConfig) {
   }
 }
 
-// Smart market making - uses price analysis and RSI
+// Smart market making - uses advanced price analysis with Bollinger Bands, volatility, and RSI
 async function runSmartMarketMaking(config: FlywheelConfig) {
-  console.log('\n📈 Market Making: SMART Mode')
+  console.log('\n📈 Market Making: SMART Mode (Enhanced)')
 
   // Fetch current price and update analysis
   const priceData = await priceAnalyzer.fetchCurrentPrice()
@@ -145,17 +188,32 @@ async function runSmartMarketMaking(config: FlywheelConfig) {
   console.log(`   24h Change: ${priceData.priceChange24h.toFixed(2)}%`)
   console.log(`   Liquidity: $${priceData.liquidity.toFixed(2)}`)
 
-  // Analyze trend
-  const analysis = priceAnalyzer.analyzeTrend()
-  if (!analysis) {
+  // Get comprehensive trading signals
+  const signals = priceAnalyzer.getTradingSignals()
+  const optimalSignal = priceAnalyzer.getOptimalSignal()
+  const bollingerPosition = priceAnalyzer.isNearBollingerBand()
+
+  if (!signals.trend) {
     console.log('   ℹ️ Not enough data for trend analysis, falling back to simple mode')
     await runSimpleMarketMaking(config)
     return
   }
 
-  console.log(`   Trend: ${analysis.trend.toUpperCase()} (strength: ${analysis.strength.toFixed(0)})`)
-  console.log(`   RSI: ${analysis.rsi.toFixed(1)}`)
-  console.log(`   Recommendation: ${analysis.recommendation.toUpperCase()} (confidence: ${analysis.confidence.toFixed(0)}%)`)
+  // Display enhanced analytics
+  console.log(`   Trend: ${signals.trend.trend.toUpperCase()} (strength: ${signals.trend.strength.toFixed(0)})`)
+  console.log(`   RSI: ${signals.trend.rsi.toFixed(1)}`)
+  if (signals.volatility) {
+    console.log(`   Volatility: ${signals.volatility.volatility.toFixed(2)}% ${signals.volatility.isHighVolatility ? '⚠️ HIGH' : '✓ Normal'}`)
+    console.log(`   Bollinger: $${signals.volatility.bollingerLower.toFixed(8)} - $${signals.volatility.bollingerUpper.toFixed(8)}`)
+  }
+  console.log(`   Price vs MA: ${signals.priceVsMA.toUpperCase()}`)
+  console.log(`   Momentum: ${signals.momentumStrength.toFixed(0)}`)
+  console.log(`   Optimal Signal: ${optimalSignal.action.toUpperCase()} (confidence: ${optimalSignal.confidence.toFixed(0)}%)`)
+  if (optimalSignal.reasons.length > 0) {
+    console.log(`   Reasons: ${optimalSignal.reasons.join(', ')}`)
+  }
+  console.log(`   Suggested Slippage: ${signals.suggestedSlippageBps} bps`)
+  console.log(`   Suggested Position: ${signals.suggestedPositionSizePct.toFixed(1)}%`)
 
   const opsBalance = await walletMonitor.getOpsWalletBalance()
   if (!opsBalance) {
@@ -163,59 +221,90 @@ async function runSmartMarketMaking(config: FlywheelConfig) {
     return
   }
 
-  // Execute based on analysis
-  if (analysis.recommendation === 'buy' && analysis.confidence >= 60) {
+  const solPrice = await getSolPrice()
+
+  // Determine action based on optimal signal
+  const shouldBuy = optimalSignal.action === 'strong_buy' || optimalSignal.action === 'buy'
+  const shouldSell = optimalSignal.action === 'strong_sell' || optimalSignal.action === 'sell'
+  const minConfidence = optimalSignal.action.includes('strong') ? 40 : 50
+
+  // Execute based on optimal signal with enhanced logic
+  if (shouldBuy && optimalSignal.confidence >= minConfidence) {
+    // Check cooldown
+    if (!canExecuteTrade('buy')) {
+      console.log('   ⏳ Buy cooldown active - skipping')
+      return
+    }
+
     if (opsBalance.sol_balance > config.min_buy_amount_sol + 0.01) {
-      // Scale buy amount by confidence
-      const confidenceFactor = analysis.confidence / 100
+      // Use volatility-adjusted position sizing
       const buyAmount = Math.min(
-        opsBalance.sol_balance * 0.1 * confidenceFactor,
+        priceAnalyzer.calculatePositionSize(opsBalance.sol_balance, config.max_buy_amount_sol / opsBalance.sol_balance * 100),
         config.max_buy_amount_sol
       )
 
-      console.log(`   Executing smart buy (confidence: ${analysis.confidence.toFixed(0)}%)...`)
+      // Skip if volatility is too high and signal isn't strong
+      if (signals.volatility?.isHighVolatility && optimalSignal.action !== 'strong_buy') {
+        console.log('   ⚠️ High volatility detected - reducing position or waiting')
+        return
+      }
+
+      console.log(`   Executing smart buy (${optimalSignal.action}, confidence: ${optimalSignal.confidence.toFixed(0)}%)...`)
 
       // Use TWAP for larger orders
-      const estimatedUsd = buyAmount * 200 // Approximate SOL price
+      const estimatedUsd = buyAmount * solPrice
       if (config.use_twap && estimatedUsd > config.twap_threshold_usd) {
         await twapExecutor.createBuyOrder(buyAmount, {
-          numSlices: 3,
-          durationMinutes: 10,
+          numSlices: signals.volatility?.isHighVolatility ? 5 : 3,
+          durationMinutes: signals.volatility?.isHighVolatility ? 20 : 10,
         })
         console.log(`   ✅ TWAP buy order created for ${buyAmount.toFixed(4)} SOL`)
+        recordTrade('buy')
       } else {
         const buyResult = await marketMaker.executeBuy(buyAmount)
         if (buyResult) {
           addTransaction(buyResult)
-          console.log(`   ✅ Bought tokens with ${buyResult.amount.toFixed(6)} SOL`)
+          recordTrade('buy')
+          console.log(`   ✅ Bought tokens with ${buyAmount.toFixed(6)} SOL`)
         }
       }
     } else {
       console.log('   ℹ️ Insufficient SOL for buy')
     }
-  } else if (analysis.recommendation === 'sell' && analysis.confidence >= 60) {
-    if (opsBalance.token_balance > env.maxSellAmountTokens) {
-      // Scale sell amount by confidence
-      const confidenceFactor = analysis.confidence / 100
-      const sellAmount = Math.min(
-        opsBalance.token_balance * 0.05 * confidenceFactor,
-        env.maxSellAmountTokens
-      )
+  } else if (shouldSell && optimalSignal.confidence >= minConfidence) {
+    // Check cooldown
+    if (!canExecuteTrade('sell')) {
+      console.log('   ⏳ Sell cooldown active - skipping')
+      return
+    }
 
-      console.log(`   Executing smart sell (confidence: ${analysis.confidence.toFixed(0)}%)...`)
+    if (opsBalance.token_balance > env.maxSellAmountTokens * 0.5) {
+      // Use volatility-adjusted position sizing for sells
+      const baseAmount = opsBalance.token_balance * (signals.suggestedPositionSizePct / 100)
+      const sellAmount = Math.min(baseAmount, env.maxSellAmountTokens)
+
+      // Skip if volatility is too high and signal isn't strong
+      if (signals.volatility?.isHighVolatility && optimalSignal.action !== 'strong_sell') {
+        console.log('   ⚠️ High volatility detected - waiting for better conditions')
+        return
+      }
+
+      console.log(`   Executing smart sell (${optimalSignal.action}, confidence: ${optimalSignal.confidence.toFixed(0)}%)...`)
 
       // Use TWAP for larger orders
       const estimatedUsd = sellAmount * priceData.price
       if (config.use_twap && estimatedUsd > config.twap_threshold_usd) {
         await twapExecutor.createSellOrder(sellAmount, {
-          numSlices: 3,
-          durationMinutes: 10,
+          numSlices: signals.volatility?.isHighVolatility ? 5 : 3,
+          durationMinutes: signals.volatility?.isHighVolatility ? 20 : 10,
         })
         console.log(`   ✅ TWAP sell order created for ${sellAmount.toFixed(0)} tokens`)
+        recordTrade('sell')
       } else {
         const sellResult = await marketMaker.executeSell(sellAmount)
         if (sellResult) {
           addTransaction(sellResult)
+          recordTrade('sell')
           console.log(`   ✅ Sold ${sellResult.amount.toFixed(0)} tokens`)
         }
       }
@@ -223,7 +312,10 @@ async function runSmartMarketMaking(config: FlywheelConfig) {
       console.log('   ℹ️ Insufficient tokens for sell')
     }
   } else {
-    console.log(`   ℹ️ Holding position (${analysis.recommendation}, confidence: ${analysis.confidence.toFixed(0)}%)`)
+    console.log(`   ℹ️ Holding position (${optimalSignal.action}, confidence: ${optimalSignal.confidence.toFixed(0)}%)`)
+    if (bollingerPosition === 'middle') {
+      console.log('   💡 Price in middle of Bollinger Bands - waiting for better entry')
+    }
   }
 }
 
