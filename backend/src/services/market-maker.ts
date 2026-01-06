@@ -136,11 +136,39 @@ export class MarketMaker {
         maxRetries: 3,
       })
 
-      // Wait for confirmation
-      await connection.confirmTransaction(signature, 'confirmed')
+      console.log(`📤 Transaction sent: ${signature}`)
 
-      console.log(`✅ Swap executed! Signature: ${signature}`)
-      return signature
+      // Wait for confirmation with timeout handling
+      try {
+        await connection.confirmTransaction(signature, 'confirmed')
+        console.log(`✅ Swap executed! Signature: ${signature}`)
+        return signature
+      } catch (confirmError: any) {
+        // Check if it's a timeout error - the transaction might have succeeded
+        if (confirmError?.message?.includes('not confirmed in')) {
+          console.warn(`⏱️ Confirmation timed out, checking transaction status...`)
+
+          // Wait a bit and check the transaction status
+          await new Promise(resolve => setTimeout(resolve, 5000))
+
+          const status = await connection.getSignatureStatus(signature)
+          if (status?.value?.confirmationStatus === 'confirmed' || status?.value?.confirmationStatus === 'finalized') {
+            console.log(`✅ Transaction confirmed after timeout check! Signature: ${signature}`)
+            return signature
+          }
+
+          // Try one more time after another delay
+          await new Promise(resolve => setTimeout(resolve, 10000))
+          const retryStatus = await connection.getSignatureStatus(signature)
+          if (retryStatus?.value?.confirmationStatus === 'confirmed' || retryStatus?.value?.confirmationStatus === 'finalized') {
+            console.log(`✅ Transaction confirmed on retry! Signature: ${signature}`)
+            return signature
+          }
+
+          console.error(`❌ Transaction failed to confirm: ${signature}`)
+        }
+        throw confirmError
+      }
     } catch (error) {
       console.error('❌ Swap execution failed:', error)
       return null
@@ -179,11 +207,40 @@ export class MarketMaker {
         maxRetries: 3,
       })
 
-      // Wait for confirmation
-      await connection.confirmTransaction(signature, 'confirmed')
+      console.log(`📤 Transaction sent: ${signature}`)
 
-      console.log(`✅ Bags.fm swap executed! Signature: ${signature}`)
-      return signature
+      // Wait for confirmation with timeout handling
+      try {
+        await connection.confirmTransaction(signature, 'confirmed')
+        console.log(`✅ Bags.fm swap executed! Signature: ${signature}`)
+        return signature
+      } catch (confirmError: any) {
+        // Check if it's a timeout error - the transaction might have succeeded
+        if (confirmError?.message?.includes('not confirmed in')) {
+          console.warn(`⏱️ Confirmation timed out, checking transaction status...`)
+
+          // Wait a bit and check the transaction status
+          await new Promise(resolve => setTimeout(resolve, 5000))
+
+          const status = await connection.getSignatureStatus(signature)
+          if (status?.value?.confirmationStatus === 'confirmed' || status?.value?.confirmationStatus === 'finalized') {
+            console.log(`✅ Transaction confirmed after timeout check! Signature: ${signature}`)
+            return signature
+          }
+
+          // Try one more time after another delay
+          await new Promise(resolve => setTimeout(resolve, 10000))
+          const retryStatus = await connection.getSignatureStatus(signature)
+          if (retryStatus?.value?.confirmationStatus === 'confirmed' || retryStatus?.value?.confirmationStatus === 'finalized') {
+            console.log(`✅ Transaction confirmed on retry! Signature: ${signature}`)
+            return signature
+          }
+
+          console.error(`❌ Transaction failed to confirm: ${signature}`)
+          console.error(`   Status: ${JSON.stringify(retryStatus?.value)}`)
+        }
+        throw confirmError
+      }
     } catch (error: any) {
       console.error('❌ Bags.fm swap execution failed:')
       if (error?.logs) {
