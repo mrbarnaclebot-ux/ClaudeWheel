@@ -69,7 +69,7 @@ export interface TradeQuote {
 }
 
 export interface SwapTransaction {
-  transaction: string // Base64 encoded serialized transaction
+  transaction: string // Base58 encoded serialized transaction
   lastValidBlockHeight: number
 }
 
@@ -157,26 +157,54 @@ class BagsFmService {
   }
 
   /**
-   * Get token creator/launch info
+   * Get token info from Bags.fm
+   * Tries /token/{mint} endpoint first, falls back to extracting from creator data
    */
   async getTokenCreatorInfo(tokenMint: string): Promise<TokenCreatorInfo | null> {
-    const data = await this.fetch<any>(`/token-launch/creator/v3?tokenMint=${tokenMint}`)
+    // Try the token endpoint first for full token info
+    const tokenData = await this.fetch<any>(`/token/${tokenMint}`)
 
-    if (!data) return null
-
-    return {
-      tokenMint,
-      creatorWallet: data.creatorWallet || '',
-      tokenName: data.tokenName || '',
-      tokenSymbol: data.tokenSymbol || '',
-      tokenImage: data.tokenImage || '',
-      bondingCurveProgress: data.bondingCurveProgress || 0,
-      isGraduated: data.isGraduated || false,
-      marketCap: data.marketCap || 0,
-      volume24h: data.volume24h || 0,
-      holders: data.holders || 0,
-      createdAt: data.createdAt || '',
+    if (tokenData && !Array.isArray(tokenData)) {
+      // Token endpoint returned data - use it
+      return {
+        tokenMint,
+        creatorWallet: tokenData.creatorWallet || tokenData.creator || '',
+        tokenName: tokenData.name || tokenData.tokenName || '',
+        tokenSymbol: tokenData.symbol || tokenData.tokenSymbol || '',
+        tokenImage: tokenData.image || tokenData.tokenImage || tokenData.logo || '',
+        bondingCurveProgress: tokenData.bondingCurveProgress || tokenData.progress || 0,
+        isGraduated: tokenData.isGraduated ?? tokenData.graduated ?? false,
+        marketCap: tokenData.marketCap || tokenData.mcap || 0,
+        volume24h: tokenData.volume24h || tokenData.volume || 0,
+        holders: tokenData.holders || tokenData.holderCount || 0,
+        createdAt: tokenData.createdAt || tokenData.created || '',
+      }
     }
+
+    // Fall back to creator endpoint
+    const creatorData = await this.fetch<any>(`/token-launch/creator/v3?tokenMint=${tokenMint}`)
+
+    if (!creatorData) return null
+
+    // Creator endpoint returns an array of creators
+    if (Array.isArray(creatorData) && creatorData.length > 0) {
+      const creator = creatorData.find((c: any) => c.isCreator) || creatorData[0]
+      return {
+        tokenMint,
+        creatorWallet: creator.wallet || '',
+        tokenName: '',  // Not available from creator endpoint
+        tokenSymbol: '',
+        tokenImage: creator.pfp || '',
+        bondingCurveProgress: 0,  // Need token endpoint for this
+        isGraduated: false,
+        marketCap: 0,
+        volume24h: 0,
+        holders: 0,
+        createdAt: '',
+      }
+    }
+
+    return null
   }
 
   /**

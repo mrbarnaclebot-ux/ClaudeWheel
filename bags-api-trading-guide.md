@@ -73,20 +73,18 @@ The Bags API uses a **Quote → Transaction → Sign → Send** workflow for exe
 
 ### 1. Get Trade Quote
 
-**Endpoint:** `POST /trade/quote`
+**Endpoint:** `GET /trade/quote`
 
 Get a price quote and route information for a potential swap.
 
-**Request Parameters:**
+**Query Parameters:**
 
-```json
-{
-  "inputMint": "PublicKey",           // Token to sell (Base58 encoded)
-  "outputMint": "PublicKey",          // Token to buy (Base58 encoded)
-  "amount": number,                   // Amount in smallest token units
-  "slippageMode": "auto" | "manual",  // Auto or manual slippage calculation
-  "slippageBps": number               // Required if slippageMode is "manual"
-}
+```
+inputMint=PublicKey           // Token to sell (Base58 encoded)
+outputMint=PublicKey          // Token to buy (Base58 encoded)
+amount=number                 // Amount in smallest token units
+slippageMode=auto|manual      // Auto or manual slippage calculation
+slippageBps=number            // Required if slippageMode is "manual"
 ```
 
 **Response:**
@@ -135,7 +133,7 @@ Generate an unsigned Solana transaction ready to be signed.
 
 ```json
 {
-  "transaction": "string",           // Base64-encoded VersionedTransaction
+  "swapTransaction": "string",       // Base58-encoded VersionedTransaction
   "computeUnitLimit": number,        // Compute units needed
   "lastValidBlockHeight": number,    // Block height deadline
   "prioritizationFeeLamports": number // Fee in lamports for prioritization
