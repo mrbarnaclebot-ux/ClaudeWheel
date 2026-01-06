@@ -85,7 +85,7 @@ class BagsFmService {
     try {
       const headers: Record<string, string> = {
         'Content-Type': 'application/json',
-        ...(this.apiKey ? { 'Authorization': `Bearer ${this.apiKey}` } : {}),
+        ...(this.apiKey ? { 'x-api-key': this.apiKey } : {}),
         ...(options.headers as Record<string, string> || {}),
       }
 
