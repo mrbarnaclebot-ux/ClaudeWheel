@@ -89,24 +89,41 @@ class BagsFmService {
         ...(options.headers as Record<string, string> || {}),
       }
 
-      const response = await fetch(`${BAGS_API_BASE}${endpoint}`, {
+      const url = `${BAGS_API_BASE}${endpoint}`
+      console.log(`📡 Bags.fm API: ${options.method || 'GET'} ${endpoint}`)
+
+      const response = await fetch(url, {
         ...options,
         headers,
       })
 
+      const responseText = await response.text()
+
       if (!response.ok) {
         console.error(`Bags.fm API error: ${response.status} ${response.statusText}`)
+        console.error(`Response body: ${responseText.slice(0, 500)}`)
         return null
       }
 
-      const data = await response.json() as BagsApiResponse<T>
-
-      if (!data.success) {
-        console.error(`Bags.fm API error: ${data.error}`)
+      // Try to parse JSON
+      let data: any
+      try {
+        data = JSON.parse(responseText)
+      } catch {
+        console.error(`Bags.fm API: Invalid JSON response: ${responseText.slice(0, 200)}`)
         return null
       }
 
-      return data.response || null
+      // Handle different response formats - some endpoints return data directly
+      if (data.success === false) {
+        console.error(`Bags.fm API error: ${data.error || data.message || 'Unknown error'}`)
+        return null
+      }
+
+      // Return response field if exists, otherwise return data directly
+      const result = data.response ?? data.data ?? data
+      console.log(`✅ Bags.fm API response received`)
+      return result as T
     } catch (error) {
       console.error('Bags.fm API request failed:', error)
       return null
