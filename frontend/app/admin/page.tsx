@@ -1,12 +1,15 @@
 'use client'
 
+// Force dynamic rendering to prevent SSG issues with wallet hooks
+export const dynamic = 'force-dynamic'
+
 import { useState, useEffect, useCallback, ClipboardEvent } from 'react'
 import { useWallet } from '@solana/wallet-adapter-react'
 import { WalletMultiButton } from '@solana/wallet-adapter-react-ui'
 import { motion } from 'framer-motion'
 import { supabase } from '@/lib/supabase'
 import { fetchTokenMetadata, isValidSolanaAddress } from '@/lib/token-metadata'
-import { fetchAdminNonce, updateConfigWithSignature } from '@/lib/api'
+import { fetchAdminNonce, updateConfigWithSignature, fetchSystemStatus, fetchLogs, type SystemStatus, type LogEntry } from '@/lib/api'
 import bs58 from 'bs58'
 
 // Dev wallet address - only this wallet can access admin
@@ -61,11 +64,38 @@ const defaultConfig: Config = {
 
 export default function AdminPage() {
   const { publicKey, connected, signMessage } = useWallet()
+  const [isMounted, setIsMounted] = useState(false)
   const [isAuthorized, setIsAuthorized] = useState(false)
   const [config, setConfig] = useState<Config>(defaultConfig)
   const [isSaving, setIsSaving] = useState(false)
   const [isFetchingMetadata, setIsFetchingMetadata] = useState(false)
   const [message, setMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null)
+  const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null)
+  const [logs, setLogs] = useState<LogEntry[]>([])
+  const [isLoadingStatus, setIsLoadingStatus] = useState(false)
+  const [showLogs, setShowLogs] = useState(false)
+
+  // Prevent SSR/SSG issues with wallet hooks
+  useEffect(() => {
+    setIsMounted(true)
+  }, [])
+
+  // Load system status when authorized
+  const loadSystemStatus = useCallback(async () => {
+    setIsLoadingStatus(true)
+    try {
+      const [status, recentLogs] = await Promise.all([
+        fetchSystemStatus(),
+        fetchLogs(100)
+      ])
+      if (status) setSystemStatus(status)
+      if (recentLogs) setLogs(recentLogs)
+    } catch (error) {
+      console.error('Failed to load system status:', error)
+    } finally {
+      setIsLoadingStatus(false)
+    }
+  }, [])
 
   // Fetch token metadata when address changes
   const handleFetchMetadata = useCallback(async (address: string) => {
@@ -112,11 +142,23 @@ export default function AdminPage() {
 
       if (authorized) {
         loadConfig()
+        loadSystemStatus()
       }
     } else {
       setIsAuthorized(false)
     }
-  }, [connected, publicKey])
+  }, [connected, publicKey, loadSystemStatus])
+
+  // Auto-refresh system status and logs every 10 seconds when authorized
+  useEffect(() => {
+    if (!isAuthorized) return
+
+    const interval = setInterval(() => {
+      loadSystemStatus()
+    }, 10000)
+
+    return () => clearInterval(interval)
+  }, [isAuthorized, loadSystemStatus])
 
   // Load config from Supabase
   async function loadConfig() {
@@ -203,6 +245,17 @@ export default function AdminPage() {
     }
   }
 
+  // Loading state during SSR/hydration
+  if (!isMounted) {
+    return (
+      <div className="min-h-screen bg-void flex items-center justify-center p-4">
+        <div className="card-glow bg-bg-card p-8 max-w-md w-full text-center">
+          <div className="animate-pulse text-accent-primary font-mono">Loading Admin Panel...</div>
+        </div>
+      </div>
+    )
+  }
+
   // Not connected state
   if (!connected) {
     return (
@@ -284,6 +337,134 @@ export default function AdminPage() {
           </span>
         </div>
       </motion.div>
+
+      {/* System Status Terminals */}
+      <div className="max-w-3xl mx-auto mb-8 space-y-4">
+        {/* Connection Status */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.05 }}
+          className="card-glow bg-bg-card p-4"
+        >
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="font-display text-lg font-semibold text-text-primary flex items-center gap-2">
+              <span className="text-accent-primary">◈</span>
+              System Status
+            </h2>
+            <button
+              onClick={loadSystemStatus}
+              disabled={isLoadingStatus}
+              className="px-3 py-1 text-xs font-mono bg-bg-secondary hover:bg-bg-card-hover border border-border-subtle rounded-lg transition-colors disabled:opacity-50"
+            >
+              {isLoadingStatus ? 'Refreshing...' : 'Refresh'}
+            </button>
+          </div>
+
+          {/* Connection Checks */}
+          <div className="bg-bg-secondary rounded-lg p-3 font-mono text-xs">
+            <div className="text-text-muted mb-2">$ system status --check-connections</div>
+            {systemStatus?.checks.map((check, i) => (
+              <div key={i} className="flex items-center gap-2 py-1">
+                <span className={`w-2 h-2 rounded-full ${
+                  check.status === 'connected' ? 'bg-success' :
+                  check.status === 'disconnected' ? 'bg-error' : 'bg-warning'
+                }`} />
+                <span className={`font-semibold ${
+                  check.status === 'connected' ? 'text-success' :
+                  check.status === 'disconnected' ? 'text-error' : 'text-warning'
+                }`}>
+                  [{check.status.toUpperCase()}]
+                </span>
+                <span className="text-text-primary">{check.name}</span>
+                <span className="text-text-muted">- {check.message}</span>
+                {check.latency !== undefined && (
+                  <span className="text-text-muted">({check.latency}ms)</span>
+                )}
+              </div>
+            ))}
+            {!systemStatus && !isLoadingStatus && (
+              <div className="text-error">Unable to connect to backend API</div>
+            )}
+            {isLoadingStatus && !systemStatus && (
+              <div className="text-text-muted animate-pulse">Checking connections...</div>
+            )}
+          </div>
+
+          {/* Environment Info */}
+          {systemStatus?.environment && (
+            <div className="mt-4 bg-bg-secondary rounded-lg p-3 font-mono text-xs">
+              <div className="text-text-muted mb-2">$ env --show-config</div>
+              <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-text-primary">
+                <div><span className="text-accent-primary">NODE_ENV:</span> {systemStatus.environment.nodeEnv}</div>
+                <div><span className="text-accent-primary">PORT:</span> {systemStatus.environment.port}</div>
+                <div className="col-span-2 truncate"><span className="text-accent-primary">SOLANA_RPC:</span> {systemStatus.environment.solanaRpcUrl}</div>
+                <div><span className="text-accent-primary">MARKET_MAKING:</span> {systemStatus.environment.marketMakingEnabled ? 'enabled' : 'disabled'}</div>
+                <div><span className="text-accent-primary">MAX_BUY:</span> {systemStatus.environment.maxBuyAmountSol} SOL</div>
+              </div>
+            </div>
+          )}
+
+          {/* Memory & Uptime */}
+          {systemStatus && (
+            <div className="mt-4 flex gap-4 text-xs font-mono">
+              <div className="bg-bg-secondary rounded-lg px-3 py-2">
+                <span className="text-text-muted">Uptime:</span>{' '}
+                <span className="text-success">{Math.floor(systemStatus.uptime / 3600)}h {Math.floor((systemStatus.uptime % 3600) / 60)}m</span>
+              </div>
+              <div className="bg-bg-secondary rounded-lg px-3 py-2">
+                <span className="text-text-muted">Memory:</span>{' '}
+                <span className="text-accent-primary">{systemStatus.memory.heapUsed}MB / {systemStatus.memory.heapTotal}MB</span>
+              </div>
+            </div>
+          )}
+        </motion.div>
+
+        {/* Backend Logs */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.1 }}
+          className="card-glow bg-bg-card p-4"
+        >
+          <button
+            onClick={() => setShowLogs(!showLogs)}
+            className="w-full flex items-center justify-between"
+          >
+            <h2 className="font-display text-lg font-semibold text-text-primary flex items-center gap-2">
+              <span className="text-accent-primary">◈</span>
+              Backend Logs
+              {logs.length > 0 && (
+                <span className="text-xs font-mono text-text-muted">({logs.length})</span>
+              )}
+            </h2>
+            <span className="text-text-muted text-sm">{showLogs ? '▼' : '▶'}</span>
+          </button>
+
+          {showLogs && (
+            <div className="mt-4 bg-bg-secondary rounded-lg p-3 font-mono text-xs max-h-80 overflow-y-auto">
+              <div className="text-text-muted mb-2">$ tail -f /var/log/flywheel.log</div>
+              {logs.length === 0 ? (
+                <div className="text-text-muted">No logs available</div>
+              ) : (
+                logs.map((log, i) => (
+                  <div key={i} className={`py-0.5 ${
+                    log.level === 'error' ? 'text-error' :
+                    log.level === 'warn' ? 'text-warning' : 'text-text-primary'
+                  }`}>
+                    <span className="text-text-muted">[{new Date(log.timestamp).toLocaleTimeString()}]</span>{' '}
+                    <span className={`font-semibold ${
+                      log.level === 'error' ? 'text-error' :
+                      log.level === 'warn' ? 'text-warning' : 'text-accent-primary'
+                    }`}>{log.level.toUpperCase()}</span>{' '}
+                    {log.message}
+                  </div>
+                ))
+              )}
+            </div>
+          )}
+        </motion.div>
+      </div>
 
       {/* Config Forms */}
       <div className="max-w-3xl mx-auto space-y-6">

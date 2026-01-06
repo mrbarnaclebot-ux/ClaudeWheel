@@ -32,6 +32,64 @@ export function getRecentTransactions(): Transaction[] {
   return recentTransactions
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// LOGGING SYSTEM
+// Capture backend logs for admin panel display
+// ═══════════════════════════════════════════════════════════════════════════
+
+interface LogEntry {
+  timestamp: string
+  level: 'info' | 'warn' | 'error' | 'debug'
+  message: string
+}
+
+const recentLogs: LogEntry[] = []
+const MAX_LOGS = 500
+
+function addLog(level: LogEntry['level'], message: string) {
+  recentLogs.unshift({
+    timestamp: new Date().toISOString(),
+    level,
+    message: message.replace(/\x1b\[[0-9;]*m/g, ''), // Strip ANSI colors
+  })
+  if (recentLogs.length > MAX_LOGS) {
+    recentLogs.pop()
+  }
+}
+
+export function getRecentLogs(limit: number = 50): LogEntry[] {
+  return recentLogs.slice(0, limit)
+}
+
+// Override console methods to capture logs
+const originalConsoleLog = console.log
+const originalConsoleWarn = console.warn
+const originalConsoleError = console.error
+
+console.log = (...args: any[]) => {
+  const message = args.map(arg =>
+    typeof arg === 'object' ? JSON.stringify(arg) : String(arg)
+  ).join(' ')
+  addLog('info', message)
+  originalConsoleLog.apply(console, args)
+}
+
+console.warn = (...args: any[]) => {
+  const message = args.map(arg =>
+    typeof arg === 'object' ? JSON.stringify(arg) : String(arg)
+  ).join(' ')
+  addLog('warn', message)
+  originalConsoleWarn.apply(console, args)
+}
+
+console.error = (...args: any[]) => {
+  const message = args.map(arg =>
+    typeof arg === 'object' ? JSON.stringify(arg) : String(arg)
+  ).join(' ')
+  addLog('error', message)
+  originalConsoleError.apply(console, args)
+}
+
 // Simple market making - basic threshold-based
 async function runSimpleMarketMaking(config: FlywheelConfig) {
   console.log('\n📈 Market Making: SIMPLE Mode')

@@ -191,3 +191,68 @@ export async function updateConfigWithSignature(
     return { success: false, error: 'Network error' }
   }
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SYSTEM STATUS API
+// ═══════════════════════════════════════════════════════════════════════════
+
+export interface SystemCheck {
+  name: string
+  status: 'connected' | 'disconnected' | 'not_configured'
+  message: string
+  latency?: number
+}
+
+export interface SystemStatus {
+  checks: SystemCheck[]
+  environment: {
+    nodeEnv: string
+    port: number
+    solanaRpcUrl: string
+    jupiterApiUrl: string
+    marketMakingEnabled: boolean
+    minFeeThresholdSol: number
+    maxBuyAmountSol: number
+  }
+  uptime: number
+  memory: {
+    heapUsed: number
+    heapTotal: number
+  }
+}
+
+export interface LogEntry {
+  timestamp: string
+  level: 'info' | 'warn' | 'error' | 'debug'
+  message: string
+}
+
+// Fetch comprehensive system status
+export async function fetchSystemStatus(): Promise<SystemStatus | null> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/status/system`)
+    const json: ApiResponse<SystemStatus> = await response.json()
+    if (json.success && json.data) {
+      return json.data
+    }
+    return null
+  } catch (error) {
+    console.error('Failed to fetch system status:', error)
+    return null
+  }
+}
+
+// Fetch backend logs
+export async function fetchLogs(limit: number = 50): Promise<LogEntry[]> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/status/logs?limit=${limit}`)
+    const json: ApiResponse<LogEntry[]> = await response.json()
+    if (json.success && json.data) {
+      return json.data
+    }
+    return []
+  } catch (error) {
+    console.error('Failed to fetch logs:', error)
+    return []
+  }
+}

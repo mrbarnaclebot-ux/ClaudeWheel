@@ -1,5 +1,8 @@
 'use client'
 
+// Force dynamic rendering to prevent SSG issues with Supabase
+export const dynamic = 'force-dynamic'
+
 import { useState, useEffect, useCallback } from 'react'
 import Image from 'next/image'
 import Header from './components/Header'
