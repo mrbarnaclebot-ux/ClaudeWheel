@@ -260,10 +260,11 @@ class BagsFmService {
       }),
     })
 
-    if (!data || !data.transaction) return null
+    // Response has swapTransaction field (not transaction)
+    if (!data || !data.swapTransaction) return null
 
     return {
-      transaction: data.transaction,
+      transaction: data.swapTransaction,
       lastValidBlockHeight: data.lastValidBlockHeight || 0,
     }
   }
