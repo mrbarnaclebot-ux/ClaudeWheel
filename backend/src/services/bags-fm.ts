@@ -65,6 +65,11 @@ export interface TradeQuote {
   fee: number
 }
 
+export interface SwapTransaction {
+  transaction: string // Base64 encoded serialized transaction
+  lastValidBlockHeight: number
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // API CLIENT
 // ═══════════════════════════════════════════════════════════════════════════
@@ -214,6 +219,35 @@ class BagsFmService {
       outputAmount: data.outputAmount || 0,
       priceImpact: data.priceImpact || 0,
       fee: data.fee || 0,
+    }
+  }
+
+  /**
+   * Generate a swap transaction for bonding curve trades
+   */
+  async generateSwapTransaction(
+    walletAddress: string,
+    inputMint: string,
+    outputMint: string,
+    amount: number,
+    side: 'buy' | 'sell'
+  ): Promise<SwapTransaction | null> {
+    const data = await this.fetch<any>('/trade/swap', {
+      method: 'POST',
+      body: JSON.stringify({
+        wallet: walletAddress,
+        inputMint,
+        outputMint,
+        amount,
+        side,
+      }),
+    })
+
+    if (!data || !data.transaction) return null
+
+    return {
+      transaction: data.transaction,
+      lastValidBlockHeight: data.lastValidBlockHeight || 0,
     }
   }
 

@@ -1,11 +1,12 @@
 import { Keypair, PublicKey, VersionedTransaction } from '@solana/web3.js'
 import { connection, getTokenMint, getBalance, getTokenBalance } from '../config/solana'
 import { env } from '../config/env'
+import { bagsFmService } from './bags-fm'
 import type { Transaction as TxRecord, MarketMakingOrder } from '../types'
 
 // ═══════════════════════════════════════════════════════════════════════════
 // MARKET MAKER SERVICE
-// Executes buy/sell orders using Jupiter for optimal routing
+// Executes buy/sell orders using Bags.fm (bonding curve) or Jupiter (graduated)
 // ═══════════════════════════════════════════════════════════════════════════
 
 // SOL mint address
@@ -15,9 +16,47 @@ export class MarketMaker {
   private opsWallet: Keypair | null = null
   private lastOrderTime: Date | null = null
   private isEnabled: boolean = env.marketMakingEnabled
+  private isGraduated: boolean | null = null // Cache graduation status
+  private lastGraduationCheck: Date | null = null
 
   constructor(opsWallet?: Keypair) {
     this.opsWallet = opsWallet || null
+  }
+
+  /**
+   * Check if the token has graduated from the bonding curve
+   * Caches result for 5 minutes to reduce API calls
+   */
+  async checkIsGraduated(): Promise<boolean> {
+    const tokenMint = getTokenMint()
+    if (!tokenMint) return false
+
+    // Use cached value if checked within last 5 minutes
+    const now = new Date()
+    if (
+      this.isGraduated !== null &&
+      this.lastGraduationCheck &&
+      now.getTime() - this.lastGraduationCheck.getTime() < 5 * 60 * 1000
+    ) {
+      return this.isGraduated
+    }
+
+    try {
+      const tokenInfo = await bagsFmService.getTokenCreatorInfo(tokenMint.toString())
+      this.isGraduated = tokenInfo?.isGraduated ?? false
+      this.lastGraduationCheck = now
+
+      if (this.isGraduated) {
+        console.log('✅ Token has graduated - using Jupiter for trades')
+      } else {
+        console.log('📈 Token on bonding curve - using Bags.fm for trades')
+      }
+
+      return this.isGraduated
+    } catch (error) {
+      console.error('Failed to check graduation status:', error)
+      return false
+    }
   }
 
   setOpsWallet(wallet: Keypair) {
@@ -106,6 +145,56 @@ export class MarketMaker {
     }
   }
 
+  /**
+   * Execute a swap via Bags.fm bonding curve
+   */
+  async executeBagsFmSwap(
+    inputMint: string,
+    outputMint: string,
+    amount: number,
+    side: 'buy' | 'sell'
+  ): Promise<string | null> {
+    if (!this.opsWallet) {
+      console.warn('⚠️ Ops wallet not configured')
+      return null
+    }
+
+    try {
+      // Get swap transaction from Bags.fm
+      const swapData = await bagsFmService.generateSwapTransaction(
+        this.opsWallet.publicKey.toString(),
+        inputMint,
+        outputMint,
+        amount,
+        side
+      )
+
+      if (!swapData) {
+        console.error('Failed to get Bags.fm swap transaction')
+        return null
+      }
+
+      // Deserialize and sign transaction
+      const transactionBuf = Buffer.from(swapData.transaction, 'base64')
+      const transaction = VersionedTransaction.deserialize(transactionBuf)
+      transaction.sign([this.opsWallet])
+
+      // Send transaction
+      const signature = await connection.sendTransaction(transaction, {
+        maxRetries: 3,
+      })
+
+      // Wait for confirmation
+      await connection.confirmTransaction(signature, 'confirmed')
+
+      console.log(`✅ Bags.fm swap executed! Signature: ${signature}`)
+      return signature
+    } catch (error) {
+      console.error('❌ Bags.fm swap execution failed:', error)
+      return null
+    }
+  }
+
   async executeBuy(solAmount: number): Promise<TxRecord | null> {
     if (!this.isEnabled) {
       console.log('ℹ️ Market making is disabled')
@@ -137,20 +226,50 @@ export class MarketMaker {
     }
 
     try {
-      // Get quote
-      const quote = await this.getJupiterQuote(
-        SOL_MINT,
-        tokenMint.toString(),
-        lamports
-      )
+      // Check if token has graduated from bonding curve
+      const isGraduated = await this.checkIsGraduated()
 
-      if (!quote) {
-        console.error('Failed to get buy quote')
-        return null
+      let signature: string | null = null
+      let outputAmount: number = 0
+
+      if (isGraduated) {
+        // Use Jupiter for graduated tokens
+        const quote = await this.getJupiterQuote(
+          SOL_MINT,
+          tokenMint.toString(),
+          lamports
+        )
+
+        if (!quote) {
+          console.error('Failed to get Jupiter buy quote')
+          return null
+        }
+
+        signature = await this.executeSwap(quote)
+        outputAmount = quote.outAmount / Math.pow(10, env.tokenDecimals)
+      } else {
+        // Use Bags.fm for bonding curve tokens
+        const quote = await bagsFmService.getTradeQuote(
+          SOL_MINT,
+          tokenMint.toString(),
+          lamports,
+          'buy'
+        )
+
+        if (!quote) {
+          console.error('Failed to get Bags.fm buy quote')
+          return null
+        }
+
+        signature = await this.executeBagsFmSwap(
+          SOL_MINT,
+          tokenMint.toString(),
+          lamports,
+          'buy'
+        )
+        outputAmount = quote.outputAmount / Math.pow(10, env.tokenDecimals)
       }
 
-      // Execute swap
-      const signature = await this.executeSwap(quote)
       if (!signature) {
         return null
       }
@@ -160,7 +279,7 @@ export class MarketMaker {
       const txRecord: TxRecord = {
         id: signature,
         type: 'buy',
-        amount: quote.outAmount / Math.pow(10, env.tokenDecimals),
+        amount: outputAmount,
         token: 'CLAUDE',
         signature,
         status: 'confirmed',
@@ -205,20 +324,47 @@ export class MarketMaker {
     console.log(`🔴 Executing SELL: ${cappedAmount.toFixed(0)} CLAUDE → SOL`)
 
     try {
-      // Get quote
-      const quote = await this.getJupiterQuote(
-        tokenMint.toString(),
-        SOL_MINT,
-        tokenUnits
-      )
+      // Check if token has graduated from bonding curve
+      const isGraduated = await this.checkIsGraduated()
 
-      if (!quote) {
-        console.error('Failed to get sell quote')
-        return null
+      let signature: string | null = null
+
+      if (isGraduated) {
+        // Use Jupiter for graduated tokens
+        const quote = await this.getJupiterQuote(
+          tokenMint.toString(),
+          SOL_MINT,
+          tokenUnits
+        )
+
+        if (!quote) {
+          console.error('Failed to get Jupiter sell quote')
+          return null
+        }
+
+        signature = await this.executeSwap(quote)
+      } else {
+        // Use Bags.fm for bonding curve tokens
+        const quote = await bagsFmService.getTradeQuote(
+          tokenMint.toString(),
+          SOL_MINT,
+          tokenUnits,
+          'sell'
+        )
+
+        if (!quote) {
+          console.error('Failed to get Bags.fm sell quote')
+          return null
+        }
+
+        signature = await this.executeBagsFmSwap(
+          tokenMint.toString(),
+          SOL_MINT,
+          tokenUnits,
+          'sell'
+        )
       }
 
-      // Execute swap
-      const signature = await this.executeSwap(quote)
       if (!signature) {
         return null
       }
@@ -246,6 +392,8 @@ export class MarketMaker {
     return {
       isEnabled: this.isEnabled,
       lastOrderTime: this.lastOrderTime,
+      isGraduated: this.isGraduated,
+      tradingVia: this.isGraduated ? 'Jupiter' : 'Bags.fm (bonding curve)',
     }
   }
 }
