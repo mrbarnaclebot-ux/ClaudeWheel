@@ -3,10 +3,11 @@
 // Handles automated fee claiming for all users with auto-claim enabled
 // ═══════════════════════════════════════════════════════════════════════════
 
-import { Connection, Transaction, VersionedTransaction, sendAndConfirmTransaction, Keypair } from '@solana/web3.js'
+import { Connection, Transaction, VersionedTransaction, sendAndConfirmTransaction, Keypair, PublicKey, SystemProgram } from '@solana/web3.js'
 import bs58 from 'bs58'
 import { supabase } from '../config/database'
-import { getConnection } from '../config/solana'
+import { getConnection, getOpsWallet } from '../config/solana'
+import { env } from '../config/env'
 import { bagsFmService, ClaimablePosition } from './bags-fm'
 import {
   UserToken,
@@ -198,18 +199,22 @@ class MultiUserClaimService {
         return { ...baseResult, success: false, amountClaimedSol: 0, error: 'Transaction failed' }
       }
 
-      // Record the claim
-      await this.recordClaim(token.id, position.claimableAmount, lastSignature)
-
-      // Transfer to ops wallet if configured
+      // Transfer to ops wallet if configured (with platform fee split)
+      let platformFeeSol = 0
+      let userReceivedSol = position.claimableAmount
       if (token.ops_wallet_address) {
-        await this.transferToOpsWallet(
+        const transferResult = await this.transferToOpsWallet(
           connection,
           devWallet,
           token.ops_wallet_address,
           position.claimableAmount
         )
+        platformFeeSol = transferResult.platformFeeSol
+        userReceivedSol = transferResult.userAmountSol
       }
+
+      // Record the claim with platform fee tracking
+      await this.recordClaim(token.id, position.claimableAmount, lastSignature, platformFeeSol, userReceivedSol)
 
       return {
         ...baseResult,
@@ -287,48 +292,79 @@ class MultiUserClaimService {
   }
 
   /**
-   * Transfer claimed SOL to ops wallet
+   * Transfer claimed SOL to ops wallet with platform fee split
+   * Takes 10% for WHEEL platform, 90% goes to user's ops wallet
    */
   private async transferToOpsWallet(
     connection: Connection,
     fromWallet: Keypair,
     toAddress: string,
-    amountSol: number
-  ): Promise<boolean> {
+    amountSol: number,
+    tokenSymbol?: string
+  ): Promise<{ success: boolean; platformFeeSol: number; userAmountSol: number }> {
     try {
-      const { PublicKey, SystemProgram, Transaction } = await import('@solana/web3.js')
-
       // Keep some SOL for rent and future transactions
       const reserveSol = 0.01
       const transferAmount = Math.max(0, amountSol - reserveSol)
 
       if (transferAmount <= 0) {
         console.log(`   ℹ️ Amount too small to transfer (${amountSol} SOL)`)
-        return true
+        return { success: true, platformFeeSol: 0, userAmountSol: 0 }
       }
 
-      const transaction = new Transaction().add(
-        SystemProgram.transfer({
-          fromPubkey: fromWallet.publicKey,
-          toPubkey: new PublicKey(toAddress),
-          lamports: Math.floor(transferAmount * 1e9),
-        })
-      )
+      // Calculate platform fee (default 10%)
+      const platformFeePercent = env.platformFeePercentage || 10
+      const platformFeeSol = transferAmount * (platformFeePercent / 100)
+      const userAmountSol = transferAmount - platformFeeSol
 
-      const signature = await sendAndConfirmTransaction(connection, transaction, [fromWallet])
-      console.log(`   → Transferred ${transferAmount.toFixed(4)} SOL to ops wallet: ${signature.slice(0, 8)}...`)
+      // Get platform ops wallet (WHEEL)
+      const platformOpsWallet = getOpsWallet()
 
-      return true
+      // Transfer 1: Platform fee to WHEEL ops wallet (10%)
+      if (platformOpsWallet && platformFeeSol > 0.001) {
+        const platformTx = new Transaction().add(
+          SystemProgram.transfer({
+            fromPubkey: fromWallet.publicKey,
+            toPubkey: platformOpsWallet.publicKey,
+            lamports: Math.floor(platformFeeSol * 1e9),
+          })
+        )
+        const platformSig = await sendAndConfirmTransaction(connection, platformTx, [fromWallet])
+        console.log(`   💰 Platform fee (${platformFeePercent}%): ${platformFeeSol.toFixed(4)} SOL → WHEEL ops wallet: ${platformSig.slice(0, 8)}...`)
+      } else if (!platformOpsWallet) {
+        console.log(`   ⚠️ Platform ops wallet not configured, skipping platform fee`)
+      }
+
+      // Transfer 2: Remaining to user's ops wallet (90%)
+      if (userAmountSol > 0.001) {
+        const userTx = new Transaction().add(
+          SystemProgram.transfer({
+            fromPubkey: fromWallet.publicKey,
+            toPubkey: new PublicKey(toAddress),
+            lamports: Math.floor(userAmountSol * 1e9),
+          })
+        )
+        const userSig = await sendAndConfirmTransaction(connection, userTx, [fromWallet])
+        console.log(`   → User portion (${100 - platformFeePercent}%): ${userAmountSol.toFixed(4)} SOL → user ops wallet: ${userSig.slice(0, 8)}...`)
+      }
+
+      return { success: true, platformFeeSol, userAmountSol }
     } catch (error: any) {
       console.error(`   ⚠️ Transfer to ops wallet failed: ${error.message}`)
-      return false
+      return { success: false, platformFeeSol: 0, userAmountSol: 0 }
     }
   }
 
   /**
    * Record a successful claim in the database
    */
-  private async recordClaim(userTokenId: string, amountSol: number, signature: string): Promise<void> {
+  private async recordClaim(
+    userTokenId: string,
+    amountSol: number,
+    signature: string,
+    platformFeeSol: number = 0,
+    userReceivedSol: number = 0
+  ): Promise<void> {
     if (!supabase) return
 
     try {
@@ -337,6 +373,8 @@ class MultiUserClaimService {
         user_token_id: userTokenId,
         amount_sol: amountSol,
         amount_usd: 0, // Would need price lookup
+        platform_fee_sol: platformFeeSol,
+        user_received_sol: userReceivedSol,
         transaction_signature: signature,
         claimed_at: new Date().toISOString(),
       }])

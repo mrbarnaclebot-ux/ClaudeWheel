@@ -6,7 +6,8 @@
 import { Keypair, PublicKey, VersionedTransaction, Connection, Transaction, SystemProgram, sendAndConfirmTransaction, LAMPORTS_PER_SOL } from '@solana/web3.js'
 import bs58 from 'bs58'
 import { supabase } from '../config/database'
-import { getConnection, getBalance, getTokenBalance } from '../config/solana'
+import { getConnection, getBalance, getTokenBalance, getOpsWallet } from '../config/solana'
+import { env } from '../config/env'
 import { bagsFmService } from './bags-fm'
 import {
   UserToken,
@@ -152,19 +153,19 @@ class MultiUserMMService {
   }
 
   /**
-   * Collect fees from dev wallet and transfer to ops wallet
-   * This ensures the ops wallet has SOL for trading
+   * Collect fees from dev wallet and transfer to ops wallet with platform fee split
+   * Takes 10% for WHEEL platform, 90% goes to user's ops wallet
    */
   private async collectFees(
     token: UserToken,
     connection: Connection
-  ): Promise<{ collected: boolean; amount: number; signature?: string }> {
+  ): Promise<{ collected: boolean; amount: number; platformFeeSol: number; userAmountSol: number; signature?: string }> {
     try {
       // Get dev wallet (source of fees)
       const devWallet = await getDecryptedDevWallet(token.id)
       if (!devWallet) {
         console.log(`   ⚠️ ${token.token_symbol}: Could not decrypt dev wallet for fee collection`)
-        return { collected: false, amount: 0 }
+        return { collected: false, amount: 0, platformFeeSol: 0, userAmountSol: 0 }
       }
 
       // Get dev wallet SOL balance
@@ -176,40 +177,72 @@ class MultiUserMMService {
 
       if (transferAmount < MIN_FEE_THRESHOLD_SOL) {
         console.log(`   ℹ️ ${token.token_symbol}: Dev wallet balance too low for fee collection (need ${(MIN_FEE_THRESHOLD_SOL + DEV_WALLET_MIN_RESERVE_SOL).toFixed(4)} SOL)`)
-        return { collected: false, amount: 0 }
+        return { collected: false, amount: 0, platformFeeSol: 0, userAmountSol: 0 }
       }
 
-      // Get ops wallet address
-      const opsWalletAddress = new PublicKey(token.ops_wallet_address)
+      // Calculate platform fee (default 10%)
+      const platformFeePercent = env.platformFeePercentage || 10
+      const platformFeeSol = transferAmount * (platformFeePercent / 100)
+      const userAmountSol = transferAmount - platformFeeSol
 
-      console.log(`   💸 ${token.token_symbol}: Collecting ${transferAmount.toFixed(4)} SOL from dev → ops wallet`)
+      console.log(`   💸 ${token.token_symbol}: Collecting ${transferAmount.toFixed(4)} SOL (${platformFeePercent}% platform fee)`)
 
-      // Create transfer transaction
-      const transaction = new Transaction().add(
-        SystemProgram.transfer({
-          fromPubkey: devWallet.publicKey,
-          toPubkey: opsWalletAddress,
-          lamports: Math.floor(transferAmount * LAMPORTS_PER_SOL),
-        })
-      )
+      // Get platform ops wallet (WHEEL)
+      const platformOpsWallet = getOpsWallet()
+      let platformSig: string | undefined
 
-      // Send transaction
-      const signature = await sendAndConfirmTransaction(
-        connection,
-        transaction,
-        [devWallet],
-        { commitment: 'confirmed' }
-      )
+      // Transfer 1: Platform fee to WHEEL ops wallet (10%)
+      if (platformOpsWallet && platformFeeSol > 0.001) {
+        const platformTx = new Transaction().add(
+          SystemProgram.transfer({
+            fromPubkey: devWallet.publicKey,
+            toPubkey: platformOpsWallet.publicKey,
+            lamports: Math.floor(platformFeeSol * LAMPORTS_PER_SOL),
+          })
+        )
+        platformSig = await sendAndConfirmTransaction(
+          connection,
+          platformTx,
+          [devWallet],
+          { commitment: 'confirmed' }
+        )
+        console.log(`   💰 ${token.token_symbol}: Platform fee (${platformFeePercent}%): ${platformFeeSol.toFixed(4)} SOL → WHEEL ops wallet: ${platformSig.slice(0, 8)}...`)
+      } else if (!platformOpsWallet) {
+        console.log(`   ⚠️ ${token.token_symbol}: Platform ops wallet not configured, skipping platform fee`)
+      }
 
-      console.log(`   ✅ ${token.token_symbol}: Fee collection successful! ${signature.slice(0, 8)}...`)
+      // Transfer 2: Remaining to user's ops wallet (90%)
+      let userSig: string | undefined
+      if (userAmountSol > 0.001) {
+        const userOpsWalletAddress = new PublicKey(token.ops_wallet_address)
+        const userTx = new Transaction().add(
+          SystemProgram.transfer({
+            fromPubkey: devWallet.publicKey,
+            toPubkey: userOpsWalletAddress,
+            lamports: Math.floor(userAmountSol * LAMPORTS_PER_SOL),
+          })
+        )
+        userSig = await sendAndConfirmTransaction(
+          connection,
+          userTx,
+          [devWallet],
+          { commitment: 'confirmed' }
+        )
+        console.log(`   → ${token.token_symbol}: User portion (${100 - platformFeePercent}%): ${userAmountSol.toFixed(4)} SOL → user ops wallet: ${userSig.slice(0, 8)}...`)
+      }
 
-      // Record the transfer
-      await this.recordTransaction(token.id, 'transfer', transferAmount, signature)
+      const signature = userSig || platformSig || ''
+      console.log(`   ✅ ${token.token_symbol}: Fee collection successful!`)
 
-      return { collected: true, amount: transferAmount, signature }
+      // Record the transfer (user portion)
+      if (userSig) {
+        await this.recordTransaction(token.id, 'transfer', userAmountSol, userSig)
+      }
+
+      return { collected: true, amount: transferAmount, platformFeeSol, userAmountSol, signature }
     } catch (error: any) {
       console.error(`   ❌ ${token.token_symbol}: Fee collection failed: ${error.message}`)
-      return { collected: false, amount: 0 }
+      return { collected: false, amount: 0, platformFeeSol: 0, userAmountSol: 0 }
     }
   }
 

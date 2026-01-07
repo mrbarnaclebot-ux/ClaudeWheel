@@ -244,6 +244,8 @@ CREATE TABLE IF NOT EXISTS user_claim_history (
   user_token_id UUID NOT NULL REFERENCES user_tokens(id) ON DELETE CASCADE,
   amount_sol DECIMAL NOT NULL,
   amount_usd DECIMAL DEFAULT 0,
+  platform_fee_sol DECIMAL DEFAULT 0, -- Platform fee taken (10%)
+  user_received_sol DECIMAL DEFAULT 0, -- Amount user actually received (90%)
   transaction_signature TEXT,
   claimed_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -346,3 +348,7 @@ ALTER TABLE user_transactions ADD COLUMN IF NOT EXISTS message TEXT;
 -- Add flywheel tracking columns
 ALTER TABLE user_flywheel_state ADD COLUMN IF NOT EXISTS last_checked_at TIMESTAMPTZ;
 ALTER TABLE user_flywheel_state ADD COLUMN IF NOT EXISTS last_check_result TEXT;
+
+-- Add platform fee tracking columns to user_claim_history
+ALTER TABLE user_claim_history ADD COLUMN IF NOT EXISTS platform_fee_sol DECIMAL DEFAULT 0;
+ALTER TABLE user_claim_history ADD COLUMN IF NOT EXISTS user_received_sol DECIMAL DEFAULT 0;
