@@ -28,6 +28,14 @@ export function ActivityTerminal({
   const [error, setError] = useState<string | null>(null)
   const [devWallet, setDevWallet] = useState<string>('')
   const [opsWallet, setOpsWallet] = useState<string>('')
+  const [flywheelState, setFlywheelState] = useState<{
+    cyclePhase: 'buy' | 'sell'
+    buyCount: number
+    sellCount: number
+    lastTradeAt: string | null
+    lastCheckedAt: string | null
+    lastCheckResult: string | null
+  } | null>(null)
   const terminalRef = useRef<HTMLDivElement>(null)
 
   const fetchActivity = useCallback(async () => {
@@ -37,6 +45,7 @@ export function ActivityTerminal({
         setActivities(data.activities)
         setDevWallet(data.devWallet)
         setOpsWallet(data.opsWallet)
+        setFlywheelState(data.flywheelState || null)
         setError(null)
       }
     } catch (err: any) {
@@ -159,14 +168,51 @@ export function ActivityTerminal({
           </div>
         )}
 
+        {/* Flywheel Status - Always show when available */}
+        {flywheelState && (
+          <div className="text-gray-400 mb-4">
+            <div className="flex items-center gap-2">
+              <span className="text-cyan-400">[STATUS]</span>
+              <span>Phase: <span className="text-white capitalize">{flywheelState.cyclePhase}</span></span>
+              <span className="text-gray-600">|</span>
+              <span>Buys: <span className="text-green-400">{flywheelState.buyCount}/5</span></span>
+              <span className="text-gray-600">|</span>
+              <span>Sells: <span className="text-red-400">{flywheelState.sellCount}/5</span></span>
+            </div>
+            {flywheelState.lastCheckedAt && (
+              <div className="text-xs text-gray-500 mt-1">
+                Last checked: {formatTime(flywheelState.lastCheckedAt)}
+                {flywheelState.lastCheckResult && (
+                  <span className={`ml-2 ${
+                    flywheelState.lastCheckResult === 'traded' ? 'text-green-400' :
+                    flywheelState.lastCheckResult === 'insufficient_sol' ? 'text-yellow-400' :
+                    flywheelState.lastCheckResult === 'balanced' ? 'text-cyan-400' :
+                    'text-gray-400'
+                  }`}>
+                    ({flywheelState.lastCheckResult.replace(/_/g, ' ')})
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* No Activity State */}
         {!isLoading && activities.length === 0 && !error && (
           <div className="text-gray-500">
-            <div>[INFO] No activity recorded yet.</div>
-            <div className="mt-2">Waiting for flywheel to start...</div>
-            <div className="mt-1 text-gray-600">
-              Enable the flywheel and fund your ops wallet to begin.
-            </div>
+            <div>[INFO] No transactions recorded yet.</div>
+            {!flywheelState?.lastCheckedAt ? (
+              <>
+                <div className="mt-2">Waiting for flywheel to start...</div>
+                <div className="mt-1 text-gray-600">
+                  Enable the flywheel and fund your ops wallet to begin.
+                </div>
+              </>
+            ) : (
+              <div className="mt-2 text-gray-600">
+                Flywheel is running. Transactions will appear here when executed.
+              </div>
+            )}
           </div>
         )}
 

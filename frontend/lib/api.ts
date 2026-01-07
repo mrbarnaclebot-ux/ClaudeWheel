@@ -790,6 +790,14 @@ export interface ActivityLogsResponse {
   tokenSymbol: string
   devWallet: string
   opsWallet: string
+  flywheelState?: {
+    cyclePhase: 'buy' | 'sell'
+    buyCount: number
+    sellCount: number
+    lastTradeAt: string | null
+    lastCheckedAt: string | null
+    lastCheckResult: string | null
+  } | null
 }
 
 // Get activity logs for a token (claims + transactions)

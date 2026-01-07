@@ -754,6 +754,13 @@ router.get('/tokens/:tokenId/activity', verifyWalletOwnership, async (req: Reque
       .order('created_at', { ascending: false })
       .limit(limit)
 
+    // Fetch flywheel state for status info
+    const { data: flywheelState } = await supabase
+      .from('user_flywheel_state')
+      .select('cycle_phase, buy_count, sell_count, last_trade_at, last_checked_at, last_check_result')
+      .eq('user_token_id', tokenId)
+      .single()
+
     // Combine and format as activity logs
     const activities: Array<{
       id: string
@@ -822,6 +829,14 @@ router.get('/tokens/:tokenId/activity', verifyWalletOwnership, async (req: Reque
         tokenSymbol: token.token_symbol,
         devWallet: token.dev_wallet_address,
         opsWallet: token.ops_wallet_address,
+        flywheelState: flywheelState ? {
+          cyclePhase: flywheelState.cycle_phase,
+          buyCount: flywheelState.buy_count,
+          sellCount: flywheelState.sell_count,
+          lastTradeAt: flywheelState.last_trade_at,
+          lastCheckedAt: flywheelState.last_checked_at,
+          lastCheckResult: flywheelState.last_check_result,
+        } : null,
       },
     })
   } catch (error) {

@@ -625,10 +625,13 @@ class MultiUserMMService {
     userTokenId: string,
     message: string
   ): Promise<void> {
-    if (!supabase) return
+    if (!supabase) {
+      console.log(`   ⚠️ Cannot log info message: supabase not configured`)
+      return
+    }
 
     try {
-      await supabase.from('user_transactions').insert([{
+      const { error } = await supabase.from('user_transactions').insert([{
         user_token_id: userTokenId,
         type: 'info',
         amount: 0,
@@ -636,8 +639,13 @@ class MultiUserMMService {
         status: 'confirmed',
         created_at: new Date().toISOString(),
       }])
+
+      if (error) {
+        console.log(`   ⚠️ Failed to log info message: ${error.message}`)
+        console.log(`   💡 Run the SQL migration to add 'info' type to user_transactions`)
+      }
     } catch (error: any) {
-      // Silently fail - info logs are not critical
+      console.log(`   ⚠️ Failed to log info message: ${error.message}`)
     }
   }
 
