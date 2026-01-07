@@ -33,16 +33,17 @@ export const WalletProvider: FC<Props> = ({ children }) => {
     []
   )
 
-  // Render children without wallet context on server to avoid hydration mismatch
-  if (!mounted) {
-    return <>{children}</>
-  }
-
+  // Always render the wallet context to prevent "WalletContext not found" errors
+  // Only auto-connect and render real children when mounted on client
   return (
     <ConnectionProvider endpoint={endpoint}>
-      <SolanaWalletProvider wallets={wallets} autoConnect>
+      <SolanaWalletProvider wallets={wallets} autoConnect={mounted}>
         <WalletModalProvider>
-          {children}
+          {mounted ? children : (
+            <div className="min-h-screen bg-gray-950 flex items-center justify-center">
+              <div className="w-8 h-8 border-2 border-cyan-500 border-t-transparent rounded-full animate-spin" />
+            </div>
+          )}
         </WalletModalProvider>
       </SolanaWalletProvider>
     </ConnectionProvider>
