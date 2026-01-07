@@ -103,9 +103,52 @@ function TokenManagementContent() {
     }
   }
 
-  // Toggle flywheel
-  const toggleFlywheel = () => {
-    setConfig(prev => ({ ...prev, flywheel_active: !prev.flywheel_active }))
+  // Toggle flywheel - auto-saves for immediate effect
+  const toggleFlywheel = async () => {
+    if (!publicKey || !signMessage || !token) return
+
+    const newState = !config.flywheel_active
+    setConfig(prev => ({ ...prev, flywheel_active: newState }))
+
+    // Auto-save the flywheel toggle for immediate effect
+    setIsSaving(true)
+    setError(null)
+    setSuccess(null)
+
+    try {
+      const configUpdate = { flywheel_active: newState }
+
+      // Get nonce with config hash
+      const nonceData = await getConfigNonce(tokenId, configUpdate)
+      if (!nonceData) {
+        throw new Error('Failed to get config nonce')
+      }
+
+      // Sign the message
+      const messageBytes = new TextEncoder().encode(nonceData.message)
+      const signatureBytes = await signMessage(messageBytes)
+      const signature = bs58.encode(signatureBytes)
+
+      // Update config
+      await updateUserTokenConfig(
+        publicKey.toString(),
+        signature,
+        nonceData.message,
+        tokenId,
+        configUpdate
+      )
+
+      setSuccess(`Flywheel ${newState ? 'started' : 'paused'} successfully!`)
+      await loadToken()
+      await refreshTokens()
+    } catch (err: any) {
+      // Revert the toggle on error
+      setConfig(prev => ({ ...prev, flywheel_active: !newState }))
+      console.error('Failed to toggle flywheel:', err)
+      setError(err.message || 'Failed to toggle flywheel')
+    } finally {
+      setIsSaving(false)
+    }
   }
 
   if (isLoading) {

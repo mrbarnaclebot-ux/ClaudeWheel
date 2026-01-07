@@ -25,6 +25,9 @@ export function startMultiUserFlywheelJob(): void {
   console.log(`   Interval: every ${intervalMinutes} minute(s)`)
   console.log(`   Max trades per minute: ${maxTradesPerMinute}`)
 
+  // Run immediately on start (like single-token flywheel does)
+  runFlywheelCycle(maxTradesPerMinute)
+
   // Schedule recurring runs
   flywheelJobInterval = setInterval(
     () => runFlywheelCycle(maxTradesPerMinute),
