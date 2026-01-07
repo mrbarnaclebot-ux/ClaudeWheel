@@ -772,7 +772,12 @@ router.get('/tokens/:tokenId/activity', verifyWalletOwnership, async (req: Reque
     }> = []
 
     // Log for debugging
-    console.log(`📋 Fetching activity for token ${tokenId}: ${claims?.length || 0} claims, ${transactions?.length || 0} transactions`)
+    console.log(`📋 Activity for token ${tokenId}:`)
+    console.log(`   Claims: ${claims?.length || 0}, Transactions: ${transactions?.length || 0}`)
+    if (transactions && transactions.length > 0) {
+      console.log(`   Latest TX: type=${transactions[0].type}, amount=${transactions[0].amount}, sig=${transactions[0].signature?.slice(0, 8)}...`)
+    }
+    console.log(`   Flywheel: ${flywheelState ? `phase=${flywheelState.cycle_phase}, lastCheck=${flywheelState.last_check_result}` : 'no state'}`)
 
     // Add claims
     if (claims) {

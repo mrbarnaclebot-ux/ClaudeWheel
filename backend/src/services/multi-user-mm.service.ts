@@ -598,20 +598,26 @@ class MultiUserMMService {
       return
     }
 
+    console.log(`   📝 Recording ${type} transaction for token ${userTokenId.slice(0, 8)}...`)
+
     try {
-      const { data, error } = await supabase.from('user_transactions').insert([{
+      const insertData = {
         user_token_id: userTokenId,
         type,
         amount,
         signature,
         status: 'confirmed',
         created_at: new Date().toISOString(),
-      }]).select()
+      }
+      console.log(`   📝 Insert data:`, JSON.stringify(insertData))
+
+      const { data, error } = await supabase.from('user_transactions').insert([insertData]).select()
 
       if (error) {
         console.error(`   ❌ Failed to record ${type} transaction:`, error.message)
+        console.error(`   ❌ Error details:`, JSON.stringify(error))
       } else {
-        console.log(`   📝 Recorded ${type} transaction: ${signature.slice(0, 8)}...`)
+        console.log(`   ✅ Recorded ${type} transaction: ${signature.slice(0, 8)}... (id: ${data?.[0]?.id || 'unknown'})`)
       }
     } catch (error: any) {
       console.error('   ❌ Failed to record transaction:', error.message)
