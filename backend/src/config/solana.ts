@@ -11,6 +11,14 @@ export const connection = new Connection(env.solanaRpcUrl, {
   wsEndpoint: env.solanaWsUrl,
 })
 
+/**
+ * Get the Solana connection instance
+ * (Helper for services that prefer a function call)
+ */
+export function getConnection(): Connection {
+  return connection
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // WALLET INITIALIZATION
 // ═══════════════════════════════════════════════════════════════════════════

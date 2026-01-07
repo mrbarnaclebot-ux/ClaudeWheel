@@ -4,7 +4,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { multiUserClaimService } from '../services/multi-user-claim.service'
-import { env } from '../config/environment'
 
 let claimJobInterval: NodeJS.Timeout | null = null
 
