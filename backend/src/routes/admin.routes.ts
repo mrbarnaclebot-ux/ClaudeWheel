@@ -295,8 +295,8 @@ router.post('/manual-sell', async (req: Request, res: Response) => {
       marketMaker.enable()
     }
 
-    // Step 8: Execute the sell
-    const result = await marketMaker.executeSell(tokenAmount)
+    // Step 8: Execute the sell (bypass cap for manual sells - user explicitly requested this amount)
+    const result = await marketMaker.executeSell(tokenAmount, { bypassCap: true })
 
     // Restore previous state
     if (!wasEnabled) {
