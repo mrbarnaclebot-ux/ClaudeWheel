@@ -691,12 +691,16 @@ export async function deleteUserToken(
   tokenId: string
 ): Promise<boolean> {
   try {
+    // Encode message as base64 to avoid newline issues in HTTP headers
+    const encodedMessage = btoa(unescape(encodeURIComponent(message)))
+
     const response = await fetch(`${API_BASE_URL}/api/user/tokens/${tokenId}`, {
       method: 'DELETE',
       headers: {
         'x-wallet-address': walletAddress,
         'x-wallet-signature': signature,
-        'x-wallet-message': message,
+        'x-wallet-message': encodedMessage,
+        'x-message-encoding': 'base64',
       },
     })
 
@@ -739,13 +743,17 @@ export async function updateUserTokenConfig(
   config: Partial<UserTokenConfig>
 ): Promise<UserTokenConfig | null> {
   try {
+    // Encode message as base64 to avoid newline issues in HTTP headers
+    const encodedMessage = btoa(unescape(encodeURIComponent(message)))
+
     const response = await fetch(`${API_BASE_URL}/api/user/tokens/${tokenId}/config`, {
       method: 'PUT',
       headers: {
         'Content-Type': 'application/json',
         'x-wallet-address': walletAddress,
         'x-wallet-signature': signature,
-        'x-wallet-message': message,
+        'x-wallet-message': encodedMessage,
+        'x-message-encoding': 'base64',
       },
       body: JSON.stringify({ config }),
     })
@@ -827,11 +835,15 @@ function createAdminHeaders(
   signature: string,
   message: string
 ): HeadersInit {
+  // Encode message as base64 to avoid newline issues in HTTP headers
+  const encodedMessage = btoa(unescape(encodeURIComponent(message)))
+
   return {
     'Content-Type': 'application/json',
     'x-wallet-pubkey': publicKey,
     'x-wallet-signature': signature,
-    'x-wallet-message': message,
+    'x-wallet-message': encodedMessage,
+    'x-message-encoding': 'base64',
   }
 }
 

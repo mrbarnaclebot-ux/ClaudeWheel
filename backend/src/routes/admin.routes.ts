@@ -353,11 +353,21 @@ router.post('/manual-sell/nonce', (req: Request, res: Response) => {
 async function verifyAdminAuth(req: Request, res: Response, next: Function) {
   try {
     const signature = req.headers['x-wallet-signature'] as string
-    const message = req.headers['x-wallet-message'] as string
+    let message = req.headers['x-wallet-message'] as string
     const publicKey = req.headers['x-wallet-pubkey'] as string
+    const messageEncoding = req.headers['x-message-encoding'] as string
 
     if (!signature || !message || !publicKey) {
       return res.status(401).json({ error: 'Missing authentication headers' })
+    }
+
+    // Decode base64 message if encoding header is present
+    if (message && messageEncoding === 'base64') {
+      try {
+        message = decodeURIComponent(escape(Buffer.from(message, 'base64').toString('utf8')))
+      } catch (e) {
+        return res.status(400).json({ error: 'Invalid base64 message encoding' })
+      }
     }
 
     // Verify the public key matches the authorized dev wallet

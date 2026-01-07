@@ -100,6 +100,7 @@ async function verifyWalletOwnership(req: Request, res: Response, next: Function
 
   req.body.userId = user.id
   req.body.walletAddress = walletAddress
+  req.body.decodedMessage = message  // Store decoded message for route handlers
   next()
 }
 
@@ -400,8 +401,8 @@ This signature authorizes the configuration update.`
 router.put('/tokens/:tokenId/config', verifyWalletOwnership, async (req: Request, res: Response) => {
   try {
     const { tokenId } = req.params
-    const { userId, config } = req.body
-    const message = req.headers['x-wallet-message'] as string
+    const { userId, config, decodedMessage } = req.body
+    const message = decodedMessage  // Use decoded message from middleware
 
     const token = await getUserToken(tokenId)
 
@@ -761,8 +762,8 @@ This signature authorizes a manual token sell.`
 router.post('/tokens/:tokenId/sell', verifyWalletOwnership, async (req: Request, res: Response) => {
   try {
     const { tokenId } = req.params
-    const { userId, percentage } = req.body
-    const message = req.headers['x-wallet-message'] as string
+    const { userId, percentage, decodedMessage } = req.body
+    const message = decodedMessage  // Use decoded message from middleware
 
     // Check if encryption is configured
     if (!isEncryptionConfigured()) {
