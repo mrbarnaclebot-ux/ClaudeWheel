@@ -246,11 +246,11 @@ CREATE TABLE IF NOT EXISTS user_claim_history (
   claimed_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- User transactions (buy/sell trades)
+-- User transactions (buy/sell/transfer trades)
 CREATE TABLE IF NOT EXISTS user_transactions (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_token_id UUID NOT NULL REFERENCES user_tokens(id) ON DELETE CASCADE,
-  type TEXT NOT NULL CHECK (type IN ('buy', 'sell')),
+  type TEXT NOT NULL CHECK (type IN ('buy', 'sell', 'transfer')),
   amount DECIMAL NOT NULL,
   signature TEXT,
   status TEXT DEFAULT 'confirmed' CHECK (status IN ('pending', 'confirmed', 'failed')),

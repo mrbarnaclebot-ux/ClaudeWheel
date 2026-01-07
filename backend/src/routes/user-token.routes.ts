@@ -764,6 +764,9 @@ router.get('/tokens/:tokenId/activity', verifyWalletOwnership, async (req: Reque
       timestamp: string
     }> = []
 
+    // Log for debugging
+    console.log(`📋 Fetching activity for token ${tokenId}: ${claims?.length || 0} claims, ${transactions?.length || 0} transactions`)
+
     // Add claims
     if (claims) {
       for (const claim of claims) {
@@ -781,13 +784,21 @@ router.get('/tokens/:tokenId/activity', verifyWalletOwnership, async (req: Reque
     // Add transactions
     if (transactions) {
       for (const tx of transactions) {
-        const isBuy = tx.type === 'buy'
+        let message: string
+        if (tx.type === 'buy') {
+          message = `BUY: Spent ${tx.amount.toFixed(4)} SOL on ${token.token_symbol}`
+        } else if (tx.type === 'sell') {
+          message = `SELL: Sold ${tx.amount.toFixed(0)} ${token.token_symbol} tokens`
+        } else if (tx.type === 'transfer') {
+          message = `TRANSFER: Moved ${tx.amount.toFixed(4)} SOL from dev → ops wallet`
+        } else {
+          message = `${tx.type.toUpperCase()}: ${tx.amount.toFixed(4)}`
+        }
+
         activities.push({
           id: tx.id,
-          type: tx.type as 'buy' | 'sell',
-          message: isBuy
-            ? `BUY: Spent ${tx.amount.toFixed(4)} SOL on ${token.token_symbol}`
-            : `SELL: Sold ${tx.amount.toFixed(0)} ${token.token_symbol} tokens`,
+          type: tx.type as 'buy' | 'sell' | 'transfer',
+          message,
           amount: tx.amount,
           signature: tx.signature,
           timestamp: tx.created_at,

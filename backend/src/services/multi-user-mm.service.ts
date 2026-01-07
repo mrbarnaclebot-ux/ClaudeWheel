@@ -577,19 +577,28 @@ class MultiUserMMService {
     amount: number,
     signature: string
   ): Promise<void> {
-    if (!supabase) return
+    if (!supabase) {
+      console.error('   ❌ Cannot record transaction: supabase not configured')
+      return
+    }
 
     try {
-      await supabase.from('user_transactions').insert([{
+      const { data, error } = await supabase.from('user_transactions').insert([{
         user_token_id: userTokenId,
         type,
         amount,
         signature,
         status: 'confirmed',
         created_at: new Date().toISOString(),
-      }])
-    } catch (error) {
-      console.error('Failed to record transaction:', error)
+      }]).select()
+
+      if (error) {
+        console.error(`   ❌ Failed to record ${type} transaction:`, error.message)
+      } else {
+        console.log(`   📝 Recorded ${type} transaction: ${signature.slice(0, 8)}...`)
+      }
+    } catch (error: any) {
+      console.error('   ❌ Failed to record transaction:', error.message)
     }
   }
 
