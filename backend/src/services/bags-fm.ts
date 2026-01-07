@@ -150,34 +150,156 @@ class BagsFmService {
 
   /**
    * Get token info from Bags.fm
-   * Uses the working creator/v3 endpoint
+   * Tries multiple endpoints and combines with DexScreener data
    */
   async getTokenCreatorInfo(tokenMint: string): Promise<TokenCreatorInfo | null> {
-    // Use the creator endpoint which is the only working one on public-api-v2
+    // Try the creator endpoint for basic info
     const creatorData = await this.fetch<any>(`/token-launch/creator/v3?tokenMint=${tokenMint}`)
 
-    if (!creatorData) return null
+    let tokenInfo: TokenCreatorInfo = {
+      tokenMint,
+      creatorWallet: '',
+      tokenName: '',
+      tokenSymbol: '',
+      tokenImage: '',
+      bondingCurveProgress: 0,
+      isGraduated: false,
+      marketCap: 0,
+      volume24h: 0,
+      holders: 0,
+      createdAt: '',
+    }
 
-    // Creator endpoint returns an array of creators - extract what we can
-    if (Array.isArray(creatorData) && creatorData.length > 0) {
+    // Extract creator info if available
+    if (creatorData && Array.isArray(creatorData) && creatorData.length > 0) {
       const creator = creatorData.find((c: any) => c.isCreator) || creatorData[0]
-      // Token is on bonding curve if we have creator data (graduated tokens don't use creator endpoint)
+      tokenInfo.creatorWallet = creator.wallet || ''
+      tokenInfo.tokenName = creator.username || ''
+      tokenInfo.tokenImage = creator.pfp || ''
+      tokenInfo.isGraduated = false // On bonding curve if we have creator data
+    }
+
+    // Try to get additional data from DexScreener
+    try {
+      const dexData = await this.fetchDexScreenerData(tokenMint)
+      if (dexData) {
+        tokenInfo.marketCap = dexData.marketCap
+        tokenInfo.volume24h = dexData.volume24h
+        tokenInfo.tokenName = dexData.tokenName || tokenInfo.tokenName
+        tokenInfo.tokenSymbol = dexData.tokenSymbol || tokenInfo.tokenSymbol
+        tokenInfo.tokenImage = dexData.tokenImage || tokenInfo.tokenImage
+        // Estimate bonding curve progress from market cap (bonding curves typically graduate at ~$69k)
+        // Progress is stored as decimal 0-1 for frontend compatibility
+        if (dexData.marketCap > 0) {
+          tokenInfo.bondingCurveProgress = Math.min(1, dexData.marketCap / 69000)
+        }
+      }
+    } catch (error) {
+      console.warn('Could not fetch DexScreener data:', error)
+    }
+
+    // Try to get holder count from Solana FM or Helius (free tier)
+    try {
+      const holders = await this.fetchHolderCount(tokenMint)
+      if (holders > 0) {
+        tokenInfo.holders = holders
+      }
+    } catch (error) {
+      console.warn('Could not fetch holder count:', error)
+    }
+
+    return tokenInfo
+  }
+
+  /**
+   * Fetch token data from DexScreener
+   */
+  private async fetchDexScreenerData(tokenMint: string): Promise<{
+    marketCap: number
+    volume24h: number
+    tokenName: string
+    tokenSymbol: string
+    tokenImage: string
+  } | null> {
+    try {
+      const response = await fetch(
+        `https://api.dexscreener.com/latest/dex/tokens/${tokenMint}`,
+        { signal: AbortSignal.timeout(5000) }
+      )
+
+      if (!response.ok) return null
+
+      const data = await response.json() as { pairs?: any[] }
+
+      if (!data.pairs || data.pairs.length === 0) return null
+
+      // Get the pair with highest liquidity
+      const bestPair = data.pairs.reduce((best: any, pair: any) => {
+        return (pair.liquidity?.usd || 0) > (best.liquidity?.usd || 0) ? pair : best
+      }, data.pairs[0])
+
       return {
-        tokenMint,
-        creatorWallet: creator.wallet || '',
-        tokenName: creator.username || '',  // Use username as fallback
-        tokenSymbol: '',  // Not available from creator endpoint
-        tokenImage: creator.pfp || '',
-        bondingCurveProgress: 0,  // Actual progress not available from this endpoint
-        isGraduated: false,  // On bonding curve since we have creator data
-        marketCap: 0,
-        volume24h: 0,
-        holders: 0,
-        createdAt: '',
+        marketCap: bestPair.marketCap || bestPair.fdv || 0,
+        volume24h: bestPair.volume?.h24 || 0,
+        tokenName: bestPair.baseToken?.name || '',
+        tokenSymbol: bestPair.baseToken?.symbol || '',
+        tokenImage: bestPair.info?.imageUrl || '',
+      }
+    } catch (error) {
+      return null
+    }
+  }
+
+  /**
+   * Fetch holder count for a token
+   * Uses Helius API if configured, otherwise falls back to estimate
+   */
+  private async fetchHolderCount(tokenMint: string): Promise<number> {
+    // Try Helius API first (free tier: 10 req/sec)
+    const heliusKey = process.env.HELIUS_API_KEY
+    if (heliusKey) {
+      try {
+        const response = await fetch(
+          `https://mainnet.helius-rpc.com/?api-key=${heliusKey}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              jsonrpc: '2.0',
+              id: 'holders',
+              method: 'getTokenLargestAccounts',
+              params: [tokenMint],
+            }),
+            signal: AbortSignal.timeout(5000),
+          }
+        )
+
+        if (response.ok) {
+          const data = await response.json() as { result?: { value?: any[] } }
+          // This returns largest accounts, use count as rough estimate
+          return data.result?.value?.length || 0
+        }
+      } catch {
+        // Fall through to other methods
       }
     }
 
-    return null
+    // Try SolanaFM API (public endpoint)
+    try {
+      const response = await fetch(
+        `https://api.solana.fm/v1/tokens/${tokenMint}/holders?page=1&pageSize=1`,
+        { signal: AbortSignal.timeout(5000) }
+      )
+
+      if (response.ok) {
+        const data = await response.json() as { pagination?: { total?: number } }
+        return data.pagination?.total || 0
+      }
+    } catch {
+      // Ignore error
+    }
+
+    return 0
   }
 
   /**
