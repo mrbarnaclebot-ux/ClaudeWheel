@@ -267,6 +267,28 @@ export default function Dashboard() {
 
       {/* Main Content */}
       <main className="max-w-7xl mx-auto px-4 py-8">
+        {/* Connect Your Token CTA - Top Banner */}
+        <section className="mb-8">
+          <div className="card-glow bg-gradient-to-r from-accent-primary/10 to-accent-secondary/10 p-6 text-center">
+            <h2 className="font-display text-2xl font-bold text-text-primary mb-2">
+              Connect Your Bags Token
+            </h2>
+            <p className="text-text-muted font-mono text-sm mb-4 max-w-2xl mx-auto">
+              Are you a token creator on Bags.fm? Connect your token to our autonomous market-making engine.
+              Auto-claim fees, automated trading, and full configuration control.
+            </p>
+            <a
+              href="/onboarding"
+              className="inline-flex items-center gap-2 px-6 py-3 bg-accent-primary text-bg-primary font-semibold rounded-lg hover:bg-accent-primary/90 transition-colors"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+              </svg>
+              Get Started
+            </a>
+          </div>
+        </section>
+
         {/* Loading state */}
         {isLoading && (
           <div className="flex items-center justify-center py-12">
@@ -320,31 +342,9 @@ export default function Dashboard() {
         </section>
 
         {/* Token Info & Transaction Feed Row */}
-        <section className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <section className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
           <TokenInfo contractAddress={tokenMintAddress} tokenSymbol={tokenSymbol} />
           <TransactionFeed transactions={transactions} />
-        </section>
-
-        {/* Connect Your Token CTA */}
-        <section className="mt-12 mb-8">
-          <div className="card-glow bg-gradient-to-r from-accent-primary/10 to-accent-secondary/10 p-6 text-center">
-            <h2 className="font-display text-2xl font-bold text-text-primary mb-2">
-              Connect Your Bags Token
-            </h2>
-            <p className="text-text-muted font-mono text-sm mb-4 max-w-2xl mx-auto">
-              Are you a token creator on Bags.fm? Connect your token to our autonomous market-making engine.
-              Auto-claim fees, automated trading, and full configuration control.
-            </p>
-            <a
-              href="/onboarding"
-              className="inline-flex items-center gap-2 px-6 py-3 bg-accent-primary text-bg-primary font-semibold rounded-lg hover:bg-accent-primary/90 transition-colors"
-            >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
-              </svg>
-              Get Started
-            </a>
-          </div>
         </section>
 
         {/* Footer */}

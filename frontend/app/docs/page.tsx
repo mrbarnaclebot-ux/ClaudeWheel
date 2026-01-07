@@ -82,29 +82,43 @@ export default function DocsPage() {
             </h2>
             <div className="prose prose-invert max-w-none">
               <p className="text-text-secondary mb-4">
-                The flywheel operates in cycles, alternating between accumulation (buy) and distribution (sell) phases:
+                The flywheel operates in cycles, alternating between accumulation (buy) and distribution (sell) phases.
+                Each complete cycle consists of <strong className="text-text-primary">5 buys followed by 5 sells</strong>:
               </p>
               <div className="grid md:grid-cols-2 gap-4 mb-4">
                 <div className="bg-bg-card border border-border-subtle rounded-lg p-4">
-                  <h3 className="font-semibold text-success mb-2">Buy Phase</h3>
-                  <p className="text-text-muted text-sm">
-                    Collected fees are used to purchase tokens from the market, creating buy pressure and accumulating inventory.
+                  <h3 className="font-semibold text-success mb-2">Buy Phase (5 Trades)</h3>
+                  <p className="text-text-muted text-sm mb-2">
+                    SOL from your ops wallet is used to purchase tokens, creating buy pressure and accumulating inventory.
+                  </p>
+                  <p className="text-text-muted text-xs">
+                    Buy amounts are randomized within your configured min/max range.
                   </p>
                 </div>
                 <div className="bg-bg-card border border-border-subtle rounded-lg p-4">
-                  <h3 className="font-semibold text-error mb-2">Sell Phase</h3>
-                  <p className="text-text-muted text-sm">
-                    A portion of accumulated tokens are sold in small increments to realize profits while maintaining market stability.
+                  <h3 className="font-semibold text-error mb-2">Sell Phase (5 Trades)</h3>
+                  <p className="text-text-muted text-sm mb-2">
+                    Accumulated tokens are sold in 5 equal portions to realize profits while maintaining market stability.
+                  </p>
+                  <p className="text-text-muted text-xs">
+                    Token balance is snapshot at phase start and divided evenly.
                   </p>
                 </div>
+              </div>
+              <div className="bg-bg-card border border-accent-primary/30 rounded-lg p-4 mb-4">
+                <h3 className="font-semibold text-accent-primary mb-2">Auto Fee Collection</h3>
+                <p className="text-text-muted text-sm">
+                  Before each trade cycle, the system automatically collects accumulated trading fees from your dev wallet
+                  and transfers them to your ops wallet (with platform fee deducted) to fuel the next round of buys.
+                </p>
               </div>
               <p className="text-text-secondary mb-4">
                 <strong className="text-text-primary">Algorithm Modes:</strong>
               </p>
               <ul className="list-disc list-inside space-y-2 text-text-secondary">
-                <li><strong className="text-text-primary">Simple:</strong> Fixed buy/sell amounts per cycle</li>
-                <li><strong className="text-text-primary">Smart:</strong> Dynamic sizing based on market conditions</li>
-                <li><strong className="text-text-primary">Rebalance:</strong> Maintains target SOL/Token allocation ratios</li>
+                <li><strong className="text-text-primary">Simple:</strong> 5 buys → 5 sells cycle with randomized amounts within your configured range</li>
+                <li><strong className="text-text-primary">Smart:</strong> Dynamic sizing based on market conditions (coming soon)</li>
+                <li><strong className="text-text-primary">Rebalance:</strong> Maintains target SOL/Token allocation ratios automatically</li>
               </ul>
             </div>
           </section>
@@ -171,11 +185,65 @@ export default function DocsPage() {
               <p className="text-text-secondary mb-4">
                 Claude Wheel operates on a simple, transparent fee model:
               </p>
-              <ul className="list-disc list-inside space-y-2 text-text-secondary mb-4">
-                <li><strong className="text-text-primary">Platform Fee:</strong> No platform fees for basic usage</li>
-                <li><strong className="text-text-primary">Network Fees:</strong> Standard Solana transaction fees apply (~0.000005 SOL per transaction)</li>
-                <li><strong className="text-text-primary">DEX Fees:</strong> Standard Jupiter/Raydium swap fees apply to market-making trades</li>
-              </ul>
+
+              {/* Platform Fee Highlight */}
+              <div className="bg-accent-primary/10 border border-accent-primary/30 rounded-lg p-5 mb-6">
+                <div className="flex items-center gap-3 mb-3">
+                  <div className="w-12 h-12 rounded-full bg-accent-primary/20 flex items-center justify-center">
+                    <span className="text-2xl font-bold text-accent-primary">10%</span>
+                  </div>
+                  <div>
+                    <h3 className="font-semibold text-text-primary">Platform Fee</h3>
+                    <p className="text-text-muted text-sm">Applied to all claimed trading fees</p>
+                  </div>
+                </div>
+                <p className="text-text-secondary text-sm">
+                  When fees are claimed from Bags.fm, <strong className="text-text-primary">10% goes to the WHEEL platform</strong> and{' '}
+                  <strong className="text-text-primary">90% goes to your ops wallet</strong>. This fee supports ongoing development
+                  and maintenance of the platform.
+                </p>
+              </div>
+
+              <div className="grid md:grid-cols-2 gap-4 mb-4">
+                <div className="bg-bg-card border border-border-subtle rounded-lg p-4">
+                  <h3 className="font-semibold text-text-primary mb-2">Fee Flow Example</h3>
+                  <div className="space-y-2 text-sm">
+                    <div className="flex justify-between text-text-muted">
+                      <span>Claimed from Bags.fm:</span>
+                      <span className="text-text-primary">1.00 SOL</span>
+                    </div>
+                    <div className="flex justify-between text-text-muted">
+                      <span>Platform fee (10%):</span>
+                      <span className="text-error">-0.10 SOL</span>
+                    </div>
+                    <div className="flex justify-between text-text-muted">
+                      <span>Reserve (for claiming):</span>
+                      <span className="text-warning">-0.01 SOL</span>
+                    </div>
+                    <div className="border-t border-border-subtle pt-2 flex justify-between font-semibold">
+                      <span className="text-text-primary">You receive:</span>
+                      <span className="text-success">0.89 SOL</span>
+                    </div>
+                  </div>
+                </div>
+                <div className="bg-bg-card border border-border-subtle rounded-lg p-4">
+                  <h3 className="font-semibold text-text-primary mb-2">Other Fees</h3>
+                  <ul className="space-y-2 text-sm text-text-muted">
+                    <li className="flex justify-between">
+                      <span>Solana TX fee:</span>
+                      <span>~0.000005 SOL</span>
+                    </li>
+                    <li className="flex justify-between">
+                      <span>Jupiter swap fee:</span>
+                      <span>0.1-0.3%</span>
+                    </li>
+                    <li className="flex justify-between">
+                      <span>Bags.fm trading fee:</span>
+                      <span>1%</span>
+                    </li>
+                  </ul>
+                </div>
+              </div>
             </div>
           </section>
 
@@ -259,7 +327,7 @@ export default function DocsPage() {
             CA: 8JLGQ7RqhsvhsDhvjMuJUeeuaQ53GTJqSHNaBWf4BAGS
           </p>
           <p className="text-text-muted/50 font-mono text-xs mt-2">
-            &copy; 2024 Claude Wheel. All rights reserved.
+            &copy; 2025 Claude Wheel. All rights reserved.
           </p>
         </footer>
       </main>
