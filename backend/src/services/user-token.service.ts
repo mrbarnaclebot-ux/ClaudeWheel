@@ -65,7 +65,7 @@ export interface RegisterTokenParams {
   tokenImage?: string
   tokenDecimals: number
   devWalletPrivateKey: string // Base58 encoded
-  opsWalletAddress: string
+  opsWalletPrivateKey: string // Base58 encoded - for automated market making
 }
 
 const DEFAULT_CONFIG: Omit<UserTokenConfig, 'id' | 'user_token_id' | 'updated_at'> = {
@@ -97,7 +97,7 @@ const DEFAULT_FLYWHEEL_STATE: Omit<UserFlywheelState, 'id' | 'user_token_id' | '
 
 /**
  * Register a new token for a user
- * Encrypts and stores the dev wallet private key
+ * Encrypts and stores both dev and ops wallet private keys
  */
 export async function registerToken(params: RegisterTokenParams): Promise<UserToken | null> {
   if (!supabase) {
@@ -106,19 +106,33 @@ export async function registerToken(params: RegisterTokenParams): Promise<UserTo
   }
 
   try {
-    // Validate the private key and derive the wallet address
+    // Validate the dev wallet private key and derive the wallet address
     let devWalletAddress: string
     try {
       const secretKey = bs58.decode(params.devWalletPrivateKey)
       const keypair = Keypair.fromSecretKey(secretKey)
       devWalletAddress = keypair.publicKey.toString()
     } catch (error) {
-      console.error('❌ Invalid private key format')
-      throw new Error('Invalid private key format. Must be Base58 encoded.')
+      console.error('❌ Invalid dev wallet private key format')
+      throw new Error('Invalid dev wallet private key format. Must be Base58 encoded.')
     }
 
-    // Encrypt the private key
-    const encryptedKey = encrypt(params.devWalletPrivateKey)
+    // Validate the ops wallet private key and derive the wallet address
+    let opsWalletAddress: string
+    try {
+      const secretKey = bs58.decode(params.opsWalletPrivateKey)
+      const keypair = Keypair.fromSecretKey(secretKey)
+      opsWalletAddress = keypair.publicKey.toString()
+    } catch (error) {
+      console.error('❌ Invalid ops wallet private key format')
+      throw new Error('Invalid ops wallet private key format. Must be Base58 encoded.')
+    }
+
+    // Encrypt the dev wallet private key
+    const encryptedDevKey = encrypt(params.devWalletPrivateKey)
+
+    // Encrypt the ops wallet private key
+    const encryptedOpsKey = encrypt(params.opsWalletPrivateKey)
 
     // Check if user already has this token registered
     const existing = await getUserTokenByMint(params.userId, params.tokenMintAddress)
@@ -126,7 +140,7 @@ export async function registerToken(params: RegisterTokenParams): Promise<UserTo
       throw new Error('Token already registered for this user')
     }
 
-    // Insert the user token
+    // Insert the user token with both encrypted keys
     const { data: tokenData, error: tokenError } = await supabase
       .from('user_tokens')
       .insert([{
@@ -137,10 +151,13 @@ export async function registerToken(params: RegisterTokenParams): Promise<UserTo
         token_image: params.tokenImage || null,
         token_decimals: params.tokenDecimals,
         dev_wallet_address: devWalletAddress,
-        dev_wallet_private_key_encrypted: encryptedKey.ciphertext,
-        encryption_iv: encryptedKey.iv,
-        encryption_auth_tag: encryptedKey.authTag,
-        ops_wallet_address: params.opsWalletAddress,
+        dev_wallet_private_key_encrypted: encryptedDevKey.ciphertext,
+        encryption_iv: encryptedDevKey.iv,
+        encryption_auth_tag: encryptedDevKey.authTag,
+        ops_wallet_address: opsWalletAddress,
+        ops_wallet_private_key_encrypted: encryptedOpsKey.ciphertext,
+        ops_encryption_iv: encryptedOpsKey.iv,
+        ops_encryption_auth_tag: encryptedOpsKey.authTag,
         is_active: true,
         is_graduated: false,
       }])
@@ -298,7 +315,7 @@ export async function getUserTokenByMint(userId: string, tokenMintAddress: strin
 
 /**
  * Get decrypted dev wallet keypair for operations
- * SECURITY: Only call this when actively signing transactions
+ * SECURITY: Only call this when actively signing transactions (e.g., claiming fees)
  */
 export async function getDecryptedDevWallet(userTokenId: string): Promise<Keypair | null> {
   if (!supabase) {
@@ -327,6 +344,47 @@ export async function getDecryptedDevWallet(userTokenId: string): Promise<Keypai
     return Keypair.fromSecretKey(secretKey)
   } catch (error) {
     console.error('❌ Failed to decrypt dev wallet:', error)
+    return null
+  }
+}
+
+/**
+ * Get decrypted ops wallet keypair for market making trades
+ * SECURITY: Only call this when actively signing transactions (e.g., buy/sell trades)
+ */
+export async function getDecryptedOpsWallet(userTokenId: string): Promise<Keypair | null> {
+  if (!supabase) {
+    return null
+  }
+
+  const { data, error } = await supabase
+    .from('user_tokens')
+    .select('ops_wallet_private_key_encrypted, ops_encryption_iv, ops_encryption_auth_tag')
+    .eq('id', userTokenId)
+    .single()
+
+  if (error) {
+    console.error('❌ Failed to get encrypted ops key:', error)
+    return null
+  }
+
+  // Check if ops wallet key exists
+  if (!data.ops_wallet_private_key_encrypted) {
+    console.warn('⚠️ Ops wallet private key not configured for token:', userTokenId)
+    return null
+  }
+
+  try {
+    const decryptedKey = decrypt({
+      ciphertext: data.ops_wallet_private_key_encrypted,
+      iv: data.ops_encryption_iv,
+      authTag: data.ops_encryption_auth_tag,
+    })
+
+    const secretKey = bs58.decode(decryptedKey)
+    return Keypair.fromSecretKey(secretKey)
+  } catch (error) {
+    console.error('❌ Failed to decrypt ops wallet:', error)
     return null
   }
 }

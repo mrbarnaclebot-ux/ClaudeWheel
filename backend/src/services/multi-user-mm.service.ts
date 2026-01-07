@@ -13,7 +13,7 @@ import {
   UserTokenConfig,
   UserFlywheelState,
   getTokensForFlywheel,
-  getDecryptedDevWallet,
+  getDecryptedOpsWallet,
   getTokenConfig,
   getFlywheelState,
   updateFlywheelState,
@@ -176,25 +176,22 @@ class MultiUserMMService {
       return { ...baseResult, tradeType: 'buy', success: false, amount: 0, error: 'Failed to get flywheel state' }
     }
 
-    // Get ops wallet (we use ops wallet for trading)
-    const opsWalletPublicKey = new PublicKey(token.ops_wallet_address)
-
-    // Get dev wallet for signing (since that's where the private key is stored)
-    const devWallet = await getDecryptedDevWallet(token.id)
-    if (!devWallet) {
-      return { ...baseResult, tradeType: 'buy', success: false, amount: 0, error: 'Failed to decrypt wallet' }
+    // Get ops wallet for trading (this wallet has the private key for signing trades)
+    const opsWallet = await getDecryptedOpsWallet(token.id)
+    if (!opsWallet) {
+      return { ...baseResult, tradeType: 'buy', success: false, amount: 0, error: 'Failed to decrypt ops wallet' }
     }
 
     const connection = getConnection()
 
     // Determine trade based on algorithm mode
     if (config.algorithm_mode === 'simple') {
-      return this.runSimpleAlgorithm(token, config, state, devWallet, connection, baseResult)
+      return this.runSimpleAlgorithm(token, config, state, opsWallet, connection, baseResult)
     } else if (config.algorithm_mode === 'rebalance') {
-      return this.runRebalanceAlgorithm(token, config, state, devWallet, connection, baseResult)
+      return this.runRebalanceAlgorithm(token, config, state, opsWallet, connection, baseResult)
     } else {
       // Smart mode - for now, use simple
-      return this.runSimpleAlgorithm(token, config, state, devWallet, connection, baseResult)
+      return this.runSimpleAlgorithm(token, config, state, opsWallet, connection, baseResult)
     }
   }
 

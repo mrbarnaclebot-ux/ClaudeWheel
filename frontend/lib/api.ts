@@ -607,7 +607,7 @@ export interface RegisterTokenParams {
   tokenImage?: string
   tokenDecimals: number
   devWalletPrivateKey: string
-  opsWalletAddress: string
+  opsWalletPrivateKey: string
 }
 
 // Get all tokens for current user

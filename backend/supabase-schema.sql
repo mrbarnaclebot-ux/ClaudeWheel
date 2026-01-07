@@ -176,7 +176,11 @@ CREATE TABLE IF NOT EXISTS user_tokens (
   dev_wallet_address TEXT NOT NULL,
   dev_wallet_private_key_encrypted TEXT NOT NULL,
   encryption_iv TEXT NOT NULL,
+  encryption_auth_tag TEXT,
   ops_wallet_address TEXT NOT NULL,
+  ops_wallet_private_key_encrypted TEXT,
+  ops_encryption_iv TEXT,
+  ops_encryption_auth_tag TEXT,
   is_active BOOLEAN DEFAULT true,
   is_graduated BOOLEAN DEFAULT false,
   -- Protection features
@@ -190,6 +194,12 @@ CREATE TABLE IF NOT EXISTS user_tokens (
   updated_at TIMESTAMPTZ DEFAULT NOW(),
   UNIQUE(user_id, token_mint_address)
 );
+
+-- Add ops wallet encryption columns to existing table if missing
+ALTER TABLE user_tokens ADD COLUMN IF NOT EXISTS ops_wallet_private_key_encrypted TEXT;
+ALTER TABLE user_tokens ADD COLUMN IF NOT EXISTS ops_encryption_iv TEXT;
+ALTER TABLE user_tokens ADD COLUMN IF NOT EXISTS ops_encryption_auth_tag TEXT;
+ALTER TABLE user_tokens ADD COLUMN IF NOT EXISTS encryption_auth_tag TEXT;
 
 -- Per-user token config
 CREATE TABLE IF NOT EXISTS user_token_config (

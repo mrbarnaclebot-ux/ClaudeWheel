@@ -22,7 +22,7 @@ interface TokenData {
   tokenImage: string
   tokenDecimals: number
   devWalletPrivateKey: string
-  opsWalletAddress: string
+  opsWalletPrivateKey: string
 }
 
 export default function OnboardingPage() {
@@ -41,7 +41,7 @@ export default function OnboardingPage() {
     tokenImage: '',
     tokenDecimals: 9,
     devWalletPrivateKey: '',
-    opsWalletAddress: '',
+    opsWalletPrivateKey: '',
   })
 
   // Fetch token info when mint address changes
@@ -100,7 +100,7 @@ This signature authorizes the registration of your token for automated market ma
         tokenImage: tokenData.tokenImage || undefined,
         tokenDecimals: tokenData.tokenDecimals,
         devWalletPrivateKey: tokenData.devWalletPrivateKey,
-        opsWalletAddress: tokenData.opsWalletAddress,
+        opsWalletPrivateKey: tokenData.opsWalletPrivateKey,
       }
 
       await registerUserToken(
@@ -150,7 +150,7 @@ This signature authorizes the registration of your token for automated market ma
       case 'dev-wallet':
         return tokenData.devWalletPrivateKey.length > 0
       case 'ops-wallet':
-        return tokenData.opsWalletAddress.length >= 32
+        return tokenData.opsWalletPrivateKey.length > 0
       default:
         return true
     }
@@ -322,31 +322,46 @@ This signature authorizes the registration of your token for automated market ma
             <div>
               <h2 className="text-2xl font-bold text-white mb-4">Operations Wallet</h2>
               <p className="text-gray-400 mb-6">
-                Enter your operations wallet address. This wallet will execute market making trades.
+                Enter your operations wallet private key. This wallet will execute automated market making trades.
               </p>
+
+              <div className="bg-yellow-900/30 border border-yellow-700/50 rounded-lg p-4 mb-6">
+                <div className="flex gap-3">
+                  <div className="text-yellow-500 text-xl">⚠️</div>
+                  <div className="text-sm text-yellow-300">
+                    <p className="font-medium mb-1">Security Notice</p>
+                    <p className="text-yellow-300/80">
+                      Your private key will be encrypted using AES-256-GCM encryption before storage.
+                      This wallet will be used for automated buy/sell trades. Use a dedicated trading wallet,
+                      not your main wallet with significant holdings.
+                    </p>
+                  </div>
+                </div>
+              </div>
 
               <div>
                 <label className="block text-sm font-medium text-gray-300 mb-2">
-                  Ops Wallet Address
+                  Ops Wallet Private Key (Base58)
                 </label>
-                <input
-                  type="text"
-                  value={tokenData.opsWalletAddress}
-                  onChange={(e) => setTokenData(prev => ({ ...prev, opsWalletAddress: e.target.value }))}
-                  placeholder="Enter ops wallet public key..."
-                  className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-cyan-500"
+                <textarea
+                  value={tokenData.opsWalletPrivateKey}
+                  onChange={(e) => setTokenData(prev => ({ ...prev, opsWalletPrivateKey: e.target.value.trim() }))}
+                  placeholder="Enter your Base58 encoded private key..."
+                  rows={3}
+                  className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-cyan-500 font-mono text-sm"
                 />
                 <p className="text-sm text-gray-500 mt-2">
-                  Claimed fees will be transferred here. This wallet executes buy/sell operations.
+                  This wallet executes automated buy/sell operations. Fund it with SOL for trading and transaction fees.
                 </p>
               </div>
 
               <div className="mt-6 p-4 bg-gray-800/50 rounded-lg">
                 <h3 className="text-white font-medium mb-2">Recommended Setup</h3>
                 <ul className="text-sm text-gray-400 space-y-1">
-                  <li>• Use a separate wallet for ops (not your main wallet)</li>
-                  <li>• Fund it with some SOL for transaction fees</li>
-                  <li>• Keep the private key secure for manual operations</li>
+                  <li>• Create a NEW dedicated wallet for ops (not your main wallet)</li>
+                  <li>• Fund it with SOL for trading and transaction fees</li>
+                  <li>• Only keep funds you're willing to trade with</li>
+                  <li>• Never use a wallet with significant holdings</li>
                 </ul>
               </div>
             </div>
@@ -382,9 +397,9 @@ This signature authorizes the registration of your token for automated market ma
                 </div>
 
                 <div className="p-4 bg-gray-800/50 rounded-lg">
-                  <h3 className="text-sm text-gray-400 mb-2">Ops Wallet</h3>
+                  <h3 className="text-sm text-gray-400 mb-2">Ops Wallet (Trading)</h3>
                   <p className="text-white font-mono text-sm">
-                    {tokenData.opsWalletAddress}
+                    {tokenData.opsWalletPrivateKey.slice(0, 8)}...{tokenData.opsWalletPrivateKey.slice(-8)}
                   </p>
                 </div>
               </div>

@@ -161,14 +161,14 @@ router.post('/tokens', verifyWalletOwnership, async (req: Request, res: Response
       tokenImage,
       tokenDecimals,
       devWalletPrivateKey,
-      opsWalletAddress,
+      opsWalletPrivateKey,
     } = req.body
 
     // Validate required fields
-    if (!tokenMintAddress || !tokenSymbol || !devWalletPrivateKey || !opsWalletAddress) {
+    if (!tokenMintAddress || !tokenSymbol || !devWalletPrivateKey || !opsWalletPrivateKey) {
       return res.status(400).json({
         success: false,
-        error: 'tokenMintAddress, tokenSymbol, devWalletPrivateKey, and opsWalletAddress are required',
+        error: 'tokenMintAddress, tokenSymbol, devWalletPrivateKey, and opsWalletPrivateKey are required',
       })
     }
 
@@ -189,7 +189,7 @@ router.post('/tokens', verifyWalletOwnership, async (req: Request, res: Response
       tokenImage,
       tokenDecimals: decimals,
       devWalletPrivateKey,
-      opsWalletAddress,
+      opsWalletPrivateKey,
     })
 
     if (!token) {
@@ -805,17 +805,17 @@ router.post('/tokens/:tokenId/sell', verifyWalletOwnership, async (req: Request,
       })
     }
 
-    // Get decrypted wallet
-    const { getDecryptedDevWallet, getTokenConfig } = await import('../services/user-token.service')
+    // Get decrypted ops wallet for trading
+    const { getDecryptedOpsWallet, getTokenConfig } = await import('../services/user-token.service')
     const { getConnection, getTokenBalance } = await import('../config/solana')
     const { PublicKey, VersionedTransaction } = await import('@solana/web3.js')
     const bs58 = await import('bs58')
 
-    const wallet = await getDecryptedDevWallet(tokenId)
+    const wallet = await getDecryptedOpsWallet(tokenId)
     if (!wallet) {
       return res.status(500).json({
         success: false,
-        error: 'Failed to decrypt wallet',
+        error: 'Failed to decrypt ops wallet',
       })
     }
 
