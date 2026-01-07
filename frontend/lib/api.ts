@@ -635,13 +635,17 @@ export async function registerUserToken(
   params: RegisterTokenParams
 ): Promise<UserToken | null> {
   try {
+    // Encode message as base64 to avoid newline issues in HTTP headers
+    const encodedMessage = btoa(unescape(encodeURIComponent(message)))
+
     const response = await fetch(`${API_BASE_URL}/api/user/tokens`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'x-wallet-address': walletAddress,
         'x-wallet-signature': signature,
-        'x-wallet-message': message,
+        'x-wallet-message': encodedMessage,
+        'x-message-encoding': 'base64',
       },
       body: JSON.stringify(params),
     })

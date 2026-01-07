@@ -28,7 +28,20 @@ const router = Router()
 async function verifyWalletOwnership(req: Request, res: Response, next: Function) {
   const walletAddress = req.headers['x-wallet-address'] as string
   const signature = req.headers['x-wallet-signature'] as string
-  const message = req.headers['x-wallet-message'] as string
+  let message = req.headers['x-wallet-message'] as string
+  const messageEncoding = req.headers['x-message-encoding'] as string
+
+  // Decode base64 message if encoding header is present
+  if (message && messageEncoding === 'base64') {
+    try {
+      message = decodeURIComponent(escape(Buffer.from(message, 'base64').toString('utf8')))
+    } catch (e) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid base64 message encoding',
+      })
+    }
+  }
 
   if (!walletAddress) {
     return res.status(401).json({
