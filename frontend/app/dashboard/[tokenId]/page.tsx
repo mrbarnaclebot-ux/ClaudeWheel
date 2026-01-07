@@ -14,6 +14,7 @@ import {
   getConfigNonce,
   updateUserTokenConfig,
 } from '@/lib/api'
+import { ActivityTerminal } from '../../components/ActivityTerminal'
 
 // ═══════════════════════════════════════════════════════════════════════════
 // TOKEN MANAGEMENT PAGE
@@ -321,6 +322,18 @@ function TokenManagementContent() {
               </div>
             </div>
           </ConfigSection>
+
+          {/* Activity Terminal */}
+          <div className="mt-8">
+            <h2 className="text-lg font-semibold text-white mb-4">Activity Logs</h2>
+            <ActivityTerminal
+              walletAddress={publicKey?.toString() || ''}
+              tokenId={tokenId}
+              tokenSymbol={token.token_symbol}
+              autoRefresh={true}
+              refreshInterval={15000}
+            />
+          </div>
         </div>
 
         {/* Messages */}

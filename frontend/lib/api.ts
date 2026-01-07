@@ -772,6 +772,50 @@ export async function updateUserTokenConfig(
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// ACTIVITY LOGS API
+// Fetch combined claims and transactions for terminal display
+// ═══════════════════════════════════════════════════════════════════════════
+
+export interface ActivityLog {
+  id: string
+  type: 'claim' | 'buy' | 'sell' | 'transfer'
+  message: string
+  amount: number
+  signature: string | null
+  timestamp: string
+}
+
+export interface ActivityLogsResponse {
+  activities: ActivityLog[]
+  tokenSymbol: string
+  devWallet: string
+  opsWallet: string
+}
+
+// Get activity logs for a token (claims + transactions)
+export async function getTokenActivityLogs(
+  walletAddress: string,
+  tokenId: string,
+  limit: number = 50
+): Promise<ActivityLogsResponse | null> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/user/tokens/${tokenId}/activity?limit=${limit}`, {
+      headers: { 'x-wallet-address': walletAddress },
+    })
+
+    const json = await response.json()
+    if (!response.ok || !json.success) {
+      throw new Error(json.error || 'Failed to fetch activity logs')
+    }
+
+    return json.data
+  } catch (error) {
+    console.error('Failed to fetch activity logs:', error)
+    return null
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // ADMIN TOKEN MANAGEMENT API
 // View and manage all registered tokens (admin only)
 // ═══════════════════════════════════════════════════════════════════════════

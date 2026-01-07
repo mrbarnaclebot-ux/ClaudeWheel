@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express'
 import { verifySignature, hashConfig, isMessageRecent } from '../utils/signature-verify'
+import { supabase } from '../config/database'
 import { getUserByWallet } from '../services/user.service'
 import {
   registerToken,
@@ -700,6 +701,120 @@ router.get('/tokens/:tokenId/claims', verifyWalletOwnership, async (req: Request
     res.status(500).json({
       success: false,
       error: 'Failed to get claim history',
+    })
+  }
+})
+
+/**
+ * GET /api/user/tokens/:tokenId/activity
+ * Get combined activity logs (claims + transactions) for terminal display
+ */
+router.get('/tokens/:tokenId/activity', verifyWalletOwnership, async (req: Request, res: Response) => {
+  try {
+    const { tokenId } = req.params
+    const { userId } = req.body
+    const limit = Math.min(parseInt(req.query.limit as string) || 50, 100)
+
+    const token = await getUserToken(tokenId)
+
+    if (!token) {
+      return res.status(404).json({
+        success: false,
+        error: 'Token not found',
+      })
+    }
+
+    if (token.user_id !== userId) {
+      return res.status(403).json({
+        success: false,
+        error: 'You do not own this token',
+      })
+    }
+
+    if (!supabase) {
+      return res.status(500).json({
+        success: false,
+        error: 'Database not configured',
+      })
+    }
+
+    // Fetch claims
+    const { data: claims } = await supabase
+      .from('user_claim_history')
+      .select('id, amount_sol, transaction_signature, claimed_at')
+      .eq('user_token_id', tokenId)
+      .order('claimed_at', { ascending: false })
+      .limit(limit)
+
+    // Fetch transactions
+    const { data: transactions } = await supabase
+      .from('user_transactions')
+      .select('id, type, amount, signature, status, created_at')
+      .eq('user_token_id', tokenId)
+      .order('created_at', { ascending: false })
+      .limit(limit)
+
+    // Combine and format as activity logs
+    const activities: Array<{
+      id: string
+      type: 'claim' | 'buy' | 'sell' | 'transfer'
+      message: string
+      amount: number
+      signature: string | null
+      timestamp: string
+    }> = []
+
+    // Add claims
+    if (claims) {
+      for (const claim of claims) {
+        activities.push({
+          id: claim.id,
+          type: 'claim',
+          message: `Claimed ${claim.amount_sol.toFixed(4)} SOL from fees`,
+          amount: claim.amount_sol,
+          signature: claim.transaction_signature,
+          timestamp: claim.claimed_at,
+        })
+      }
+    }
+
+    // Add transactions
+    if (transactions) {
+      for (const tx of transactions) {
+        const isBuy = tx.type === 'buy'
+        activities.push({
+          id: tx.id,
+          type: tx.type as 'buy' | 'sell',
+          message: isBuy
+            ? `BUY: Spent ${tx.amount.toFixed(4)} SOL on ${token.token_symbol}`
+            : `SELL: Sold ${tx.amount.toFixed(0)} ${token.token_symbol} tokens`,
+          amount: tx.amount,
+          signature: tx.signature,
+          timestamp: tx.created_at,
+        })
+      }
+    }
+
+    // Sort by timestamp descending
+    activities.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+
+    // Limit to requested count
+    const limitedActivities = activities.slice(0, limit)
+
+    res.json({
+      success: true,
+      data: {
+        activities: limitedActivities,
+        tokenSymbol: token.token_symbol,
+        devWallet: token.dev_wallet_address,
+        opsWallet: token.ops_wallet_address,
+      },
+    })
+  } catch (error) {
+    console.error('Error getting activity:', error)
+    res.status(500).json({
+      success: false,
+      error: 'Failed to get activity logs',
     })
   }
 })

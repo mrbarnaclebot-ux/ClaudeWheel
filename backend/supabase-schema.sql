@@ -246,6 +246,17 @@ CREATE TABLE IF NOT EXISTS user_claim_history (
   claimed_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- User transactions (buy/sell trades)
+CREATE TABLE IF NOT EXISTS user_transactions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_token_id UUID NOT NULL REFERENCES user_tokens(id) ON DELETE CASCADE,
+  type TEXT NOT NULL CHECK (type IN ('buy', 'sell')),
+  amount DECIMAL NOT NULL,
+  signature TEXT,
+  status TEXT DEFAULT 'confirmed' CHECK (status IN ('pending', 'confirmed', 'failed')),
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
 -- ═══════════════════════════════════════════════════════════════════════════
 -- MULTI-USER INDEXES
 -- ═══════════════════════════════════════════════════════════════════════════
@@ -258,6 +269,8 @@ CREATE INDEX IF NOT EXISTS idx_user_tokens_suspended ON user_tokens(is_suspended
 CREATE INDEX IF NOT EXISTS idx_user_token_config_flywheel ON user_token_config(flywheel_active) WHERE flywheel_active = true;
 CREATE INDEX IF NOT EXISTS idx_user_token_config_auto_claim ON user_token_config(auto_claim_enabled) WHERE auto_claim_enabled = true;
 CREATE INDEX IF NOT EXISTS idx_user_claim_history_token ON user_claim_history(user_token_id);
+CREATE INDEX IF NOT EXISTS idx_user_transactions_token ON user_transactions(user_token_id);
+CREATE INDEX IF NOT EXISTS idx_user_transactions_created ON user_transactions(created_at DESC);
 
 -- ═══════════════════════════════════════════════════════════════════════════
 -- MULTI-USER RLS POLICIES
@@ -268,6 +281,7 @@ ALTER TABLE user_tokens ENABLE ROW LEVEL SECURITY;
 ALTER TABLE user_token_config ENABLE ROW LEVEL SECURITY;
 ALTER TABLE user_flywheel_state ENABLE ROW LEVEL SECURITY;
 ALTER TABLE user_claim_history ENABLE ROW LEVEL SECURITY;
+ALTER TABLE user_transactions ENABLE ROW LEVEL SECURITY;
 
 -- Users policies
 DROP POLICY IF EXISTS "Allow service role all" ON users;
@@ -288,6 +302,10 @@ CREATE POLICY "Allow service role all" ON user_flywheel_state FOR ALL USING (tru
 -- User claim history policies
 DROP POLICY IF EXISTS "Allow service role all" ON user_claim_history;
 CREATE POLICY "Allow service role all" ON user_claim_history FOR ALL USING (true);
+
+-- User transactions policies
+DROP POLICY IF EXISTS "Allow service role all" ON user_transactions;
+CREATE POLICY "Allow service role all" ON user_transactions FOR ALL USING (true);
 
 -- ═══════════════════════════════════════════════════════════════════════════
 -- FUNCTION TO INCREMENT CLAIM STATS
