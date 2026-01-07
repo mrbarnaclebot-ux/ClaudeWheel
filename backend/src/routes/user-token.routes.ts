@@ -1008,6 +1008,18 @@ router.post('/tokens/:tokenId/sell', verifyWalletOwnership, async (req: Request,
     // Wait for confirmation
     await connection.confirmTransaction(signature, 'confirmed')
 
+    // Record the transaction
+    if (supabase) {
+      await supabase.from('user_transactions').insert([{
+        user_token_id: tokenId,
+        type: 'sell',
+        amount: sellAmount,
+        signature,
+        status: 'confirmed',
+        created_at: new Date().toISOString(),
+      }])
+    }
+
     res.json({
       success: true,
       data: {

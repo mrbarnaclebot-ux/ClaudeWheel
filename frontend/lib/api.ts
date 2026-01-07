@@ -816,6 +816,91 @@ export async function getTokenActivityLogs(
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// USER TOKEN MANUAL SELL API
+// Manual sell functionality for user-owned tokens
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Get a nonce message to sign for user token manual sell
+export async function fetchUserTokenSellNonce(
+  walletAddress: string,
+  tokenId: string,
+  percentage: number
+): Promise<{
+  message: string
+  timestamp: number
+  nonce: string
+  percentage: number
+} | null> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/user/tokens/${tokenId}/sell/nonce`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-wallet-address': walletAddress,
+      },
+      body: JSON.stringify({ percentage }),
+    })
+
+    const json = await response.json()
+    if (!response.ok || !json.success) {
+      console.error('Failed to fetch user token sell nonce:', json.error)
+      return null
+    }
+
+    return json.data
+  } catch (error) {
+    console.error('Failed to fetch user token sell nonce:', error)
+    return null
+  }
+}
+
+// Execute user token manual sell with signed message
+export async function executeUserTokenSell(
+  walletAddress: string,
+  tokenId: string,
+  message: string,
+  signature: string,
+  percentage: number
+): Promise<{
+  success: boolean
+  amountSold?: number
+  signature?: string
+  message?: string
+  error?: string
+}> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/user/tokens/${tokenId}/sell`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-wallet-address': walletAddress,
+      },
+      body: JSON.stringify({
+        message,
+        signature,
+        percentage,
+      }),
+    })
+
+    const json = await response.json()
+
+    if (!response.ok || !json.success) {
+      return { success: false, error: json.error || 'Failed to execute sell' }
+    }
+
+    return {
+      success: true,
+      amountSold: json.data.amountSold,
+      signature: json.data.signature,
+      message: json.message,
+    }
+  } catch (error) {
+    console.error('Failed to execute user token sell:', error)
+    return { success: false, error: 'Network error' }
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // ADMIN TOKEN MANAGEMENT API
 // View and manage all registered tokens (admin only)
 // ═══════════════════════════════════════════════════════════════════════════

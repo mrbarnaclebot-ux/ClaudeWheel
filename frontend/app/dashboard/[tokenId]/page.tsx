@@ -13,6 +13,8 @@ import {
   getUserToken,
   getConfigNonce,
   updateUserTokenConfig,
+  fetchUserTokenSellNonce,
+  executeUserTokenSell,
 } from '@/lib/api'
 import { ActivityTerminal } from '../../components/ActivityTerminal'
 
@@ -33,6 +35,7 @@ function TokenManagementContent() {
   const [config, setConfig] = useState<Partial<UserTokenConfig>>({})
   const [isLoading, setIsLoading] = useState(true)
   const [isSaving, setIsSaving] = useState(false)
+  const [isSelling, setIsSelling] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
 
@@ -148,6 +151,49 @@ function TokenManagementContent() {
       setError(err.message || 'Failed to toggle flywheel')
     } finally {
       setIsSaving(false)
+    }
+  }
+
+  // Manual sell handler
+  const handleManualSell = async (percentage: 25 | 50 | 100) => {
+    if (!publicKey || !signMessage || !token) return
+
+    setIsSelling(true)
+    setError(null)
+    setSuccess(null)
+
+    try {
+      // Get nonce for sell
+      const nonceData = await fetchUserTokenSellNonce(publicKey.toString(), tokenId, percentage)
+      if (!nonceData) {
+        throw new Error('Failed to get sell nonce')
+      }
+
+      // Sign the message
+      const messageBytes = new TextEncoder().encode(nonceData.message)
+      const signatureBytes = await signMessage(messageBytes)
+      const signature = bs58.encode(signatureBytes)
+
+      // Execute sell
+      const result = await executeUserTokenSell(
+        publicKey.toString(),
+        tokenId,
+        nonceData.message,
+        signature,
+        percentage
+      )
+
+      if (!result.success) {
+        throw new Error(result.error || 'Sell failed')
+      }
+
+      setSuccess(`Sold ${percentage}% of tokens (${result.amountSold?.toFixed(0) || ''} tokens)`)
+      await loadToken()
+    } catch (err: any) {
+      console.error('Failed to execute sell:', err)
+      setError(err.message || 'Failed to execute sell')
+    } finally {
+      setIsSelling(false)
     }
   }
 
@@ -363,6 +409,36 @@ function TokenManagementContent() {
                   {token.ops_wallet_address}
                 </p>
               </div>
+            </div>
+          </ConfigSection>
+
+          {/* Manual Sell Section */}
+          <ConfigSection title="Manual Sell">
+            <p className="text-gray-400 text-sm mb-4">
+              Instantly sell a percentage of your token holdings from the ops wallet.
+            </p>
+            <div className="flex flex-wrap gap-3">
+              <button
+                onClick={() => handleManualSell(25)}
+                disabled={isSelling}
+                className="px-6 py-2 bg-red-500/20 text-red-400 hover:bg-red-500/30 rounded-lg font-medium transition-all disabled:opacity-50"
+              >
+                {isSelling ? '...' : 'SELL 25%'}
+              </button>
+              <button
+                onClick={() => handleManualSell(50)}
+                disabled={isSelling}
+                className="px-6 py-2 bg-red-500/20 text-red-400 hover:bg-red-500/30 rounded-lg font-medium transition-all disabled:opacity-50"
+              >
+                {isSelling ? '...' : 'SELL 50%'}
+              </button>
+              <button
+                onClick={() => handleManualSell(100)}
+                disabled={isSelling}
+                className="px-6 py-2 bg-red-600/30 text-red-400 hover:bg-red-600/40 rounded-lg font-medium transition-all disabled:opacity-50"
+              >
+                {isSelling ? '...' : 'SELL 100%'}
+              </button>
             </div>
           </ConfigSection>
 
