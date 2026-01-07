@@ -5,6 +5,8 @@ import { supabase } from '../config/database'
 import { env } from '../config/env'
 import { marketMaker } from '../services/market-maker'
 import { walletMonitor } from '../services/wallet-monitor'
+import { getClaimJobStatus } from '../jobs/claim.job'
+import { getMultiUserFlywheelJobStatus } from '../jobs/multi-flywheel.job'
 
 // ═══════════════════════════════════════════════════════════════════════════
 // ADMIN ROUTES
@@ -12,6 +14,43 @@ import { walletMonitor } from '../services/wallet-monitor'
 // ═══════════════════════════════════════════════════════════════════════════
 
 const router = Router()
+
+// ═══════════════════════════════════════════════════════════════════════════
+// TYPES
+// ═══════════════════════════════════════════════════════════════════════════
+
+interface AdminToken {
+  id: string
+  user_id: string
+  user_wallet: string
+  token_mint_address: string
+  token_symbol: string
+  token_name: string | null
+  token_image: string | null
+  token_decimals: number
+  dev_wallet_address: string
+  ops_wallet_address: string
+  is_active: boolean
+  is_verified: boolean
+  is_suspended: boolean
+  suspend_reason: string | null
+  risk_level: 'low' | 'medium' | 'high'
+  daily_trade_limit_sol: number
+  max_position_size_sol: number
+  created_at: string
+  config: {
+    flywheel_active: boolean
+    market_making_enabled: boolean
+    auto_claim_enabled: boolean
+    algorithm_mode: string
+  } | null
+  stats: {
+    total_trades: number
+    total_volume_sol: number
+    total_claims_sol: number
+    last_trade_at: string | null
+  } | null
+}
 
 // Schema for config update request
 const ConfigUpdateSchema = z.object({
@@ -298,6 +337,453 @@ router.post('/manual-sell/nonce', (req: Request, res: Response) => {
   const { message, timestamp, nonce } = generateSecureNonceMessage('manual_sell', `${percentage}%`)
 
   res.json({ message, timestamp, nonce, percentage })
+})
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ADMIN TOKEN MANAGEMENT
+// View and manage all registered tokens across all users
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Middleware to verify admin authorization via wallet signature
+ */
+async function verifyAdminAuth(req: Request, res: Response, next: Function) {
+  try {
+    const signature = req.headers['x-wallet-signature'] as string
+    const message = req.headers['x-wallet-message'] as string
+    const publicKey = req.headers['x-wallet-pubkey'] as string
+
+    if (!signature || !message || !publicKey) {
+      return res.status(401).json({ error: 'Missing authentication headers' })
+    }
+
+    // Verify the public key matches the authorized dev wallet
+    const authorizedWallet = env.devWalletAddress
+    if (!authorizedWallet || publicKey !== authorizedWallet) {
+      return res.status(403).json({ error: 'Unauthorized: wallet not authorized for admin actions' })
+    }
+
+    // Verify the message is recent
+    if (!isMessageRecent(message, 10 * 60 * 1000)) { // 10 minute window for browsing
+      return res.status(400).json({ error: 'Session expired. Please re-authenticate.' })
+    }
+
+    // Verify the signature
+    const verificationResult = verifySignature(message, signature, publicKey)
+    if (!verificationResult.valid) {
+      return res.status(401).json({ error: 'Invalid signature' })
+    }
+
+    next()
+  } catch (error) {
+    console.error('Admin auth error:', error)
+    return res.status(500).json({ error: 'Authentication failed' })
+  }
+}
+
+/**
+ * GET /api/admin/tokens
+ * List all registered tokens with their status (admin only)
+ */
+router.get('/tokens', verifyAdminAuth, async (req: Request, res: Response) => {
+  try {
+    if (!supabase) {
+      return res.status(500).json({ error: 'Database not configured' })
+    }
+
+    // Query with filters
+    const { status, risk, search, limit = 50, offset = 0 } = req.query
+
+    let query = supabase
+      .from('user_tokens')
+      .select(`
+        id,
+        user_id,
+        token_mint_address,
+        token_symbol,
+        token_name,
+        token_image,
+        token_decimals,
+        dev_wallet_address,
+        ops_wallet_address,
+        is_active,
+        is_verified,
+        is_suspended,
+        suspend_reason,
+        risk_level,
+        daily_trade_limit_sol,
+        max_position_size_sol,
+        created_at,
+        users!inner(wallet_address),
+        user_token_config(
+          flywheel_active,
+          market_making_enabled,
+          auto_claim_enabled,
+          algorithm_mode
+        )
+      `)
+      .order('created_at', { ascending: false })
+      .range(Number(offset), Number(offset) + Number(limit) - 1)
+
+    // Apply filters
+    if (status === 'active') {
+      query = query.eq('is_active', true).eq('is_suspended', false)
+    } else if (status === 'suspended') {
+      query = query.eq('is_suspended', true)
+    } else if (status === 'inactive') {
+      query = query.eq('is_active', false)
+    }
+
+    if (risk && ['low', 'medium', 'high'].includes(risk as string)) {
+      query = query.eq('risk_level', risk)
+    }
+
+    if (search) {
+      query = query.or(`token_symbol.ilike.%${search}%,token_mint_address.ilike.%${search}%`)
+    }
+
+    const { data: tokens, error } = await query
+
+    if (error) {
+      console.error('Error fetching tokens:', error)
+      return res.status(500).json({ error: 'Failed to fetch tokens' })
+    }
+
+    // Get token count for pagination
+    const { count } = await supabase
+      .from('user_tokens')
+      .select('*', { count: 'exact', head: true })
+
+    // Format response
+    const formattedTokens = (tokens || []).map((token: any) => ({
+      id: token.id,
+      userId: token.user_id,
+      userWallet: token.users?.wallet_address || 'Unknown',
+      tokenMint: token.token_mint_address,
+      tokenSymbol: token.token_symbol,
+      tokenName: token.token_name,
+      tokenImage: token.token_image,
+      tokenDecimals: token.token_decimals,
+      devWallet: token.dev_wallet_address,
+      opsWallet: token.ops_wallet_address,
+      isActive: token.is_active,
+      isVerified: token.is_verified || false,
+      isSuspended: token.is_suspended || false,
+      suspendReason: token.suspend_reason,
+      riskLevel: token.risk_level || 'low',
+      dailyTradeLimitSol: token.daily_trade_limit_sol || 10,
+      maxPositionSizeSol: token.max_position_size_sol || 5,
+      createdAt: token.created_at,
+      config: token.user_token_config?.[0] || null,
+    }))
+
+    return res.json({
+      success: true,
+      data: {
+        tokens: formattedTokens,
+        total: count || 0,
+        limit: Number(limit),
+        offset: Number(offset),
+      },
+    })
+  } catch (error) {
+    console.error('Error in admin tokens list:', error)
+    return res.status(500).json({ error: 'Internal server error' })
+  }
+})
+
+/**
+ * GET /api/admin/tokens/:id
+ * Get detailed info for a specific token (admin only)
+ */
+router.get('/tokens/:id', verifyAdminAuth, async (req: Request, res: Response) => {
+  try {
+    if (!supabase) {
+      return res.status(500).json({ error: 'Database not configured' })
+    }
+
+    const { id } = req.params
+
+    const { data: token, error } = await supabase
+      .from('user_tokens')
+      .select(`
+        *,
+        users!inner(wallet_address, display_name, created_at),
+        user_token_config(*),
+        user_flywheel_state(*),
+        user_claim_history(amount_sol, claimed_at)
+      `)
+      .eq('id', id)
+      .single()
+
+    if (error || !token) {
+      return res.status(404).json({ error: 'Token not found' })
+    }
+
+    // Calculate stats
+    const totalClaims = (token.user_claim_history || []).reduce(
+      (sum: number, claim: any) => sum + (claim.amount_sol || 0),
+      0
+    )
+
+    return res.json({
+      success: true,
+      data: {
+        ...token,
+        userWallet: token.users?.wallet_address,
+        userName: token.users?.display_name,
+        userCreatedAt: token.users?.created_at,
+        config: token.user_token_config?.[0] || null,
+        flywheelState: token.user_flywheel_state?.[0] || null,
+        stats: {
+          totalClaimsSol: totalClaims,
+          claimCount: (token.user_claim_history || []).length,
+        },
+      },
+    })
+  } catch (error) {
+    console.error('Error fetching token details:', error)
+    return res.status(500).json({ error: 'Internal server error' })
+  }
+})
+
+/**
+ * POST /api/admin/tokens/:id/verify
+ * Mark a token as verified (admin only)
+ */
+router.post('/tokens/:id/verify', verifyAdminAuth, async (req: Request, res: Response) => {
+  try {
+    if (!supabase) {
+      return res.status(500).json({ error: 'Database not configured' })
+    }
+
+    const { id } = req.params
+
+    const { error } = await supabase
+      .from('user_tokens')
+      .update({ is_verified: true })
+      .eq('id', id)
+
+    if (error) {
+      console.error('Error verifying token:', error)
+      return res.status(500).json({ error: 'Failed to verify token' })
+    }
+
+    console.log(`✅ Admin verified token: ${id}`)
+
+    return res.json({
+      success: true,
+      message: 'Token verified successfully',
+    })
+  } catch (error) {
+    console.error('Error verifying token:', error)
+    return res.status(500).json({ error: 'Internal server error' })
+  }
+})
+
+/**
+ * POST /api/admin/tokens/:id/suspend
+ * Suspend a token (admin only)
+ */
+router.post('/tokens/:id/suspend', verifyAdminAuth, async (req: Request, res: Response) => {
+  try {
+    if (!supabase) {
+      return res.status(500).json({ error: 'Database not configured' })
+    }
+
+    const { id } = req.params
+    const { reason } = req.body
+
+    if (!reason || typeof reason !== 'string') {
+      return res.status(400).json({ error: 'Suspension reason is required' })
+    }
+
+    // Suspend the token and disable all automation
+    const { error: tokenError } = await supabase
+      .from('user_tokens')
+      .update({
+        is_suspended: true,
+        suspend_reason: reason,
+      })
+      .eq('id', id)
+
+    if (tokenError) {
+      console.error('Error suspending token:', tokenError)
+      return res.status(500).json({ error: 'Failed to suspend token' })
+    }
+
+    // Disable automation in config
+    await supabase
+      .from('user_token_config')
+      .update({
+        flywheel_active: false,
+        market_making_enabled: false,
+        auto_claim_enabled: false,
+      })
+      .eq('user_token_id', id)
+
+    console.log(`⚠️ Admin suspended token: ${id} - Reason: ${reason}`)
+
+    return res.json({
+      success: true,
+      message: 'Token suspended successfully',
+    })
+  } catch (error) {
+    console.error('Error suspending token:', error)
+    return res.status(500).json({ error: 'Internal server error' })
+  }
+})
+
+/**
+ * POST /api/admin/tokens/:id/unsuspend
+ * Remove suspension from a token (admin only)
+ */
+router.post('/tokens/:id/unsuspend', verifyAdminAuth, async (req: Request, res: Response) => {
+  try {
+    if (!supabase) {
+      return res.status(500).json({ error: 'Database not configured' })
+    }
+
+    const { id } = req.params
+
+    const { error } = await supabase
+      .from('user_tokens')
+      .update({
+        is_suspended: false,
+        suspend_reason: null,
+      })
+      .eq('id', id)
+
+    if (error) {
+      console.error('Error unsuspending token:', error)
+      return res.status(500).json({ error: 'Failed to unsuspend token' })
+    }
+
+    console.log(`✅ Admin unsuspended token: ${id}`)
+
+    return res.json({
+      success: true,
+      message: 'Token unsuspended successfully',
+    })
+  } catch (error) {
+    console.error('Error unsuspending token:', error)
+    return res.status(500).json({ error: 'Internal server error' })
+  }
+})
+
+/**
+ * PUT /api/admin/tokens/:id/limits
+ * Update trading limits for a token (admin only)
+ */
+router.put('/tokens/:id/limits', verifyAdminAuth, async (req: Request, res: Response) => {
+  try {
+    if (!supabase) {
+      return res.status(500).json({ error: 'Database not configured' })
+    }
+
+    const { id } = req.params
+    const { dailyTradeLimitSol, maxPositionSizeSol, riskLevel } = req.body
+
+    const updates: any = {}
+
+    if (typeof dailyTradeLimitSol === 'number' && dailyTradeLimitSol >= 0) {
+      updates.daily_trade_limit_sol = dailyTradeLimitSol
+    }
+
+    if (typeof maxPositionSizeSol === 'number' && maxPositionSizeSol >= 0) {
+      updates.max_position_size_sol = maxPositionSizeSol
+    }
+
+    if (riskLevel && ['low', 'medium', 'high'].includes(riskLevel)) {
+      updates.risk_level = riskLevel
+    }
+
+    if (Object.keys(updates).length === 0) {
+      return res.status(400).json({ error: 'No valid updates provided' })
+    }
+
+    const { error } = await supabase
+      .from('user_tokens')
+      .update(updates)
+      .eq('id', id)
+
+    if (error) {
+      console.error('Error updating limits:', error)
+      return res.status(500).json({ error: 'Failed to update limits' })
+    }
+
+    console.log(`✅ Admin updated limits for token: ${id}`, updates)
+
+    return res.json({
+      success: true,
+      message: 'Limits updated successfully',
+      updates,
+    })
+  } catch (error) {
+    console.error('Error updating limits:', error)
+    return res.status(500).json({ error: 'Internal server error' })
+  }
+})
+
+/**
+ * GET /api/admin/platform-stats
+ * Get platform-wide statistics (admin only)
+ */
+router.get('/platform-stats', verifyAdminAuth, async (req: Request, res: Response) => {
+  try {
+    if (!supabase) {
+      return res.status(500).json({ error: 'Database not configured' })
+    }
+
+    // Get counts
+    const [usersResult, tokensResult, activeTokensResult, suspendedTokensResult] = await Promise.all([
+      supabase.from('users').select('*', { count: 'exact', head: true }),
+      supabase.from('user_tokens').select('*', { count: 'exact', head: true }),
+      supabase.from('user_tokens').select('*', { count: 'exact', head: true }).eq('is_active', true).eq('is_suspended', false),
+      supabase.from('user_tokens').select('*', { count: 'exact', head: true }).eq('is_suspended', true),
+    ])
+
+    // Get active flywheel count
+    const { count: activeFlywheels } = await supabase
+      .from('user_token_config')
+      .select('*', { count: 'exact', head: true })
+      .eq('flywheel_active', true)
+
+    // Get job statuses
+    const claimJobStatus = getClaimJobStatus()
+    const flywheelJobStatus = getMultiUserFlywheelJobStatus()
+
+    return res.json({
+      success: true,
+      data: {
+        users: {
+          total: usersResult.count || 0,
+        },
+        tokens: {
+          total: tokensResult.count || 0,
+          active: activeTokensResult.count || 0,
+          suspended: suspendedTokensResult.count || 0,
+          activeFlywheels: activeFlywheels || 0,
+        },
+        jobs: {
+          claim: claimJobStatus,
+          flywheel: flywheelJobStatus,
+        },
+      },
+    })
+  } catch (error) {
+    console.error('Error fetching platform stats:', error)
+    return res.status(500).json({ error: 'Internal server error' })
+  }
+})
+
+/**
+ * POST /api/admin/auth/nonce
+ * Generate a nonce for admin authentication
+ */
+router.post('/auth/nonce', (req: Request, res: Response) => {
+  const { message, timestamp, nonce } = generateSecureNonceMessage('admin_auth', 'access')
+  res.json({ message, timestamp, nonce })
 })
 
 export default router

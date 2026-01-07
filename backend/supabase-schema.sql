@@ -149,3 +149,146 @@ CREATE POLICY "Allow service role update" ON config FOR UPDATE USING (true);
 
 CREATE INDEX IF NOT EXISTS idx_transactions_created_at ON transactions(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_transactions_type ON transactions(type);
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- MULTI-USER TABLES
+-- ═══════════════════════════════════════════════════════════════════════════
+
+-- Users table (wallet-based authentication)
+CREATE TABLE IF NOT EXISTS users (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  wallet_address TEXT NOT NULL UNIQUE,
+  display_name TEXT,
+  is_active BOOLEAN DEFAULT true,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- User tokens with encrypted dev wallet keys
+CREATE TABLE IF NOT EXISTS user_tokens (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  token_mint_address TEXT NOT NULL,
+  token_symbol TEXT NOT NULL,
+  token_name TEXT,
+  token_image TEXT,
+  token_decimals INTEGER DEFAULT 6,
+  dev_wallet_address TEXT NOT NULL,
+  dev_wallet_private_key_encrypted TEXT NOT NULL,
+  encryption_iv TEXT NOT NULL,
+  ops_wallet_address TEXT NOT NULL,
+  is_active BOOLEAN DEFAULT true,
+  is_graduated BOOLEAN DEFAULT false,
+  -- Protection features
+  is_verified BOOLEAN DEFAULT false,
+  is_suspended BOOLEAN DEFAULT false,
+  suspend_reason TEXT,
+  risk_level TEXT DEFAULT 'low' CHECK (risk_level IN ('low', 'medium', 'high')),
+  daily_trade_limit_sol DECIMAL DEFAULT 10,
+  max_position_size_sol DECIMAL DEFAULT 5,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(user_id, token_mint_address)
+);
+
+-- Per-user token config
+CREATE TABLE IF NOT EXISTS user_token_config (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_token_id UUID NOT NULL REFERENCES user_tokens(id) ON DELETE CASCADE UNIQUE,
+  flywheel_active BOOLEAN DEFAULT false,
+  market_making_enabled BOOLEAN DEFAULT false,
+  auto_claim_enabled BOOLEAN DEFAULT true,
+  fee_threshold_sol DECIMAL DEFAULT 0.01,
+  min_buy_amount_sol DECIMAL DEFAULT 0.01,
+  max_buy_amount_sol DECIMAL DEFAULT 0.1,
+  max_sell_amount_tokens DECIMAL DEFAULT 1000000,
+  buy_interval_minutes INTEGER DEFAULT 5,
+  slippage_bps INTEGER DEFAULT 300,
+  algorithm_mode TEXT DEFAULT 'simple' CHECK (algorithm_mode IN ('simple', 'smart', 'rebalance')),
+  target_sol_allocation INTEGER DEFAULT 30,
+  target_token_allocation INTEGER DEFAULT 70,
+  rebalance_threshold INTEGER DEFAULT 10,
+  use_twap BOOLEAN DEFAULT true,
+  twap_threshold_usd DECIMAL DEFAULT 50,
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Per-user flywheel state
+CREATE TABLE IF NOT EXISTS user_flywheel_state (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_token_id UUID NOT NULL REFERENCES user_tokens(id) ON DELETE CASCADE UNIQUE,
+  cycle_phase TEXT DEFAULT 'buy' CHECK (cycle_phase IN ('buy', 'sell')),
+  buy_count INTEGER DEFAULT 0,
+  sell_count INTEGER DEFAULT 0,
+  sell_phase_token_snapshot DECIMAL DEFAULT 0,
+  sell_amount_per_tx DECIMAL DEFAULT 0,
+  last_trade_at TIMESTAMPTZ,
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- User claim history
+CREATE TABLE IF NOT EXISTS user_claim_history (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_token_id UUID NOT NULL REFERENCES user_tokens(id) ON DELETE CASCADE,
+  amount_sol DECIMAL NOT NULL,
+  amount_usd DECIMAL DEFAULT 0,
+  transaction_signature TEXT,
+  claimed_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- MULTI-USER INDEXES
+-- ═══════════════════════════════════════════════════════════════════════════
+
+CREATE INDEX IF NOT EXISTS idx_users_wallet ON users(wallet_address);
+CREATE INDEX IF NOT EXISTS idx_user_tokens_user_id ON user_tokens(user_id);
+CREATE INDEX IF NOT EXISTS idx_user_tokens_mint ON user_tokens(token_mint_address);
+CREATE INDEX IF NOT EXISTS idx_user_tokens_active ON user_tokens(is_active) WHERE is_active = true;
+CREATE INDEX IF NOT EXISTS idx_user_tokens_suspended ON user_tokens(is_suspended);
+CREATE INDEX IF NOT EXISTS idx_user_token_config_flywheel ON user_token_config(flywheel_active) WHERE flywheel_active = true;
+CREATE INDEX IF NOT EXISTS idx_user_token_config_auto_claim ON user_token_config(auto_claim_enabled) WHERE auto_claim_enabled = true;
+CREATE INDEX IF NOT EXISTS idx_user_claim_history_token ON user_claim_history(user_token_id);
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- MULTI-USER RLS POLICIES
+-- ═══════════════════════════════════════════════════════════════════════════
+
+ALTER TABLE users ENABLE ROW LEVEL SECURITY;
+ALTER TABLE user_tokens ENABLE ROW LEVEL SECURITY;
+ALTER TABLE user_token_config ENABLE ROW LEVEL SECURITY;
+ALTER TABLE user_flywheel_state ENABLE ROW LEVEL SECURITY;
+ALTER TABLE user_claim_history ENABLE ROW LEVEL SECURITY;
+
+-- Users policies
+DROP POLICY IF EXISTS "Allow service role all" ON users;
+CREATE POLICY "Allow service role all" ON users FOR ALL USING (true);
+
+-- User tokens policies
+DROP POLICY IF EXISTS "Allow service role all" ON user_tokens;
+CREATE POLICY "Allow service role all" ON user_tokens FOR ALL USING (true);
+
+-- User token config policies
+DROP POLICY IF EXISTS "Allow service role all" ON user_token_config;
+CREATE POLICY "Allow service role all" ON user_token_config FOR ALL USING (true);
+
+-- User flywheel state policies
+DROP POLICY IF EXISTS "Allow service role all" ON user_flywheel_state;
+CREATE POLICY "Allow service role all" ON user_flywheel_state FOR ALL USING (true);
+
+-- User claim history policies
+DROP POLICY IF EXISTS "Allow service role all" ON user_claim_history;
+CREATE POLICY "Allow service role all" ON user_claim_history FOR ALL USING (true);
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- FUNCTION TO INCREMENT CLAIM STATS
+-- ═══════════════════════════════════════════════════════════════════════════
+
+CREATE OR REPLACE FUNCTION increment_claim_stats(
+  p_user_token_id UUID,
+  p_amount_sol DECIMAL
+) RETURNS void AS $$
+BEGIN
+  -- Update any aggregate tables if needed
+  NULL;
+END;
+$$ LANGUAGE plpgsql;

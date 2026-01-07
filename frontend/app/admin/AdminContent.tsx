@@ -14,9 +14,18 @@ import {
   fetchBagsDashboard,
   fetchManualSellNonce,
   executeManualSell,
+  fetchAdminAuthNonce,
+  fetchAdminTokens,
+  fetchPlatformStats,
+  verifyAdminToken,
+  suspendAdminToken,
+  unsuspendAdminToken,
+  updateAdminTokenLimits,
   type SystemStatus,
   type LogEntry,
   type BagsDashboardData,
+  type AdminToken,
+  type PlatformStats,
 } from '@/lib/api'
 import bs58 from 'bs58'
 
@@ -87,6 +96,17 @@ export default function AdminContent() {
   const [isSelling, setIsSelling] = useState(false)
   const [sellMessage, setSellMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null)
 
+  // Token management state
+  const [showTokenManagement, setShowTokenManagement] = useState(true)
+  const [adminTokens, setAdminTokens] = useState<AdminToken[]>([])
+  const [platformStats, setPlatformStats] = useState<PlatformStats | null>(null)
+  const [isLoadingTokens, setIsLoadingTokens] = useState(false)
+  const [adminAuthSignature, setAdminAuthSignature] = useState<string | null>(null)
+  const [adminAuthMessage, setAdminAuthMessage] = useState<string | null>(null)
+  const [tokenFilter, setTokenFilter] = useState<'all' | 'active' | 'suspended'>('all')
+  const [suspendModal, setSuspendModal] = useState<{ tokenId: string; symbol: string } | null>(null)
+  const [suspendReason, setSuspendReason] = useState('')
+
   // Load system status when authorized
   const loadSystemStatus = useCallback(async () => {
     setIsLoadingStatus(true)
@@ -152,6 +172,114 @@ export default function AdminContent() {
     const pastedText = e.clipboardData.getData('text').trim()
     setConfig(prev => ({ ...prev, token_mint_address: pastedText }))
   }, [])
+
+  // Authenticate admin and load tokens
+  const authenticateAndLoadTokens = useCallback(async () => {
+    if (!publicKey || !signMessage) return
+
+    setIsLoadingTokens(true)
+    try {
+      // Get auth nonce
+      const nonceData = await fetchAdminAuthNonce()
+      if (!nonceData) {
+        console.error('Failed to get admin auth nonce')
+        return
+      }
+
+      // Sign the message
+      const messageBytes = new TextEncoder().encode(nonceData.message)
+      const signatureBytes = await signMessage(messageBytes)
+      const signature = bs58.encode(signatureBytes)
+
+      // Store auth credentials for subsequent requests
+      setAdminAuthSignature(signature)
+      setAdminAuthMessage(nonceData.message)
+
+      // Fetch tokens and stats
+      const [tokensData, stats] = await Promise.all([
+        fetchAdminTokens(publicKey.toString(), signature, nonceData.message, {
+          status: tokenFilter === 'all' ? undefined : tokenFilter,
+        }),
+        fetchPlatformStats(publicKey.toString(), signature, nonceData.message),
+      ])
+
+      if (tokensData) setAdminTokens(tokensData.tokens)
+      if (stats) setPlatformStats(stats)
+    } catch (error) {
+      console.error('Failed to load admin tokens:', error)
+    } finally {
+      setIsLoadingTokens(false)
+    }
+  }, [publicKey, signMessage, tokenFilter])
+
+  // Reload tokens with existing auth
+  const reloadTokens = useCallback(async () => {
+    if (!publicKey || !adminAuthSignature || !adminAuthMessage) return
+
+    setIsLoadingTokens(true)
+    try {
+      const tokensData = await fetchAdminTokens(
+        publicKey.toString(),
+        adminAuthSignature,
+        adminAuthMessage,
+        { status: tokenFilter === 'all' ? undefined : tokenFilter }
+      )
+      if (tokensData) setAdminTokens(tokensData.tokens)
+    } catch (error) {
+      console.error('Failed to reload tokens:', error)
+    } finally {
+      setIsLoadingTokens(false)
+    }
+  }, [publicKey, adminAuthSignature, adminAuthMessage, tokenFilter])
+
+  // Handle verify token
+  const handleVerifyToken = async (tokenId: string) => {
+    if (!publicKey || !adminAuthSignature || !adminAuthMessage) return
+
+    const success = await verifyAdminToken(
+      publicKey.toString(),
+      adminAuthSignature,
+      adminAuthMessage,
+      tokenId
+    )
+    if (success) {
+      reloadTokens()
+    }
+  }
+
+  // Handle suspend token
+  const handleSuspendToken = async () => {
+    if (!publicKey || !adminAuthSignature || !adminAuthMessage || !suspendModal) return
+    if (!suspendReason.trim()) return
+
+    const success = await suspendAdminToken(
+      publicKey.toString(),
+      adminAuthSignature,
+      adminAuthMessage,
+      suspendModal.tokenId,
+      suspendReason
+    )
+    if (success) {
+      setSuspendModal(null)
+      setSuspendReason('')
+      reloadTokens()
+    }
+  }
+
+  // Handle unsuspend token
+  const handleUnsuspendToken = async (tokenId: string) => {
+    if (!publicKey || !adminAuthSignature || !adminAuthMessage) return
+
+    const success = await unsuspendAdminToken(
+      publicKey.toString(),
+      adminAuthSignature,
+      adminAuthMessage,
+      tokenId
+    )
+    if (success) {
+      reloadTokens()
+    }
+  }
 
   // Check authorization
   useEffect(() => {
@@ -764,6 +892,248 @@ export default function AdminContent() {
             </div>
           )}
         </motion.div>
+
+        {/* Token Management Panel */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.2 }}
+          className="card-glow bg-bg-card p-4"
+        >
+          <div
+            className="flex items-center justify-between cursor-pointer"
+            onClick={() => setShowTokenManagement(!showTokenManagement)}
+          >
+            <h2 className="font-display text-lg font-semibold text-text-primary flex items-center gap-2">
+              <span className="text-accent-primary">◈</span>
+              Token Management
+              {platformStats && (
+                <span className="text-xs font-mono text-text-muted">
+                  ({platformStats.tokens.total} tokens, {platformStats.tokens.activeFlywheels} active)
+                </span>
+              )}
+            </h2>
+            <div className="flex items-center gap-2">
+              {!adminAuthSignature ? (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    authenticateAndLoadTokens()
+                  }}
+                  disabled={isLoadingTokens}
+                  className="px-3 py-1 text-xs font-mono bg-accent-primary/20 text-accent-primary border border-accent-primary/30 rounded-lg hover:bg-accent-primary/30 transition-colors disabled:opacity-50"
+                >
+                  {isLoadingTokens ? 'Authenticating...' : 'Load Tokens'}
+                </button>
+              ) : (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    reloadTokens()
+                  }}
+                  disabled={isLoadingTokens}
+                  className="px-3 py-1 text-xs font-mono bg-bg-secondary hover:bg-bg-card-hover border border-border-subtle rounded-lg transition-colors disabled:opacity-50"
+                >
+                  {isLoadingTokens ? 'Loading...' : 'Refresh'}
+                </button>
+              )}
+              <span className="text-text-muted">{showTokenManagement ? '▼' : '▶'}</span>
+            </div>
+          </div>
+
+          {showTokenManagement && adminAuthSignature && (
+            <div className="mt-4">
+              {/* Platform Stats */}
+              {platformStats && (
+                <div className="grid grid-cols-4 gap-4 mb-4">
+                  <div className="bg-bg-secondary rounded-lg p-3 text-center">
+                    <div className="text-2xl font-bold text-text-primary">{platformStats.users.total}</div>
+                    <div className="text-xs text-text-muted font-mono">Users</div>
+                  </div>
+                  <div className="bg-bg-secondary rounded-lg p-3 text-center">
+                    <div className="text-2xl font-bold text-success">{platformStats.tokens.active}</div>
+                    <div className="text-xs text-text-muted font-mono">Active</div>
+                  </div>
+                  <div className="bg-bg-secondary rounded-lg p-3 text-center">
+                    <div className="text-2xl font-bold text-error">{platformStats.tokens.suspended}</div>
+                    <div className="text-xs text-text-muted font-mono">Suspended</div>
+                  </div>
+                  <div className="bg-bg-secondary rounded-lg p-3 text-center">
+                    <div className="text-2xl font-bold text-accent-primary">{platformStats.tokens.activeFlywheels}</div>
+                    <div className="text-xs text-text-muted font-mono">Flywheels</div>
+                  </div>
+                </div>
+              )}
+
+              {/* Filter Tabs */}
+              <div className="flex gap-2 mb-4">
+                {(['all', 'active', 'suspended'] as const).map((filter) => (
+                  <button
+                    key={filter}
+                    onClick={() => {
+                      setTokenFilter(filter)
+                      reloadTokens()
+                    }}
+                    className={`px-3 py-1 text-xs font-mono rounded-lg border transition-colors ${
+                      tokenFilter === filter
+                        ? 'bg-accent-primary/20 text-accent-primary border-accent-primary/30'
+                        : 'bg-bg-secondary text-text-muted border-border-subtle hover:bg-bg-card-hover'
+                    }`}
+                  >
+                    {filter.charAt(0).toUpperCase() + filter.slice(1)}
+                  </button>
+                ))}
+              </div>
+
+              {/* Tokens List */}
+              <div className="space-y-2 max-h-96 overflow-y-auto">
+                {adminTokens.length === 0 && !isLoadingTokens && (
+                  <div className="text-center text-text-muted font-mono py-8">
+                    No tokens found
+                  </div>
+                )}
+                {adminTokens.map((token) => (
+                  <div
+                    key={token.id}
+                    className={`bg-bg-secondary rounded-lg p-3 border ${
+                      token.isSuspended
+                        ? 'border-error/30'
+                        : token.isVerified
+                        ? 'border-success/30'
+                        : 'border-border-subtle'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        {token.tokenImage ? (
+                          <img src={token.tokenImage} alt={token.tokenSymbol} className="w-8 h-8 rounded-full" />
+                        ) : (
+                          <div className="w-8 h-8 rounded-full bg-accent-primary/20 flex items-center justify-center text-accent-primary font-bold text-sm">
+                            {token.tokenSymbol.charAt(0)}
+                          </div>
+                        )}
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="font-semibold text-text-primary">{token.tokenSymbol}</span>
+                            {token.isVerified && <span className="text-success text-xs">✓ Verified</span>}
+                            {token.isSuspended && <span className="text-error text-xs">⚠ Suspended</span>}
+                          </div>
+                          <div className="text-xs text-text-muted font-mono">
+                            User: {token.userWallet.slice(0, 6)}...{token.userWallet.slice(-4)}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        {/* Risk Badge */}
+                        <span className={`px-2 py-0.5 text-xs rounded-full ${
+                          token.riskLevel === 'high' ? 'bg-error/20 text-error' :
+                          token.riskLevel === 'medium' ? 'bg-warning/20 text-warning' :
+                          'bg-success/20 text-success'
+                        }`}>
+                          {token.riskLevel}
+                        </span>
+
+                        {/* Flywheel Status */}
+                        {token.config?.flywheel_active && (
+                          <span className="px-2 py-0.5 text-xs bg-accent-primary/20 text-accent-primary rounded-full">
+                            Flywheel Active
+                          </span>
+                        )}
+
+                        {/* Actions */}
+                        {!token.isVerified && !token.isSuspended && (
+                          <button
+                            onClick={() => handleVerifyToken(token.id)}
+                            className="px-2 py-1 text-xs bg-success/20 text-success border border-success/30 rounded hover:bg-success/30 transition-colors"
+                          >
+                            Verify
+                          </button>
+                        )}
+                        {!token.isSuspended ? (
+                          <button
+                            onClick={() => setSuspendModal({ tokenId: token.id, symbol: token.tokenSymbol })}
+                            className="px-2 py-1 text-xs bg-error/20 text-error border border-error/30 rounded hover:bg-error/30 transition-colors"
+                          >
+                            Suspend
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => handleUnsuspendToken(token.id)}
+                            className="px-2 py-1 text-xs bg-success/20 text-success border border-success/30 rounded hover:bg-success/30 transition-colors"
+                          >
+                            Unsuspend
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Token Details (collapsed) */}
+                    <div className="mt-2 pt-2 border-t border-border-subtle grid grid-cols-3 gap-2 text-xs">
+                      <div>
+                        <span className="text-text-muted">Daily Limit:</span>{' '}
+                        <span className="text-text-primary">{token.dailyTradeLimitSol} SOL</span>
+                      </div>
+                      <div>
+                        <span className="text-text-muted">Max Position:</span>{' '}
+                        <span className="text-text-primary">{token.maxPositionSizeSol} SOL</span>
+                      </div>
+                      <div>
+                        <span className="text-text-muted">Created:</span>{' '}
+                        <span className="text-text-primary">{new Date(token.createdAt).toLocaleDateString()}</span>
+                      </div>
+                    </div>
+
+                    {/* Suspend Reason if suspended */}
+                    {token.isSuspended && token.suspendReason && (
+                      <div className="mt-2 p-2 bg-error/10 rounded text-xs text-error">
+                        Reason: {token.suspendReason}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </motion.div>
+
+        {/* Suspend Modal */}
+        {suspendModal && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+            <div className="bg-bg-card border border-border-subtle rounded-xl p-6 max-w-md w-full mx-4">
+              <h3 className="text-lg font-semibold text-text-primary mb-4">
+                Suspend {suspendModal.symbol}
+              </h3>
+              <p className="text-text-muted text-sm mb-4">
+                This will immediately stop all automation for this token. The user will be notified.
+              </p>
+              <textarea
+                value={suspendReason}
+                onChange={(e) => setSuspendReason(e.target.value)}
+                placeholder="Enter suspension reason..."
+                className="w-full bg-bg-secondary border border-border-subtle rounded-lg px-4 py-3 font-mono text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:border-error mb-4 h-24"
+              />
+              <div className="flex gap-3 justify-end">
+                <button
+                  onClick={() => {
+                    setSuspendModal(null)
+                    setSuspendReason('')
+                  }}
+                  className="px-4 py-2 text-sm font-mono bg-bg-secondary text-text-muted border border-border-subtle rounded-lg hover:bg-bg-card-hover transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleSuspendToken}
+                  disabled={!suspendReason.trim()}
+                  className="px-4 py-2 text-sm font-mono bg-error/20 text-error border border-error/30 rounded-lg hover:bg-error/30 transition-colors disabled:opacity-50"
+                >
+                  Suspend Token
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Config Forms */}

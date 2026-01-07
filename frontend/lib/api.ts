@@ -758,3 +758,239 @@ export async function updateUserTokenConfig(
     throw error
   }
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ADMIN TOKEN MANAGEMENT API
+// View and manage all registered tokens (admin only)
+// ═══════════════════════════════════════════════════════════════════════════
+
+export interface AdminToken {
+  id: string
+  userId: string
+  userWallet: string
+  tokenMint: string
+  tokenSymbol: string
+  tokenName: string | null
+  tokenImage: string | null
+  tokenDecimals: number
+  devWallet: string
+  opsWallet: string
+  isActive: boolean
+  isVerified: boolean
+  isSuspended: boolean
+  suspendReason: string | null
+  riskLevel: 'low' | 'medium' | 'high'
+  dailyTradeLimitSol: number
+  maxPositionSizeSol: number
+  createdAt: string
+  config: {
+    flywheel_active: boolean
+    market_making_enabled: boolean
+    auto_claim_enabled: boolean
+    algorithm_mode: string
+  } | null
+}
+
+export interface PlatformStats {
+  users: {
+    total: number
+  }
+  tokens: {
+    total: number
+    active: number
+    suspended: number
+    activeFlywheels: number
+  }
+  jobs: {
+    claim: {
+      enabled: boolean
+      running: boolean
+      intervalMinutes: number
+      lastRunAt: string | null
+    }
+    flywheel: {
+      enabled: boolean
+      running: boolean
+      intervalMinutes: number
+      lastRunAt: string | null
+    }
+  }
+}
+
+// Helper to create admin auth headers
+function createAdminHeaders(
+  publicKey: string,
+  signature: string,
+  message: string
+): HeadersInit {
+  return {
+    'Content-Type': 'application/json',
+    'x-wallet-pubkey': publicKey,
+    'x-wallet-signature': signature,
+    'x-wallet-message': message,
+  }
+}
+
+// Get admin auth nonce
+export async function fetchAdminAuthNonce(): Promise<{
+  message: string
+  timestamp: number
+  nonce: string
+} | null> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/admin/auth/nonce`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    })
+
+    if (!response.ok) return null
+
+    const json = await response.json()
+    return json
+  } catch (error) {
+    console.error('Failed to fetch admin auth nonce:', error)
+    return null
+  }
+}
+
+// Fetch all registered tokens (admin only)
+export async function fetchAdminTokens(
+  publicKey: string,
+  signature: string,
+  message: string,
+  filters?: { status?: string; risk?: string; search?: string; limit?: number; offset?: number }
+): Promise<{ tokens: AdminToken[]; total: number } | null> {
+  try {
+    const params = new URLSearchParams()
+    if (filters?.status) params.set('status', filters.status)
+    if (filters?.risk) params.set('risk', filters.risk)
+    if (filters?.search) params.set('search', filters.search)
+    if (filters?.limit) params.set('limit', String(filters.limit))
+    if (filters?.offset) params.set('offset', String(filters.offset))
+
+    const response = await fetch(`${API_BASE_URL}/api/admin/tokens?${params}`, {
+      headers: createAdminHeaders(publicKey, signature, message),
+    })
+
+    if (!response.ok) return null
+
+    const json = await response.json()
+    return json.success ? json.data : null
+  } catch (error) {
+    console.error('Failed to fetch admin tokens:', error)
+    return null
+  }
+}
+
+// Get platform stats (admin only)
+export async function fetchPlatformStats(
+  publicKey: string,
+  signature: string,
+  message: string
+): Promise<PlatformStats | null> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/admin/platform-stats`, {
+      headers: createAdminHeaders(publicKey, signature, message),
+    })
+
+    if (!response.ok) return null
+
+    const json = await response.json()
+    return json.success ? json.data : null
+  } catch (error) {
+    console.error('Failed to fetch platform stats:', error)
+    return null
+  }
+}
+
+// Verify a token (admin only)
+export async function verifyAdminToken(
+  publicKey: string,
+  signature: string,
+  message: string,
+  tokenId: string
+): Promise<boolean> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/admin/tokens/${tokenId}/verify`, {
+      method: 'POST',
+      headers: createAdminHeaders(publicKey, signature, message),
+    })
+
+    const json = await response.json()
+    return json.success
+  } catch (error) {
+    console.error('Failed to verify token:', error)
+    return false
+  }
+}
+
+// Suspend a token (admin only)
+export async function suspendAdminToken(
+  publicKey: string,
+  signature: string,
+  message: string,
+  tokenId: string,
+  reason: string
+): Promise<boolean> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/admin/tokens/${tokenId}/suspend`, {
+      method: 'POST',
+      headers: createAdminHeaders(publicKey, signature, message),
+      body: JSON.stringify({ reason }),
+    })
+
+    const json = await response.json()
+    return json.success
+  } catch (error) {
+    console.error('Failed to suspend token:', error)
+    return false
+  }
+}
+
+// Unsuspend a token (admin only)
+export async function unsuspendAdminToken(
+  publicKey: string,
+  signature: string,
+  message: string,
+  tokenId: string
+): Promise<boolean> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/admin/tokens/${tokenId}/unsuspend`, {
+      method: 'POST',
+      headers: createAdminHeaders(publicKey, signature, message),
+    })
+
+    const json = await response.json()
+    return json.success
+  } catch (error) {
+    console.error('Failed to unsuspend token:', error)
+    return false
+  }
+}
+
+// Update token limits (admin only)
+export async function updateAdminTokenLimits(
+  publicKey: string,
+  signature: string,
+  message: string,
+  tokenId: string,
+  limits: {
+    dailyTradeLimitSol?: number
+    maxPositionSizeSol?: number
+    riskLevel?: 'low' | 'medium' | 'high'
+  }
+): Promise<boolean> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/admin/tokens/${tokenId}/limits`, {
+      method: 'PUT',
+      headers: createAdminHeaders(publicKey, signature, message),
+      body: JSON.stringify(limits),
+    })
+
+    const json = await response.json()
+    return json.success
+  } catch (error) {
+    console.error('Failed to update token limits:', error)
+    return false
+  }
+}
