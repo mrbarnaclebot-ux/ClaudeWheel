@@ -3,7 +3,7 @@
 // Orchestrates market making across all users with active flywheels
 // ═══════════════════════════════════════════════════════════════════════════
 
-import { Keypair, PublicKey, VersionedTransaction, Connection } from '@solana/web3.js'
+import { Keypair, PublicKey, VersionedTransaction, Connection, Transaction, SystemProgram, sendAndConfirmTransaction, LAMPORTS_PER_SOL } from '@solana/web3.js'
 import bs58 from 'bs58'
 import { supabase } from '../config/database'
 import { getConnection, getBalance, getTokenBalance } from '../config/solana'
@@ -14,6 +14,7 @@ import {
   UserFlywheelState,
   getTokensForFlywheel,
   getDecryptedOpsWallet,
+  getDecryptedDevWallet,
   getTokenConfig,
   getFlywheelState,
   updateFlywheelState,
@@ -26,6 +27,10 @@ import {
 const SOL_MINT = 'So11111111111111111111111111111111111111112'
 const BUYS_PER_CYCLE = 5
 const SELLS_PER_CYCLE = 5
+
+// Fee collection settings
+const DEV_WALLET_MIN_RESERVE_SOL = 0.01 // Keep minimum SOL in dev wallet for claiming
+const MIN_FEE_THRESHOLD_SOL = 0.01 // Minimum SOL to trigger fee collection
 
 export interface TradeResult {
   userTokenId: string
@@ -147,6 +152,68 @@ class MultiUserMMService {
   }
 
   /**
+   * Collect fees from dev wallet and transfer to ops wallet
+   * This ensures the ops wallet has SOL for trading
+   */
+  private async collectFees(
+    token: UserToken,
+    connection: Connection
+  ): Promise<{ collected: boolean; amount: number; signature?: string }> {
+    try {
+      // Get dev wallet (source of fees)
+      const devWallet = await getDecryptedDevWallet(token.id)
+      if (!devWallet) {
+        console.log(`   ⚠️ ${token.token_symbol}: Could not decrypt dev wallet for fee collection`)
+        return { collected: false, amount: 0 }
+      }
+
+      // Get dev wallet SOL balance
+      const devBalance = await getBalance(devWallet.publicKey)
+      console.log(`   📊 ${token.token_symbol}: Dev wallet balance: ${devBalance.toFixed(4)} SOL`)
+
+      // Calculate transfer amount (keep minimum reserve)
+      const transferAmount = devBalance - DEV_WALLET_MIN_RESERVE_SOL
+
+      if (transferAmount < MIN_FEE_THRESHOLD_SOL) {
+        console.log(`   ℹ️ ${token.token_symbol}: Dev wallet balance too low for fee collection (need ${(MIN_FEE_THRESHOLD_SOL + DEV_WALLET_MIN_RESERVE_SOL).toFixed(4)} SOL)`)
+        return { collected: false, amount: 0 }
+      }
+
+      // Get ops wallet address
+      const opsWalletAddress = new PublicKey(token.ops_wallet_address)
+
+      console.log(`   💸 ${token.token_symbol}: Collecting ${transferAmount.toFixed(4)} SOL from dev → ops wallet`)
+
+      // Create transfer transaction
+      const transaction = new Transaction().add(
+        SystemProgram.transfer({
+          fromPubkey: devWallet.publicKey,
+          toPubkey: opsWalletAddress,
+          lamports: Math.floor(transferAmount * LAMPORTS_PER_SOL),
+        })
+      )
+
+      // Send transaction
+      const signature = await sendAndConfirmTransaction(
+        connection,
+        transaction,
+        [devWallet],
+        { commitment: 'confirmed' }
+      )
+
+      console.log(`   ✅ ${token.token_symbol}: Fee collection successful! ${signature.slice(0, 8)}...`)
+
+      // Record the transfer
+      await this.recordTransaction(token.id, 'transfer', transferAmount, signature)
+
+      return { collected: true, amount: transferAmount, signature }
+    } catch (error: any) {
+      console.error(`   ❌ ${token.token_symbol}: Fee collection failed: ${error.message}`)
+      return { collected: false, amount: 0 }
+    }
+  }
+
+  /**
    * Process a single token's flywheel
    */
   private async processToken(
@@ -158,6 +225,12 @@ class MultiUserMMService {
       tokenMint: token.token_mint_address,
       tokenSymbol: token.token_symbol,
     }
+
+    const connection = getConnection()
+
+    // Step 1: Collect fees from dev wallet to ops wallet
+    // This ensures ops wallet has SOL for trading
+    await this.collectFees(token, connection)
 
     // Get current flywheel state
     let state = await getFlywheelState(token.id)
@@ -181,8 +254,6 @@ class MultiUserMMService {
     if (!opsWallet) {
       return { ...baseResult, tradeType: 'buy', success: false, amount: 0, error: 'Failed to decrypt ops wallet' }
     }
-
-    const connection = getConnection()
 
     // Determine trade based on algorithm mode
     if (config.algorithm_mode === 'simple') {
@@ -502,7 +573,7 @@ class MultiUserMMService {
    */
   private async recordTransaction(
     userTokenId: string,
-    type: 'buy' | 'sell',
+    type: 'buy' | 'sell' | 'transfer',
     amount: number,
     signature: string
   ): Promise<void> {
