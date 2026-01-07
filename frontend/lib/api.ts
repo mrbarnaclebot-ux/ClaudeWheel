@@ -468,3 +468,293 @@ export async function executeManualSell(
     return { success: false, error: 'Network error' }
   }
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// AUTHENTICATION API
+// Wallet-based auth for multi-user support
+// ═══════════════════════════════════════════════════════════════════════════
+
+export interface AuthUser {
+  id: string
+  walletAddress: string
+  displayName: string | null
+  isActive: boolean
+  createdAt: string
+}
+
+export interface AuthNonce {
+  message: string
+  nonce: string
+  timestamp: number
+  expiresAt: number
+}
+
+// Request auth nonce for wallet to sign
+export async function requestAuthNonce(walletAddress: string): Promise<AuthNonce | null> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/auth/nonce`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ walletAddress }),
+    })
+
+    if (!response.ok) return null
+
+    const json = await response.json()
+    return json.success ? json.data : null
+  } catch (error) {
+    console.error('Failed to request auth nonce:', error)
+    return null
+  }
+}
+
+// Verify signed message and authenticate user
+export async function verifyAuth(
+  walletAddress: string,
+  signature: string,
+  message: string
+): Promise<AuthUser | null> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/auth/verify`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ walletAddress, signature, message }),
+    })
+
+    if (!response.ok) return null
+
+    const json = await response.json()
+    return json.success ? json.data.user : null
+  } catch (error) {
+    console.error('Failed to verify auth:', error)
+    return null
+  }
+}
+
+// Get current user by wallet address
+export async function getCurrentUser(walletAddress: string): Promise<AuthUser | null> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/auth/user`, {
+      headers: { 'x-wallet-address': walletAddress },
+    })
+
+    if (!response.ok) return null
+
+    const json = await response.json()
+    return json.success ? json.data : null
+  } catch (error) {
+    console.error('Failed to get current user:', error)
+    return null
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// USER TOKENS API
+// Manage user's registered tokens
+// ═══════════════════════════════════════════════════════════════════════════
+
+export interface UserToken {
+  id: string
+  user_id: string
+  token_mint_address: string
+  token_symbol: string
+  token_name: string | null
+  token_image: string | null
+  token_decimals: number
+  dev_wallet_address: string
+  ops_wallet_address: string
+  is_active: boolean
+  is_graduated: boolean
+  created_at: string
+  updated_at: string
+  config?: UserTokenConfig
+  flywheelState?: UserFlywheelState
+}
+
+export interface UserTokenConfig {
+  id: string
+  user_token_id: string
+  flywheel_active: boolean
+  market_making_enabled: boolean
+  auto_claim_enabled: boolean
+  fee_threshold_sol: number
+  min_buy_amount_sol: number
+  max_buy_amount_sol: number
+  max_sell_amount_tokens: number
+  buy_interval_minutes: number
+  slippage_bps: number
+  algorithm_mode: 'simple' | 'smart' | 'rebalance'
+  target_sol_allocation: number
+  target_token_allocation: number
+  rebalance_threshold: number
+  use_twap: boolean
+  twap_threshold_usd: number
+}
+
+export interface UserFlywheelState {
+  cycle_phase: 'buy' | 'sell'
+  buy_count: number
+  sell_count: number
+  sell_phase_token_snapshot: number
+  sell_amount_per_tx: number
+  last_trade_at: string | null
+}
+
+export interface RegisterTokenParams {
+  tokenMintAddress: string
+  tokenSymbol: string
+  tokenName?: string
+  tokenImage?: string
+  tokenDecimals: number
+  devWalletPrivateKey: string
+  opsWalletAddress: string
+}
+
+// Get all tokens for current user
+export async function getUserTokens(walletAddress: string): Promise<UserToken[]> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/user/tokens`, {
+      headers: { 'x-wallet-address': walletAddress },
+    })
+
+    if (!response.ok) return []
+
+    const json = await response.json()
+    return json.success ? json.data : []
+  } catch (error) {
+    console.error('Failed to get user tokens:', error)
+    return []
+  }
+}
+
+// Register a new token (requires signature)
+export async function registerUserToken(
+  walletAddress: string,
+  signature: string,
+  message: string,
+  params: RegisterTokenParams
+): Promise<UserToken | null> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/user/tokens`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-wallet-address': walletAddress,
+        'x-wallet-signature': signature,
+        'x-wallet-message': message,
+      },
+      body: JSON.stringify(params),
+    })
+
+    const json = await response.json()
+
+    if (!response.ok) {
+      throw new Error(json.error || 'Failed to register token')
+    }
+
+    return json.success ? json.data : null
+  } catch (error: any) {
+    console.error('Failed to register token:', error)
+    throw error
+  }
+}
+
+// Get a specific token
+export async function getUserToken(
+  walletAddress: string,
+  tokenId: string
+): Promise<UserToken | null> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/user/tokens/${tokenId}`, {
+      headers: { 'x-wallet-address': walletAddress },
+    })
+
+    if (!response.ok) return null
+
+    const json = await response.json()
+    return json.success ? json.data : null
+  } catch (error) {
+    console.error('Failed to get token:', error)
+    return null
+  }
+}
+
+// Delete/deactivate a token (requires signature)
+export async function deleteUserToken(
+  walletAddress: string,
+  signature: string,
+  message: string,
+  tokenId: string
+): Promise<boolean> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/user/tokens/${tokenId}`, {
+      method: 'DELETE',
+      headers: {
+        'x-wallet-address': walletAddress,
+        'x-wallet-signature': signature,
+        'x-wallet-message': message,
+      },
+    })
+
+    const json = await response.json()
+    return json.success
+  } catch (error) {
+    console.error('Failed to delete token:', error)
+    return false
+  }
+}
+
+// Get config nonce for signing
+export async function getConfigNonce(
+  tokenId: string,
+  config: Partial<UserTokenConfig>
+): Promise<{ message: string; configHash: string } | null> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/user/tokens/${tokenId}/config/nonce`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ config }),
+    })
+
+    if (!response.ok) return null
+
+    const json = await response.json()
+    return json.success ? json.data : null
+  } catch (error) {
+    console.error('Failed to get config nonce:', error)
+    return null
+  }
+}
+
+// Update token config (requires signature)
+export async function updateUserTokenConfig(
+  walletAddress: string,
+  signature: string,
+  message: string,
+  tokenId: string,
+  config: Partial<UserTokenConfig>
+): Promise<UserTokenConfig | null> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/user/tokens/${tokenId}/config`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-wallet-address': walletAddress,
+        'x-wallet-signature': signature,
+        'x-wallet-message': message,
+      },
+      body: JSON.stringify({ config }),
+    })
+
+    const json = await response.json()
+
+    if (!response.ok) {
+      throw new Error(json.error || 'Failed to update config')
+    }
+
+    return json.success ? json.data : null
+  } catch (error: any) {
+    console.error('Failed to update config:', error)
+    throw error
+  }
+}

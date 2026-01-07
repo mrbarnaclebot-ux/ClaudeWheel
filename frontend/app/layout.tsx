@@ -1,6 +1,7 @@
 import type { Metadata } from 'next'
 import './globals.css'
 import { WalletProvider } from './providers/WalletProvider'
+import { AuthProvider } from './providers/AuthProvider'
 
 export const metadata: Metadata = {
   title: 'Claude Wheel | Autonomous Market Making',
@@ -28,11 +29,13 @@ export default function RootLayout({
         {/* Grid pattern background */}
         <div className="fixed inset-0 bg-grid pointer-events-none opacity-50" />
 
-        {/* Main content with Wallet Provider */}
+        {/* Main content with Wallet and Auth Providers */}
         <WalletProvider>
-          <div className="relative z-10">
-            {children}
-          </div>
+          <AuthProvider>
+            <div className="relative z-10">
+              {children}
+            </div>
+          </AuthProvider>
         </WalletProvider>
       </body>
     </html>
