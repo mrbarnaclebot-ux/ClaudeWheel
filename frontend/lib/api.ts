@@ -1072,7 +1072,17 @@ export async function fetchPlatformSettings(
     })
 
     const json = await response.json()
-    return json.success ? json.data : null
+    if (!json.success || !json.data) return null
+
+    // Map the nested response to flat structure
+    const { claim, flywheel } = json.data
+    return {
+      claimJobIntervalMinutes: claim?.intervalMinutes ?? 60,
+      flywheelIntervalMinutes: flywheel?.intervalMinutes ?? 1,
+      maxTradesPerMinute: flywheel?.maxTradesPerMinute ?? 30,
+      claimJobEnabled: claim?.enabled ?? false,
+      flywheelJobEnabled: flywheel?.enabled ?? false,
+    }
   } catch (error) {
     console.error('Failed to fetch platform settings:', error)
     return null
