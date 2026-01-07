@@ -778,7 +778,7 @@ export async function updateUserTokenConfig(
 
 export interface ActivityLog {
   id: string
-  type: 'claim' | 'buy' | 'sell' | 'transfer'
+  type: 'claim' | 'buy' | 'sell' | 'transfer' | 'info'
   message: string
   amount: number
   signature: string | null

@@ -746,10 +746,10 @@ router.get('/tokens/:tokenId/activity', verifyWalletOwnership, async (req: Reque
       .order('claimed_at', { ascending: false })
       .limit(limit)
 
-    // Fetch transactions
+    // Fetch transactions (including info messages)
     const { data: transactions } = await supabase
       .from('user_transactions')
-      .select('id, type, amount, signature, status, created_at')
+      .select('id, type, amount, signature, message, status, created_at')
       .eq('user_token_id', tokenId)
       .order('created_at', { ascending: false })
       .limit(limit)
@@ -757,7 +757,7 @@ router.get('/tokens/:tokenId/activity', verifyWalletOwnership, async (req: Reque
     // Combine and format as activity logs
     const activities: Array<{
       id: string
-      type: 'claim' | 'buy' | 'sell' | 'transfer'
+      type: 'claim' | 'buy' | 'sell' | 'transfer' | 'info'
       message: string
       amount: number
       signature: string | null
@@ -791,13 +791,16 @@ router.get('/tokens/:tokenId/activity', verifyWalletOwnership, async (req: Reque
           message = `SELL: Sold ${tx.amount.toFixed(0)} ${token.token_symbol} tokens`
         } else if (tx.type === 'transfer') {
           message = `TRANSFER: Moved ${tx.amount.toFixed(4)} SOL from dev → ops wallet`
+        } else if (tx.type === 'info') {
+          // Info messages use the stored message field
+          message = tx.message || 'Flywheel status update'
         } else {
           message = `${tx.type.toUpperCase()}: ${tx.amount.toFixed(4)}`
         }
 
         activities.push({
           id: tx.id,
-          type: tx.type as 'buy' | 'sell' | 'transfer',
+          type: tx.type as 'buy' | 'sell' | 'transfer' | 'info',
           message,
           amount: tx.amount,
           signature: tx.signature,

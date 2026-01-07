@@ -83,8 +83,10 @@ export function ActivityTerminal({
         return { icon: '[-]', color: 'text-red-400', prefix: 'SELL' }
       case 'transfer':
         return { icon: '[>]', color: 'text-blue-400', prefix: 'XFER' }
+      case 'info':
+        return { icon: '[i]', color: 'text-cyan-400', prefix: 'INFO' }
       default:
-        return { icon: '[?]', color: 'text-gray-400', prefix: 'INFO' }
+        return { icon: '[?]', color: 'text-gray-400', prefix: 'LOG' }
     }
   }
 

@@ -285,7 +285,10 @@ class MultiUserMMService {
       const minRequired = config.min_buy_amount_sol + 0.01 // reserve for fees
 
       if (solBalance < minRequired) {
-        console.log(`ℹ️ ${token.token_symbol}: Insufficient SOL for buy (${solBalance.toFixed(4)} < ${minRequired.toFixed(4)})`)
+        const message = `Insufficient SOL for buy (have ${solBalance.toFixed(4)}, need ${minRequired.toFixed(4)})`
+        console.log(`ℹ️ ${token.token_symbol}: ${message}`)
+        await this.updateFlywheelCheck(token.id, 'insufficient_sol')
+        await this.logInfoMessage(token.id, message)
         return null
       }
 
@@ -337,8 +340,9 @@ class MultiUserMMService {
         last_trade_at: new Date().toISOString(),
       })
 
-      // Record transaction
+      // Record transaction and update check status
       await this.recordTransaction(token.id, 'buy', buyAmount, signature)
+      await this.updateFlywheelCheck(token.id, 'traded')
 
       return { ...baseResult, tradeType: 'buy', success: true, amount: buyAmount, signature }
 
@@ -347,7 +351,10 @@ class MultiUserMMService {
       const sellAmount = state.sell_amount_per_tx
 
       if (sellAmount <= 0) {
-        console.log(`ℹ️ ${token.token_symbol}: No tokens to sell`)
+        const message = 'No tokens to sell, switching to buy phase'
+        console.log(`ℹ️ ${token.token_symbol}: ${message}`)
+        await this.updateFlywheelCheck(token.id, 'no_tokens')
+        await this.logInfoMessage(token.id, message)
         // Reset to buy phase
         await updateFlywheelState(token.id, { cycle_phase: 'buy', sell_count: 0 })
         return null
@@ -358,7 +365,10 @@ class MultiUserMMService {
       const actualSellAmount = Math.min(sellAmount, tokenBalance)
 
       if (actualSellAmount < 1) {
-        console.log(`ℹ️ ${token.token_symbol}: Insufficient tokens for sell`)
+        const message = 'Insufficient tokens for sell, switching to buy phase'
+        console.log(`ℹ️ ${token.token_symbol}: ${message}`)
+        await this.updateFlywheelCheck(token.id, 'insufficient_tokens')
+        await this.logInfoMessage(token.id, message)
         await updateFlywheelState(token.id, { cycle_phase: 'buy', sell_count: 0 })
         return null
       }
@@ -397,8 +407,9 @@ class MultiUserMMService {
         last_trade_at: new Date().toISOString(),
       })
 
-      // Record transaction
+      // Record transaction and update check status
       await this.recordTransaction(token.id, 'sell', actualSellAmount, signature)
+      await this.updateFlywheelCheck(token.id, 'traded')
 
       return { ...baseResult, tradeType: 'sell', success: true, amount: actualSellAmount, signature }
     }
@@ -450,7 +461,10 @@ class MultiUserMMService {
 
     // Check if rebalance needed
     if (Math.abs(currentSolPct - targetSolPct) < threshold) {
-      console.log(`ℹ️ ${token.token_symbol}: Within threshold, no rebalance needed`)
+      const message = `Portfolio balanced (SOL: ${currentSolPct.toFixed(1)}%, target: ${targetSolPct}%)`
+      console.log(`ℹ️ ${token.token_symbol}: ${message}`)
+      await this.updateFlywheelCheck(token.id, 'balanced')
+      await this.logInfoMessage(token.id, message)
       return null
     }
 
@@ -486,6 +500,7 @@ class MultiUserMMService {
       }
 
       await this.recordTransaction(token.id, 'buy', buyAmount, signature)
+      await this.updateFlywheelCheck(token.id, 'traded')
       return { ...baseResult, tradeType: 'buy', success: true, amount: buyAmount, signature }
 
     } else if (currentTokenPct > targetTokenPct + threshold) {
@@ -520,6 +535,7 @@ class MultiUserMMService {
       }
 
       await this.recordTransaction(token.id, 'sell', sellTokens, signature)
+      await this.updateFlywheelCheck(token.id, 'traded')
       return { ...baseResult, tradeType: 'sell', success: true, amount: sellTokens, signature }
     }
 
@@ -599,6 +615,49 @@ class MultiUserMMService {
       }
     } catch (error: any) {
       console.error('   ❌ Failed to record transaction:', error.message)
+    }
+  }
+
+  /**
+   * Log an info message for the user to see in their activity terminal
+   */
+  private async logInfoMessage(
+    userTokenId: string,
+    message: string
+  ): Promise<void> {
+    if (!supabase) return
+
+    try {
+      await supabase.from('user_transactions').insert([{
+        user_token_id: userTokenId,
+        type: 'info',
+        amount: 0,
+        message,
+        status: 'confirmed',
+        created_at: new Date().toISOString(),
+      }])
+    } catch (error: any) {
+      // Silently fail - info logs are not critical
+    }
+  }
+
+  /**
+   * Update flywheel check timestamp and result
+   */
+  private async updateFlywheelCheck(
+    userTokenId: string,
+    checkResult: string
+  ): Promise<void> {
+    if (!supabase) return
+
+    try {
+      await supabase.from('user_flywheel_state').update({
+        last_checked_at: new Date().toISOString(),
+        last_check_result: checkResult,
+        updated_at: new Date().toISOString(),
+      }).eq('user_token_id', userTokenId)
+    } catch (error: any) {
+      // Silently fail
     }
   }
 

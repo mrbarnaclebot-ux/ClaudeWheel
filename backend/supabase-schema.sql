@@ -233,6 +233,8 @@ CREATE TABLE IF NOT EXISTS user_flywheel_state (
   sell_phase_token_snapshot DECIMAL DEFAULT 0,
   sell_amount_per_tx DECIMAL DEFAULT 0,
   last_trade_at TIMESTAMPTZ,
+  last_checked_at TIMESTAMPTZ, -- When the flywheel job last processed this token
+  last_check_result TEXT, -- Result of last check: 'traded', 'insufficient_sol', 'waiting_interval', etc.
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -246,13 +248,14 @@ CREATE TABLE IF NOT EXISTS user_claim_history (
   claimed_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- User transactions (buy/sell/transfer trades)
+-- User transactions (buy/sell/transfer trades and info messages)
 CREATE TABLE IF NOT EXISTS user_transactions (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_token_id UUID NOT NULL REFERENCES user_tokens(id) ON DELETE CASCADE,
-  type TEXT NOT NULL CHECK (type IN ('buy', 'sell', 'transfer')),
+  type TEXT NOT NULL CHECK (type IN ('buy', 'sell', 'transfer', 'info')),
   amount DECIMAL NOT NULL,
   signature TEXT,
+  message TEXT, -- For 'info' type: status messages like "Insufficient SOL for buy"
   status TEXT DEFAULT 'confirmed' CHECK (status IN ('pending', 'confirmed', 'failed')),
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -320,3 +323,26 @@ BEGIN
   NULL;
 END;
 $$ LANGUAGE plpgsql;
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- MIGRATIONS FOR EXISTING TABLES
+-- Run these if upgrading from an earlier version
+-- ═══════════════════════════════════════════════════════════════════════════
+
+-- Add 'info' type to user_transactions if updating existing table
+-- First drop and recreate the constraint
+DO $$
+BEGIN
+  ALTER TABLE user_transactions DROP CONSTRAINT IF EXISTS user_transactions_type_check;
+  ALTER TABLE user_transactions ADD CONSTRAINT user_transactions_type_check
+    CHECK (type IN ('buy', 'sell', 'transfer', 'info'));
+EXCEPTION WHEN OTHERS THEN
+  NULL;
+END $$;
+
+-- Add message column for info messages
+ALTER TABLE user_transactions ADD COLUMN IF NOT EXISTS message TEXT;
+
+-- Add flywheel tracking columns
+ALTER TABLE user_flywheel_state ADD COLUMN IF NOT EXISTS last_checked_at TIMESTAMPTZ;
+ALTER TABLE user_flywheel_state ADD COLUMN IF NOT EXISTS last_check_result TEXT;
