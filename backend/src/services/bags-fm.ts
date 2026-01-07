@@ -252,10 +252,50 @@ class BagsFmService {
 
   /**
    * Fetch holder count for a token
-   * Uses Helius API if configured, otherwise falls back to estimate
+   * Tries multiple APIs with fallbacks
    */
   private async fetchHolderCount(tokenMint: string): Promise<number> {
-    // Try Helius API first (free tier: 10 req/sec)
+    // Try Birdeye API first (public endpoint for basic data)
+    try {
+      const response = await fetch(
+        `https://public-api.birdeye.so/defi/token_overview?address=${tokenMint}`,
+        {
+          headers: { 'x-chain': 'solana' },
+          signal: AbortSignal.timeout(5000),
+        }
+      )
+
+      if (response.ok) {
+        const data = await response.json() as { data?: { holder?: number } }
+        if (data.data?.holder && data.data.holder > 0) {
+          return data.data.holder
+        }
+      }
+    } catch {
+      // Fall through to other methods
+    }
+
+    // Try Solscan API (public endpoint)
+    try {
+      const response = await fetch(
+        `https://api.solscan.io/token/holders?token=${tokenMint}&offset=0&size=1`,
+        {
+          headers: { 'Accept': 'application/json' },
+          signal: AbortSignal.timeout(5000),
+        }
+      )
+
+      if (response.ok) {
+        const data = await response.json() as { data?: { total?: number } }
+        if (data.data?.total && data.data.total > 0) {
+          return data.data.total
+        }
+      }
+    } catch {
+      // Fall through
+    }
+
+    // Try Helius API if configured (free tier: 10 req/sec)
     const heliusKey = process.env.HELIUS_API_KEY
     if (heliusKey) {
       try {
@@ -277,10 +317,12 @@ class BagsFmService {
         if (response.ok) {
           const data = await response.json() as { result?: { value?: any[] } }
           // This returns largest accounts, use count as rough estimate
-          return data.result?.value?.length || 0
+          if (data.result?.value?.length) {
+            return data.result.value.length
+          }
         }
       } catch {
-        // Fall through to other methods
+        // Fall through
       }
     }
 
@@ -293,7 +335,9 @@ class BagsFmService {
 
       if (response.ok) {
         const data = await response.json() as { pagination?: { total?: number } }
-        return data.pagination?.total || 0
+        if (data.pagination?.total && data.pagination.total > 0) {
+          return data.pagination.total
+        }
       }
     } catch {
       // Ignore error
