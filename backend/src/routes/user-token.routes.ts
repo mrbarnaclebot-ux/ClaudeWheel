@@ -11,6 +11,8 @@ import {
   getFlywheelState,
 } from '../services/user-token.service'
 import { isEncryptionConfigured } from '../services/encryption.service'
+import { multiUserClaimService } from '../services/multi-user-claim.service'
+import { bagsFmService } from '../services/bags-fm'
 import crypto from 'crypto'
 
 const router = Router()
@@ -489,6 +491,394 @@ router.put('/tokens/:tokenId/config', verifyWalletOwnership, async (req: Request
     res.status(500).json({
       success: false,
       error: 'Failed to update configuration',
+    })
+  }
+})
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CLAIM ROUTES
+// Manual and auto-claim fee management
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * GET /api/user/tokens/:tokenId/claimable
+ * Get claimable fees for a token
+ */
+router.get('/tokens/:tokenId/claimable', verifyWalletOwnership, async (req: Request, res: Response) => {
+  try {
+    const { tokenId } = req.params
+    const { userId } = req.body
+
+    const token = await getUserToken(tokenId)
+
+    if (!token) {
+      return res.status(404).json({
+        success: false,
+        error: 'Token not found',
+      })
+    }
+
+    if (token.user_id !== userId) {
+      return res.status(403).json({
+        success: false,
+        error: 'You do not own this token',
+      })
+    }
+
+    // Get claimable positions from Bags.fm
+    const positions = await bagsFmService.getClaimablePositions(token.dev_wallet_address)
+    const position = positions.find(p => p.tokenMint === token.token_mint_address)
+
+    res.json({
+      success: true,
+      data: {
+        tokenMint: token.token_mint_address,
+        devWallet: token.dev_wallet_address,
+        claimableAmount: position?.claimableAmount || 0,
+        claimableAmountUsd: position?.claimableAmountUsd || 0,
+        lastClaimTime: position?.lastClaimTime || null,
+      },
+    })
+  } catch (error) {
+    console.error('Error getting claimable:', error)
+    res.status(500).json({
+      success: false,
+      error: 'Failed to get claimable fees',
+    })
+  }
+})
+
+/**
+ * POST /api/user/tokens/:tokenId/claim/nonce
+ * Generate a nonce for manual claim
+ */
+router.post('/tokens/:tokenId/claim/nonce', async (req: Request, res: Response) => {
+  try {
+    const { tokenId } = req.params
+    const timestamp = Date.now()
+    const nonce = crypto.randomBytes(16).toString('hex')
+
+    const message = `ClaudeWheel Manual Claim
+
+Action: manual_claim
+TokenId: ${tokenId}
+Timestamp: ${timestamp}
+Nonce: ${nonce}
+
+This signature authorizes a manual fee claim.`
+
+    res.json({
+      success: true,
+      data: {
+        message,
+        timestamp,
+        nonce,
+      },
+    })
+  } catch (error) {
+    console.error('Error generating claim nonce:', error)
+    res.status(500).json({
+      success: false,
+      error: 'Failed to generate nonce',
+    })
+  }
+})
+
+/**
+ * POST /api/user/tokens/:tokenId/claim
+ * Manually trigger a claim (requires signature)
+ */
+router.post('/tokens/:tokenId/claim', verifyWalletOwnership, async (req: Request, res: Response) => {
+  try {
+    const { tokenId } = req.params
+    const { userId } = req.body
+
+    // Check if encryption is configured
+    if (!isEncryptionConfigured()) {
+      return res.status(503).json({
+        success: false,
+        error: 'Encryption is not configured. Contact administrator.',
+      })
+    }
+
+    const token = await getUserToken(tokenId)
+
+    if (!token) {
+      return res.status(404).json({
+        success: false,
+        error: 'Token not found',
+      })
+    }
+
+    if (token.user_id !== userId) {
+      return res.status(403).json({
+        success: false,
+        error: 'You do not own this token',
+      })
+    }
+
+    // Execute manual claim
+    const result = await multiUserClaimService.manualClaim(tokenId)
+
+    if (!result.success) {
+      return res.status(400).json({
+        success: false,
+        error: result.error || 'Claim failed',
+      })
+    }
+
+    res.json({
+      success: true,
+      data: {
+        amountClaimedSol: result.amountClaimedSol,
+        signature: result.signature,
+      },
+      message: `Successfully claimed ${result.amountClaimedSol.toFixed(4)} SOL`,
+    })
+  } catch (error) {
+    console.error('Error executing claim:', error)
+    res.status(500).json({
+      success: false,
+      error: 'Failed to execute claim',
+    })
+  }
+})
+
+/**
+ * GET /api/user/tokens/:tokenId/claims
+ * Get claim history for a token
+ */
+router.get('/tokens/:tokenId/claims', verifyWalletOwnership, async (req: Request, res: Response) => {
+  try {
+    const { tokenId } = req.params
+    const { userId } = req.body
+
+    const token = await getUserToken(tokenId)
+
+    if (!token) {
+      return res.status(404).json({
+        success: false,
+        error: 'Token not found',
+      })
+    }
+
+    if (token.user_id !== userId) {
+      return res.status(403).json({
+        success: false,
+        error: 'You do not own this token',
+      })
+    }
+
+    // Get claim stats from Bags.fm
+    const claimStats = await bagsFmService.getClaimStats(token.dev_wallet_address)
+
+    res.json({
+      success: true,
+      data: {
+        totalClaimed: claimStats?.totalClaimed || 0,
+        totalClaimedUsd: claimStats?.totalClaimedUsd || 0,
+        pendingClaims: claimStats?.pendingClaims || 0,
+        lastClaimTime: claimStats?.lastClaimTime || null,
+      },
+    })
+  } catch (error) {
+    console.error('Error getting claims:', error)
+    res.status(500).json({
+      success: false,
+      error: 'Failed to get claim history',
+    })
+  }
+})
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MANUAL SELL ROUTES
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * POST /api/user/tokens/:tokenId/sell/nonce
+ * Generate a nonce for manual sell
+ */
+router.post('/tokens/:tokenId/sell/nonce', async (req: Request, res: Response) => {
+  try {
+    const { tokenId } = req.params
+    const { percentage } = req.body // 25, 50, or 100
+
+    if (!percentage || ![25, 50, 100].includes(percentage)) {
+      return res.status(400).json({
+        success: false,
+        error: 'percentage must be 25, 50, or 100',
+      })
+    }
+
+    const timestamp = Date.now()
+    const nonce = crypto.randomBytes(16).toString('hex')
+
+    const message = `ClaudeWheel Manual Sell
+
+Action: manual_sell
+TokenId: ${tokenId}
+Percentage: ${percentage}
+Timestamp: ${timestamp}
+Nonce: ${nonce}
+
+This signature authorizes a manual token sell.`
+
+    res.json({
+      success: true,
+      data: {
+        message,
+        timestamp,
+        nonce,
+        percentage,
+      },
+    })
+  } catch (error) {
+    console.error('Error generating sell nonce:', error)
+    res.status(500).json({
+      success: false,
+      error: 'Failed to generate nonce',
+    })
+  }
+})
+
+/**
+ * POST /api/user/tokens/:tokenId/sell
+ * Manually sell a percentage of tokens (requires signature)
+ */
+router.post('/tokens/:tokenId/sell', verifyWalletOwnership, async (req: Request, res: Response) => {
+  try {
+    const { tokenId } = req.params
+    const { userId, percentage } = req.body
+    const message = req.headers['x-wallet-message'] as string
+
+    // Check if encryption is configured
+    if (!isEncryptionConfigured()) {
+      return res.status(503).json({
+        success: false,
+        error: 'Encryption is not configured. Contact administrator.',
+      })
+    }
+
+    // Validate percentage
+    if (!percentage || ![25, 50, 100].includes(percentage)) {
+      return res.status(400).json({
+        success: false,
+        error: 'percentage must be 25, 50, or 100',
+      })
+    }
+
+    // Verify percentage in signed message
+    const pctMatch = message.match(/Percentage: (\d+)/)
+    if (!pctMatch || parseInt(pctMatch[1]) !== percentage) {
+      return res.status(401).json({
+        success: false,
+        error: 'Percentage mismatch. Sign the exact percentage being submitted.',
+      })
+    }
+
+    const token = await getUserToken(tokenId)
+
+    if (!token) {
+      return res.status(404).json({
+        success: false,
+        error: 'Token not found',
+      })
+    }
+
+    if (token.user_id !== userId) {
+      return res.status(403).json({
+        success: false,
+        error: 'You do not own this token',
+      })
+    }
+
+    // Get decrypted wallet
+    const { getDecryptedDevWallet, getTokenConfig } = await import('../services/user-token.service')
+    const { getConnection, getTokenBalance } = await import('../config/solana')
+    const { PublicKey, VersionedTransaction } = await import('@solana/web3.js')
+    const bs58 = await import('bs58')
+
+    const wallet = await getDecryptedDevWallet(tokenId)
+    if (!wallet) {
+      return res.status(500).json({
+        success: false,
+        error: 'Failed to decrypt wallet',
+      })
+    }
+
+    const connection = getConnection()
+    const tokenMint = new PublicKey(token.token_mint_address)
+    const config = await getTokenConfig(tokenId)
+
+    // Get token balance
+    const tokenBalance = await getTokenBalance(wallet.publicKey, tokenMint)
+    const sellAmount = tokenBalance * (percentage / 100)
+
+    if (sellAmount < 1) {
+      return res.status(400).json({
+        success: false,
+        error: 'Insufficient token balance',
+      })
+    }
+
+    const tokenUnits = Math.floor(sellAmount * Math.pow(10, token.token_decimals))
+    const SOL_MINT = 'So11111111111111111111111111111111111111112'
+
+    // Get quote
+    const quote = await bagsFmService.getTradeQuote(
+      token.token_mint_address,
+      SOL_MINT,
+      tokenUnits,
+      'sell',
+      config?.slippage_bps || 300
+    )
+
+    if (!quote?.rawQuoteResponse) {
+      return res.status(400).json({
+        success: false,
+        error: 'Failed to get sell quote',
+      })
+    }
+
+    // Execute swap
+    const swapData = await bagsFmService.generateSwapTransaction(
+      wallet.publicKey.toString(),
+      quote.rawQuoteResponse
+    )
+
+    if (!swapData) {
+      return res.status(400).json({
+        success: false,
+        error: 'Failed to generate swap transaction',
+      })
+    }
+
+    const txBuffer = bs58.default.decode(swapData.transaction)
+    const transaction = VersionedTransaction.deserialize(txBuffer)
+    transaction.sign([wallet])
+
+    const signature = await connection.sendTransaction(transaction, {
+      maxRetries: 5,
+      skipPreflight: true,
+    })
+
+    // Wait for confirmation
+    await connection.confirmTransaction(signature, 'confirmed')
+
+    res.json({
+      success: true,
+      data: {
+        amountSold: sellAmount,
+        percentage,
+        signature,
+      },
+      message: `Successfully sold ${percentage}% (${sellAmount.toFixed(0)} tokens)`,
+    })
+  } catch (error: any) {
+    console.error('Error executing sell:', error)
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to execute sell',
     })
   }
 })

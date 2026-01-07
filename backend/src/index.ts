@@ -6,6 +6,8 @@ import { feeCollector } from './services/fee-collector'
 import { marketMaker } from './services/market-maker'
 import { walletMonitor } from './services/wallet-monitor'
 import { startFlywheelJob } from './jobs/flywheel.job'
+import { startClaimJob, getClaimJobStatus } from './jobs/claim.job'
+import { startMultiUserFlywheelJob, getMultiUserFlywheelJobStatus } from './jobs/multi-flywheel.job'
 import statusRoutes from './routes/status.routes'
 import adminRoutes from './routes/admin.routes'
 import bagsRoutes from './routes/bags.routes'
@@ -63,6 +65,10 @@ app.get('/', (req, res) => {
         tokens: '/api/user/tokens (GET/POST)',
         token: '/api/user/tokens/:tokenId (GET/DELETE)',
         config: '/api/user/tokens/:tokenId/config (GET/PUT)',
+        claimable: '/api/user/tokens/:tokenId/claimable (GET)',
+        claim: '/api/user/tokens/:tokenId/claim (POST)',
+        claims: '/api/user/tokens/:tokenId/claims (GET)',
+        sell: '/api/user/tokens/:tokenId/sell (POST)',
       },
     },
   })
@@ -106,7 +112,8 @@ async function initializeServices() {
   }
 
   // Check encryption configuration for multi-user support
-  if (isEncryptionConfigured()) {
+  const encryptionReady = isEncryptionConfigured()
+  if (encryptionReady) {
     console.log('✅ Encryption configured (multi-user mode available)')
   } else {
     console.log('⚠️ Encryption not configured - set ENCRYPTION_MASTER_KEY for multi-user mode')
@@ -128,7 +135,26 @@ async function initializeServices() {
     console.log('\n🚀 Starting flywheel automation...')
     startFlywheelJob()
   } else {
-    console.log('\n⚠️ Automation disabled - configure wallets to enable')
+    console.log('\n⚠️ Single-token automation disabled - configure wallets to enable')
+  }
+
+  // Start multi-user jobs if encryption is configured
+  if (encryptionReady) {
+    console.log('\n🚀 Starting multi-user automation...')
+
+    // Start claim job (hourly by default)
+    if (process.env.CLAIM_JOB_ENABLED !== 'false') {
+      startClaimJob()
+    } else {
+      console.log('ℹ️ Multi-user claim job disabled via CLAIM_JOB_ENABLED=false')
+    }
+
+    // Start multi-user flywheel job (every minute by default)
+    if (process.env.MULTI_USER_FLYWHEEL_ENABLED !== 'false') {
+      startMultiUserFlywheelJob()
+    } else {
+      console.log('ℹ️ Multi-user flywheel job disabled via MULTI_USER_FLYWHEEL_ENABLED=false')
+    }
   }
 }
 
