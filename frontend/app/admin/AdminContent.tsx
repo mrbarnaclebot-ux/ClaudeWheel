@@ -21,11 +21,16 @@ import {
   suspendAdminToken,
   unsuspendAdminToken,
   updateAdminTokenLimits,
+  bulkSuspendAllTokens,
+  bulkUnsuspendAllTokens,
+  fetchPlatformSettings,
+  updatePlatformSettings,
   type SystemStatus,
   type LogEntry,
   type BagsDashboardData,
   type AdminToken,
   type PlatformStats,
+  type PlatformSettings,
 } from '@/lib/api'
 import bs58 from 'bs58'
 
@@ -106,6 +111,18 @@ export default function AdminContent() {
   const [tokenFilter, setTokenFilter] = useState<'all' | 'active' | 'suspended'>('all')
   const [suspendModal, setSuspendModal] = useState<{ tokenId: string; symbol: string } | null>(null)
   const [suspendReason, setSuspendReason] = useState('')
+
+  // Platform settings state
+  const [platformSettings, setPlatformSettings] = useState<PlatformSettings | null>(null)
+  const [editedSettings, setEditedSettings] = useState<Partial<PlatformSettings>>({})
+  const [isSavingSettings, setIsSavingSettings] = useState(false)
+  const [settingsMessage, setSettingsMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null)
+
+  // Bulk actions state
+  const [bulkSuspendModal, setBulkSuspendModal] = useState(false)
+  const [bulkSuspendReason, setBulkSuspendReason] = useState('')
+  const [isBulkSuspending, setIsBulkSuspending] = useState(false)
+  const [isBulkUnsuspending, setIsBulkUnsuspending] = useState(false)
 
   // Load system status when authorized
   const loadSystemStatus = useCallback(async () => {
@@ -279,6 +296,93 @@ export default function AdminContent() {
     if (success) {
       reloadTokens()
     }
+  }
+
+  // Load platform settings
+  const loadPlatformSettings = useCallback(async () => {
+    if (!publicKey || !adminAuthSignature || !adminAuthMessage) return
+
+    const settings = await fetchPlatformSettings(
+      publicKey.toString(),
+      adminAuthSignature,
+      adminAuthMessage
+    )
+    if (settings) {
+      setPlatformSettings(settings)
+      setEditedSettings(settings)
+    }
+  }, [publicKey, adminAuthSignature, adminAuthMessage])
+
+  // Save platform settings
+  const handleSaveSettings = async () => {
+    if (!publicKey || !adminAuthSignature || !adminAuthMessage) return
+
+    setIsSavingSettings(true)
+    setSettingsMessage(null)
+
+    const result = await updatePlatformSettings(
+      publicKey.toString(),
+      adminAuthSignature,
+      adminAuthMessage,
+      editedSettings
+    )
+
+    if (result.success) {
+      setSettingsMessage({ type: 'success', text: result.message || 'Settings updated successfully!' })
+      loadPlatformSettings()
+    } else {
+      setSettingsMessage({ type: 'error', text: 'Failed to update settings' })
+    }
+
+    setIsSavingSettings(false)
+  }
+
+  // Handle bulk suspend all tokens
+  const handleBulkSuspend = async () => {
+    if (!publicKey || !adminAuthSignature || !adminAuthMessage) return
+    if (!bulkSuspendReason.trim()) return
+
+    setIsBulkSuspending(true)
+
+    const result = await bulkSuspendAllTokens(
+      publicKey.toString(),
+      adminAuthSignature,
+      adminAuthMessage,
+      bulkSuspendReason
+    )
+
+    if (result) {
+      setBulkSuspendModal(false)
+      setBulkSuspendReason('')
+      reloadTokens()
+      // Refresh platform stats
+      const stats = await fetchPlatformStats(publicKey.toString(), adminAuthSignature, adminAuthMessage)
+      if (stats) setPlatformStats(stats)
+    }
+
+    setIsBulkSuspending(false)
+  }
+
+  // Handle bulk unsuspend all tokens
+  const handleBulkUnsuspend = async () => {
+    if (!publicKey || !adminAuthSignature || !adminAuthMessage) return
+
+    setIsBulkUnsuspending(true)
+
+    const result = await bulkUnsuspendAllTokens(
+      publicKey.toString(),
+      adminAuthSignature,
+      adminAuthMessage
+    )
+
+    if (result) {
+      reloadTokens()
+      // Refresh platform stats
+      const stats = await fetchPlatformStats(publicKey.toString(), adminAuthSignature, adminAuthMessage)
+      if (stats) setPlatformStats(stats)
+    }
+
+    setIsBulkUnsuspending(false)
   }
 
   // Check authorization
@@ -965,24 +1069,44 @@ export default function AdminContent() {
                 </div>
               )}
 
-              {/* Filter Tabs */}
-              <div className="flex gap-2 mb-4">
-                {(['all', 'active', 'suspended'] as const).map((filter) => (
+              {/* Filter Tabs and Bulk Actions */}
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex gap-2">
+                  {(['all', 'active', 'suspended'] as const).map((filter) => (
+                    <button
+                      key={filter}
+                      onClick={() => {
+                        setTokenFilter(filter)
+                        reloadTokens()
+                      }}
+                      className={`px-3 py-1 text-xs font-mono rounded-lg border transition-colors ${
+                        tokenFilter === filter
+                          ? 'bg-accent-primary/20 text-accent-primary border-accent-primary/30'
+                          : 'bg-bg-secondary text-text-muted border-border-subtle hover:bg-bg-card-hover'
+                      }`}
+                    >
+                      {filter.charAt(0).toUpperCase() + filter.slice(1)}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Bulk Actions */}
+                <div className="flex gap-2">
                   <button
-                    key={filter}
-                    onClick={() => {
-                      setTokenFilter(filter)
-                      reloadTokens()
-                    }}
-                    className={`px-3 py-1 text-xs font-mono rounded-lg border transition-colors ${
-                      tokenFilter === filter
-                        ? 'bg-accent-primary/20 text-accent-primary border-accent-primary/30'
-                        : 'bg-bg-secondary text-text-muted border-border-subtle hover:bg-bg-card-hover'
-                    }`}
+                    onClick={() => setBulkSuspendModal(true)}
+                    disabled={isBulkSuspending || adminTokens.length === 0}
+                    className="px-3 py-1 text-xs font-mono bg-error/20 text-error border border-error/30 rounded-lg hover:bg-error/30 transition-colors disabled:opacity-50"
                   >
-                    {filter.charAt(0).toUpperCase() + filter.slice(1)}
+                    {isBulkSuspending ? 'Suspending...' : 'Suspend All'}
                   </button>
-                ))}
+                  <button
+                    onClick={handleBulkUnsuspend}
+                    disabled={isBulkUnsuspending || (platformStats?.tokens.suspended ?? 0) === 0}
+                    className="px-3 py-1 text-xs font-mono bg-success/20 text-success border border-success/30 rounded-lg hover:bg-success/30 transition-colors disabled:opacity-50"
+                  >
+                    {isBulkUnsuspending ? 'Unsuspending...' : 'Unsuspend All'}
+                  </button>
+                </div>
               </div>
 
               {/* Tokens List */}
@@ -1133,6 +1257,178 @@ export default function AdminContent() {
               </div>
             </div>
           </div>
+        )}
+
+        {/* Bulk Suspend Modal */}
+        {bulkSuspendModal && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+            <div className="bg-bg-card border border-border-subtle rounded-xl p-6 max-w-md w-full mx-4">
+              <h3 className="text-lg font-semibold text-error mb-4">
+                Suspend All User Tokens
+              </h3>
+              <p className="text-text-muted text-sm mb-2">
+                This will immediately suspend <strong>ALL</strong> user tokens except the platform token (8JLGQ7...BAGS).
+              </p>
+              <p className="text-warning text-xs mb-4 p-2 bg-warning/10 rounded">
+                All automation will stop for suspended tokens. Users will be notified.
+              </p>
+              <textarea
+                value={bulkSuspendReason}
+                onChange={(e) => setBulkSuspendReason(e.target.value)}
+                placeholder="Enter suspension reason (e.g., Platform maintenance)..."
+                className="w-full bg-bg-secondary border border-border-subtle rounded-lg px-4 py-3 font-mono text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:border-error mb-4 h-24"
+              />
+              <div className="flex gap-3 justify-end">
+                <button
+                  onClick={() => {
+                    setBulkSuspendModal(false)
+                    setBulkSuspendReason('')
+                  }}
+                  className="px-4 py-2 text-sm font-mono bg-bg-secondary text-text-muted border border-border-subtle rounded-lg hover:bg-bg-card-hover transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleBulkSuspend}
+                  disabled={!bulkSuspendReason.trim() || isBulkSuspending}
+                  className="px-4 py-2 text-sm font-mono bg-error/20 text-error border border-error/30 rounded-lg hover:bg-error/30 transition-colors disabled:opacity-50"
+                >
+                  {isBulkSuspending ? 'Suspending...' : 'Suspend All Tokens'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Platform Settings Panel */}
+        {adminAuthSignature && (
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.25 }}
+            className="card-glow bg-bg-card p-4"
+          >
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="font-display text-lg font-semibold text-text-primary flex items-center gap-2">
+                <span className="text-accent-primary">◈</span>
+                Platform Settings
+              </h2>
+              <button
+                onClick={loadPlatformSettings}
+                disabled={!adminAuthSignature}
+                className="px-3 py-1 text-xs font-mono bg-bg-secondary hover:bg-bg-card-hover border border-border-subtle rounded-lg transition-colors disabled:opacity-50"
+              >
+                {platformSettings ? 'Refresh' : 'Load Settings'}
+              </button>
+            </div>
+
+            {platformSettings && (
+              <div className="space-y-4">
+                {/* Job Settings */}
+                <div className="grid grid-cols-3 gap-4">
+                  <div>
+                    <label className="block text-text-muted font-mono text-xs mb-2">
+                      Claim Interval (minutes)
+                    </label>
+                    <input
+                      type="number"
+                      value={editedSettings.claimJobIntervalMinutes ?? platformSettings.claimJobIntervalMinutes}
+                      onChange={(e) => setEditedSettings(prev => ({
+                        ...prev,
+                        claimJobIntervalMinutes: parseInt(e.target.value) || 60
+                      }))}
+                      min={1}
+                      max={1440}
+                      className="w-full bg-bg-secondary border border-border-subtle rounded-lg px-3 py-2 font-mono text-sm text-text-primary focus:outline-none focus:border-accent-primary transition-colors"
+                    />
+                    <p className="text-text-muted font-mono text-xs mt-1">
+                      How often to run claims
+                    </p>
+                  </div>
+                  <div>
+                    <label className="block text-text-muted font-mono text-xs mb-2">
+                      Flywheel Interval (minutes)
+                    </label>
+                    <input
+                      type="number"
+                      value={editedSettings.flywheelIntervalMinutes ?? platformSettings.flywheelIntervalMinutes}
+                      onChange={(e) => setEditedSettings(prev => ({
+                        ...prev,
+                        flywheelIntervalMinutes: parseInt(e.target.value) || 1
+                      }))}
+                      min={1}
+                      max={60}
+                      className="w-full bg-bg-secondary border border-border-subtle rounded-lg px-3 py-2 font-mono text-sm text-text-primary focus:outline-none focus:border-accent-primary transition-colors"
+                    />
+                    <p className="text-text-muted font-mono text-xs mt-1">
+                      How often to run flywheel
+                    </p>
+                  </div>
+                  <div>
+                    <label className="block text-text-muted font-mono text-xs mb-2">
+                      Max Trades/Minute
+                    </label>
+                    <input
+                      type="number"
+                      value={editedSettings.maxTradesPerMinute ?? platformSettings.maxTradesPerMinute}
+                      onChange={(e) => setEditedSettings(prev => ({
+                        ...prev,
+                        maxTradesPerMinute: parseInt(e.target.value) || 30
+                      }))}
+                      min={1}
+                      max={100}
+                      className="w-full bg-bg-secondary border border-border-subtle rounded-lg px-3 py-2 font-mono text-sm text-text-primary focus:outline-none focus:border-accent-primary transition-colors"
+                    />
+                    <p className="text-text-muted font-mono text-xs mt-1">
+                      Global rate limit
+                    </p>
+                  </div>
+                </div>
+
+                {/* Current Job Status */}
+                <div className="grid grid-cols-2 gap-4 p-3 bg-bg-secondary rounded-lg">
+                  <div className="flex items-center gap-2">
+                    <span className={`w-2 h-2 rounded-full ${platformSettings.claimJobEnabled ? 'bg-success' : 'bg-error'}`} />
+                    <span className="font-mono text-xs text-text-muted">
+                      Claim Job: {platformSettings.claimJobEnabled ? 'Enabled' : 'Disabled'}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className={`w-2 h-2 rounded-full ${platformSettings.flywheelJobEnabled ? 'bg-success' : 'bg-error'}`} />
+                    <span className="font-mono text-xs text-text-muted">
+                      Flywheel Job: {platformSettings.flywheelJobEnabled ? 'Enabled' : 'Disabled'}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Settings Message */}
+                {settingsMessage && (
+                  <div className={`p-3 rounded-lg font-mono text-sm ${
+                    settingsMessage.type === 'success'
+                      ? 'bg-success/20 text-success border border-success/30'
+                      : 'bg-error/20 text-error border border-error/30'
+                  }`}>
+                    {settingsMessage.text}
+                  </div>
+                )}
+
+                {/* Save Button */}
+                <button
+                  onClick={handleSaveSettings}
+                  disabled={isSavingSettings}
+                  className="w-full px-4 py-2 text-sm font-mono bg-accent-primary/20 text-accent-primary border border-accent-primary/30 rounded-lg hover:bg-accent-primary/30 transition-colors disabled:opacity-50"
+                >
+                  {isSavingSettings ? 'Saving...' : 'Save Platform Settings'}
+                </button>
+              </div>
+            )}
+
+            {!platformSettings && adminAuthSignature && (
+              <p className="text-text-muted font-mono text-sm text-center py-4">
+                Click "Load Settings" to view and edit platform configuration
+              </p>
+            )}
+          </motion.div>
         )}
       </div>
 

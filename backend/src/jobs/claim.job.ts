@@ -85,3 +85,19 @@ export function getClaimJobStatus(): {
     lastRunAt: multiUserClaimService.getLastRunAt(),
   }
 }
+
+/**
+ * Restart claim job with new interval
+ */
+export function restartClaimJob(newIntervalMinutes: number): void {
+  // Update the environment variable for this session
+  process.env.CLAIM_JOB_INTERVAL_MINUTES = String(newIntervalMinutes)
+
+  // Stop existing job
+  stopClaimJob()
+
+  // Start with new interval
+  startClaimJob()
+
+  console.log(`🔄 Claim job restarted with new interval: ${newIntervalMinutes} minutes`)
+}

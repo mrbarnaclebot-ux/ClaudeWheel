@@ -994,3 +994,109 @@ export async function updateAdminTokenLimits(
     return false
   }
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// BULK ADMIN ACTIONS
+// ═══════════════════════════════════════════════════════════════════════════
+
+export interface BulkSuspendResult {
+  success: boolean
+  message: string
+  suspendedCount: number
+  skippedCount: number
+}
+
+// Bulk suspend all tokens except platform token (admin only)
+export async function bulkSuspendAllTokens(
+  publicKey: string,
+  signature: string,
+  message: string,
+  reason: string
+): Promise<BulkSuspendResult | null> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/admin/tokens/suspend-all`, {
+      method: 'POST',
+      headers: createAdminHeaders(publicKey, signature, message),
+      body: JSON.stringify({ reason }),
+    })
+
+    const json = await response.json()
+    return json.success ? json.data : null
+  } catch (error) {
+    console.error('Failed to bulk suspend tokens:', error)
+    return null
+  }
+}
+
+// Bulk unsuspend all tokens (admin only)
+export async function bulkUnsuspendAllTokens(
+  publicKey: string,
+  signature: string,
+  message: string
+): Promise<BulkSuspendResult | null> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/admin/tokens/unsuspend-all`, {
+      method: 'POST',
+      headers: createAdminHeaders(publicKey, signature, message),
+    })
+
+    const json = await response.json()
+    return json.success ? json.data : null
+  } catch (error) {
+    console.error('Failed to bulk unsuspend tokens:', error)
+    return null
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PLATFORM SETTINGS API
+// ═══════════════════════════════════════════════════════════════════════════
+
+export interface PlatformSettings {
+  claimJobIntervalMinutes: number
+  flywheelIntervalMinutes: number
+  maxTradesPerMinute: number
+  claimJobEnabled: boolean
+  flywheelJobEnabled: boolean
+}
+
+// Get current platform settings (admin only)
+export async function fetchPlatformSettings(
+  publicKey: string,
+  signature: string,
+  message: string
+): Promise<PlatformSettings | null> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/admin/platform-settings`, {
+      headers: createAdminHeaders(publicKey, signature, message),
+    })
+
+    const json = await response.json()
+    return json.success ? json.data : null
+  } catch (error) {
+    console.error('Failed to fetch platform settings:', error)
+    return null
+  }
+}
+
+// Update platform settings (admin only)
+export async function updatePlatformSettings(
+  publicKey: string,
+  signature: string,
+  message: string,
+  settings: Partial<PlatformSettings>
+): Promise<{ success: boolean; message?: string }> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/admin/platform-settings`, {
+      method: 'PUT',
+      headers: createAdminHeaders(publicKey, signature, message),
+      body: JSON.stringify(settings),
+    })
+
+    const json = await response.json()
+    return { success: json.success, message: json.message }
+  } catch (error) {
+    console.error('Failed to update platform settings:', error)
+    return { success: false }
+  }
+}

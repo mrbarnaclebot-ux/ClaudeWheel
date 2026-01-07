@@ -72,12 +72,35 @@ export function getMultiUserFlywheelJobStatus(): {
   enabled: boolean
   running: boolean
   intervalMinutes: number
+  maxTradesPerMinute: number
   lastRunAt: Date | null
 } {
   return {
     enabled: flywheelJobInterval !== null,
     running: multiUserMMService.isJobRunning(),
     intervalMinutes: parseInt(process.env.MULTI_USER_FLYWHEEL_INTERVAL_MINUTES || '1', 10),
+    maxTradesPerMinute: parseInt(process.env.MAX_TRADES_PER_MINUTE || '30', 10),
     lastRunAt: multiUserMMService.getLastRunAt(),
   }
+}
+
+/**
+ * Restart flywheel job with new settings
+ */
+export function restartFlywheelJob(newIntervalMinutes?: number, newMaxTrades?: number): void {
+  // Update the environment variables for this session
+  if (newIntervalMinutes !== undefined) {
+    process.env.MULTI_USER_FLYWHEEL_INTERVAL_MINUTES = String(newIntervalMinutes)
+  }
+  if (newMaxTrades !== undefined) {
+    process.env.MAX_TRADES_PER_MINUTE = String(newMaxTrades)
+  }
+
+  // Stop existing job
+  stopMultiUserFlywheelJob()
+
+  // Start with new settings
+  startMultiUserFlywheelJob()
+
+  console.log(`🔄 Flywheel job restarted with interval: ${process.env.MULTI_USER_FLYWHEEL_INTERVAL_MINUTES}m, max trades: ${process.env.MAX_TRADES_PER_MINUTE}`)
 }

@@ -5,8 +5,11 @@ import { supabase } from '../config/database'
 import { env } from '../config/env'
 import { marketMaker } from '../services/market-maker'
 import { walletMonitor } from '../services/wallet-monitor'
-import { getClaimJobStatus } from '../jobs/claim.job'
-import { getMultiUserFlywheelJobStatus } from '../jobs/multi-flywheel.job'
+import { getClaimJobStatus, restartClaimJob } from '../jobs/claim.job'
+import { getMultiUserFlywheelJobStatus, restartFlywheelJob } from '../jobs/multi-flywheel.job'
+
+// Platform token CA - this token cannot be suspended
+const PLATFORM_TOKEN_MINT = '8JLGQ7RqhsvhsDhvjMuJUeeuaQ53GTJqSHNaBWf4BAGS'
 
 // ═══════════════════════════════════════════════════════════════════════════
 // ADMIN ROUTES
@@ -784,6 +787,214 @@ router.get('/platform-stats', verifyAdminAuth, async (req: Request, res: Respons
 router.post('/auth/nonce', (req: Request, res: Response) => {
   const { message, timestamp, nonce } = generateSecureNonceMessage('admin_auth', 'access')
   res.json({ message, timestamp, nonce })
+})
+
+/**
+ * POST /api/admin/tokens/suspend-all
+ * Suspend all user tokens except the platform's own token (admin only)
+ */
+router.post('/tokens/suspend-all', verifyAdminAuth, async (req: Request, res: Response) => {
+  try {
+    if (!supabase) {
+      return res.status(500).json({ error: 'Database not configured' })
+    }
+
+    const { reason } = req.body
+
+    if (!reason || typeof reason !== 'string') {
+      return res.status(400).json({ error: 'Suspension reason is required' })
+    }
+
+    // Get all tokens except platform token
+    const { data: tokens, error: fetchError } = await supabase
+      .from('user_tokens')
+      .select('id, token_symbol, token_mint_address')
+      .neq('token_mint_address', PLATFORM_TOKEN_MINT)
+      .eq('is_suspended', false)
+
+    if (fetchError) {
+      console.error('Error fetching tokens for bulk suspend:', fetchError)
+      return res.status(500).json({ error: 'Failed to fetch tokens' })
+    }
+
+    if (!tokens || tokens.length === 0) {
+      return res.json({
+        success: true,
+        message: 'No tokens to suspend',
+        suspended: 0,
+      })
+    }
+
+    // Suspend all tokens
+    const tokenIds = tokens.map(t => t.id)
+
+    const { error: suspendError } = await supabase
+      .from('user_tokens')
+      .update({
+        is_suspended: true,
+        suspend_reason: reason,
+      })
+      .in('id', tokenIds)
+
+    if (suspendError) {
+      console.error('Error bulk suspending tokens:', suspendError)
+      return res.status(500).json({ error: 'Failed to suspend tokens' })
+    }
+
+    // Disable all automation for these tokens
+    await supabase
+      .from('user_token_config')
+      .update({
+        flywheel_active: false,
+        market_making_enabled: false,
+        auto_claim_enabled: false,
+      })
+      .in('user_token_id', tokenIds)
+
+    console.log(`⚠️ Admin BULK SUSPENDED ${tokens.length} tokens - Reason: ${reason}`)
+    console.log(`   Excluded platform token: ${PLATFORM_TOKEN_MINT}`)
+
+    return res.json({
+      success: true,
+      message: `Suspended ${tokens.length} tokens`,
+      suspended: tokens.length,
+      excluded: PLATFORM_TOKEN_MINT,
+    })
+  } catch (error) {
+    console.error('Error bulk suspending tokens:', error)
+    return res.status(500).json({ error: 'Internal server error' })
+  }
+})
+
+/**
+ * POST /api/admin/tokens/unsuspend-all
+ * Unsuspend all user tokens (admin only)
+ */
+router.post('/tokens/unsuspend-all', verifyAdminAuth, async (req: Request, res: Response) => {
+  try {
+    if (!supabase) {
+      return res.status(500).json({ error: 'Database not configured' })
+    }
+
+    // Get all suspended tokens
+    const { data: tokens, error: fetchError } = await supabase
+      .from('user_tokens')
+      .select('id')
+      .eq('is_suspended', true)
+
+    if (fetchError) {
+      console.error('Error fetching suspended tokens:', fetchError)
+      return res.status(500).json({ error: 'Failed to fetch tokens' })
+    }
+
+    if (!tokens || tokens.length === 0) {
+      return res.json({
+        success: true,
+        message: 'No tokens to unsuspend',
+        unsuspended: 0,
+      })
+    }
+
+    const tokenIds = tokens.map(t => t.id)
+
+    const { error: unsuspendError } = await supabase
+      .from('user_tokens')
+      .update({
+        is_suspended: false,
+        suspend_reason: null,
+      })
+      .in('id', tokenIds)
+
+    if (unsuspendError) {
+      console.error('Error bulk unsuspending tokens:', unsuspendError)
+      return res.status(500).json({ error: 'Failed to unsuspend tokens' })
+    }
+
+    console.log(`✅ Admin BULK UNSUSPENDED ${tokens.length} tokens`)
+
+    return res.json({
+      success: true,
+      message: `Unsuspended ${tokens.length} tokens`,
+      unsuspended: tokens.length,
+    })
+  } catch (error) {
+    console.error('Error bulk unsuspending tokens:', error)
+    return res.status(500).json({ error: 'Internal server error' })
+  }
+})
+
+/**
+ * PUT /api/admin/platform-settings
+ * Update platform job settings (claim interval, max trades) (admin only)
+ */
+router.put('/platform-settings', verifyAdminAuth, async (req: Request, res: Response) => {
+  try {
+    const { claimIntervalMinutes, flywheelIntervalMinutes, maxTradesPerMinute } = req.body
+
+    const updates: string[] = []
+
+    // Update claim job interval
+    if (typeof claimIntervalMinutes === 'number' && claimIntervalMinutes >= 1 && claimIntervalMinutes <= 1440) {
+      restartClaimJob(claimIntervalMinutes)
+      updates.push(`Claim interval: ${claimIntervalMinutes} minutes`)
+    }
+
+    // Update flywheel job settings
+    if (
+      (typeof flywheelIntervalMinutes === 'number' && flywheelIntervalMinutes >= 1) ||
+      (typeof maxTradesPerMinute === 'number' && maxTradesPerMinute >= 1 && maxTradesPerMinute <= 100)
+    ) {
+      restartFlywheelJob(
+        typeof flywheelIntervalMinutes === 'number' ? flywheelIntervalMinutes : undefined,
+        typeof maxTradesPerMinute === 'number' ? maxTradesPerMinute : undefined
+      )
+      if (typeof flywheelIntervalMinutes === 'number') {
+        updates.push(`Flywheel interval: ${flywheelIntervalMinutes} minutes`)
+      }
+      if (typeof maxTradesPerMinute === 'number') {
+        updates.push(`Max trades: ${maxTradesPerMinute}/minute`)
+      }
+    }
+
+    if (updates.length === 0) {
+      return res.status(400).json({ error: 'No valid settings provided' })
+    }
+
+    console.log(`✅ Admin updated platform settings:`, updates)
+
+    return res.json({
+      success: true,
+      message: 'Platform settings updated',
+      updates,
+      currentSettings: {
+        claim: getClaimJobStatus(),
+        flywheel: getMultiUserFlywheelJobStatus(),
+      },
+    })
+  } catch (error) {
+    console.error('Error updating platform settings:', error)
+    return res.status(500).json({ error: 'Internal server error' })
+  }
+})
+
+/**
+ * GET /api/admin/platform-settings
+ * Get current platform job settings (admin only)
+ */
+router.get('/platform-settings', verifyAdminAuth, async (req: Request, res: Response) => {
+  try {
+    return res.json({
+      success: true,
+      data: {
+        claim: getClaimJobStatus(),
+        flywheel: getMultiUserFlywheelJobStatus(),
+        platformToken: PLATFORM_TOKEN_MINT,
+      },
+    })
+  } catch (error) {
+    console.error('Error fetching platform settings:', error)
+    return res.status(500).json({ error: 'Internal server error' })
+  }
 })
 
 export default router
