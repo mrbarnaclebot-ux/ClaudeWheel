@@ -73,15 +73,21 @@ export interface SessionData extends Scenes.WizardSession {
     devWalletAddress?: string
     opsWalletAddress?: string
     pendingLaunchId?: string
+    step?: string
   }
   // Register wizard data
   registerData?: {
     tokenMint?: string
     tokenSymbol?: string
+    tokenName?: string
+    tokenImage?: string
+    isGraduated?: boolean
+    creatorWallet?: string // Token creator for ownership verification
     devWalletPrivateKey?: string
     opsWalletPrivateKey?: string
     devWalletAddress?: string
     opsWalletAddress?: string
+    step?: string
   }
   // User data
   telegramUserId?: string
@@ -228,7 +234,13 @@ function setupBot(bot: Telegraf<BotContext>) {
 
   // /launch - Start token launch wizard
   bot.command('launch', async (ctx) => {
-    await startLaunchWizard(ctx)
+    console.log(`📱 /launch command received from user ${ctx.from?.id}`)
+    try {
+      await startLaunchWizard(ctx)
+    } catch (error) {
+      console.error('Error in /launch command:', error)
+      await ctx.reply('❌ Error starting launch wizard. Please try again.')
+    }
   })
 
   // /register - Start token registration wizard
@@ -502,8 +514,11 @@ async function sendHelpMessage(ctx: BotContext) {
 }
 
 async function startLaunchWizard(ctx: BotContext) {
+  console.log(`🚀 startLaunchWizard called for chat ${ctx.chat?.id}, type: ${ctx.chat?.type}`)
+
   // Check if in private chat
   if (ctx.chat?.type !== 'private') {
+    console.log(`⚠️ Launch rejected - not private chat`)
     await ctx.reply('⚠️ For security, please use /launch in a private chat with me.')
     return
   }
@@ -511,6 +526,7 @@ async function startLaunchWizard(ctx: BotContext) {
   // Initialize session data
   ctx.session = ctx.session || {}
   ctx.session.launchData = { step: 'name' } as any
+  console.log(`📝 Session initialized with launchData:`, ctx.session.launchData)
 
   const launchIntro = `
 🚀 *Launch New Token*
@@ -529,7 +545,9 @@ async function startLaunchWizard(ctx: BotContext) {
 📝 *What's your TOKEN NAME?*
 _Example: "Claude Wheel", "My Token"_
 `
+  console.log(`📤 Sending launch intro message...`)
   await ctx.replyWithMarkdown(launchIntro, cancelKeyboard)
+  console.log(`✅ Launch intro sent successfully`)
 }
 
 async function startRegisterWizard(ctx: BotContext) {
@@ -1080,7 +1098,7 @@ Each token can only have one flywheel operator.`)
         console.warn('Could not check for existing token:', error)
       }
 
-      // Fetch token data from DexScreener
+      // Fetch token data from DexScreener and Bags.fm
       await ctx.reply('🔍 Fetching token data...')
 
       try {
@@ -1092,9 +1110,13 @@ Each token can only have one flywheel operator.`)
           data.tokenName = tokenInfo.tokenName || ''
           data.tokenImage = tokenInfo.tokenImage || ''
           data.isGraduated = tokenInfo.isGraduated
+          data.creatorWallet = tokenInfo.creatorWallet || '' // Store for verification
 
           const statusBadge = tokenInfo.isGraduated ? '🟢 GRADUATED' : '🟡 BONDING'
           const marketCapStr = tokenInfo.marketCap > 0 ? `$${tokenInfo.marketCap.toLocaleString()}` : 'N/A'
+          const creatorInfo = tokenInfo.creatorWallet
+            ? `\`${tokenInfo.creatorWallet.slice(0, 8)}...${tokenInfo.creatorWallet.slice(-6)}\``
+            : '_Unknown_'
 
           const tokenFoundMessage = `
 ✅ *Token Found!*
@@ -1105,12 +1127,16 @@ Each token can only have one flywheel operator.`)
 
 ┌ Status: ${statusBadge}
 ├ Market Cap: ${marketCapStr}
-└ Holders: ${tokenInfo.holders > 0 ? tokenInfo.holders.toLocaleString() : 'N/A'}
+├ Holders: ${tokenInfo.holders > 0 ? tokenInfo.holders.toLocaleString() : 'N/A'}
+└ Creator: ${creatorInfo}
 
 Mint: \`${text.slice(0, 12)}...${text.slice(-8)}\`
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
-
+${tokenInfo.creatorWallet ? `
+⚠️ *Ownership Verification Enabled*
+Your dev wallet must match the creator address.
+` : ''}
 Is this the correct token?
 `
           await ctx.replyWithMarkdown(tokenFoundMessage, confirmTokenKeyboard)
@@ -1199,18 +1225,41 @@ We need the private key to claim fees.
         await ctx.reply('Invalid private key format. Must be a base58 encoded Solana keypair. Please try again:')
         return
       }
-      data.devWalletPrivateKey = text
-      data.devWalletAddress = devAddress
 
-      // Try to delete the message with private key
+      // Try to delete the message with private key immediately
       try {
         await ctx.deleteMessage()
       } catch (e) {
         // Can't delete in some cases
       }
 
+      // SECURITY: Verify wallet ownership against token creator
+      // The dev wallet should match the token creator from Bags.fm
+      if (data.creatorWallet && data.creatorWallet.length > 0) {
+        if (devAddress !== data.creatorWallet) {
+          await ctx.replyWithMarkdown(`
+⛔ *Wallet Verification Failed*
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+The wallet you provided does not match the token creator.
+
+*Your wallet:* \`${devAddress.slice(0, 8)}...${devAddress.slice(-6)}\`
+*Token creator:* \`${data.creatorWallet.slice(0, 8)}...${data.creatorWallet.slice(-6)}\`
+
+You can only register tokens where you are the creator (fee recipient).
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+`)
+          ctx.session.registerData = undefined
+          return
+        }
+      }
+
+      data.devWalletPrivateKey = text
+      data.devWalletAddress = devAddress
+
       await ctx.replyWithMarkdown(`
-✅ *Dev wallet encrypted!*
+✅ *Dev wallet verified & encrypted!*
 Address: \`${devAddress.slice(0, 8)}...\`
 
 ⚠️ *DELETE your previous message NOW!*
@@ -1437,6 +1486,10 @@ export async function startTelegramBot(): Promise<void> {
   }
 
   try {
+    // Get bot info to verify connection
+    const botInfo = await botInstance.telegram.getMe()
+    console.log(`🤖 Bot connected: @${botInfo.username} (ID: ${botInfo.id})`)
+
     // Use webhook in production, polling in development
     if (env.isProd && env.telegramWebhookUrl) {
       try {
@@ -1447,6 +1500,13 @@ export async function startTelegramBot(): Promise<void> {
         console.warn(`   Webhook URL: ${env.telegramWebhookUrl}`)
         console.warn(`   Error: ${webhookError instanceof Error ? webhookError.message : webhookError}`)
         console.warn(`   Tip: Update TELEGRAM_WEBHOOK_URL to your actual backend URL (e.g., https://your-backend.onrender.com/telegram/webhook)`)
+        // Delete any existing webhook before falling back to polling
+        try {
+          await botInstance.telegram.deleteWebhook()
+          console.log('🗑️ Deleted existing webhook to enable polling')
+        } catch (deleteError) {
+          console.warn('Could not delete webhook:', deleteError)
+        }
         // Fall back to polling
         await botInstance.launch()
         console.log('✅ Telegram bot started (polling mode - fallback)')
@@ -1456,6 +1516,8 @@ export async function startTelegramBot(): Promise<void> {
       await botInstance.launch()
       console.log('✅ Telegram bot started (polling mode)')
     }
+
+    console.log('📝 Registered commands: /start, /help, /launch, /register, /mytokens, /status, /toggle, /cancel')
   } catch (error) {
     console.error('Failed to start Telegram bot:', error)
   }

@@ -81,25 +81,60 @@ export class MarketMaker {
     amount: number, // in lamports or smallest unit
     slippageBps: number = 50 // 0.5% default
   ): Promise<any> {
-    try {
-      const params = new URLSearchParams({
-        inputMint,
-        outputMint,
-        amount: amount.toString(),
-        slippageBps: slippageBps.toString(),
-      })
+    const params = new URLSearchParams({
+      inputMint,
+      outputMint,
+      amount: amount.toString(),
+      slippageBps: slippageBps.toString(),
+    })
 
-      const response = await fetch(`${env.jupiterApiUrl}/quote?${params}`)
+    // Try multiple API endpoints with retry logic
+    const apiUrls = [
+      env.jupiterApiUrl,
+      'https://api.jup.ag/swap/v1', // Newer endpoint
+      'https://quote-api.jup.ag/v6', // Original endpoint
+    ]
 
-      if (!response.ok) {
-        throw new Error(`Jupiter quote failed: ${response.statusText}`)
+    for (let attempt = 0; attempt < 3; attempt++) {
+      for (const apiUrl of apiUrls) {
+        try {
+          const controller = new AbortController()
+          const timeout = setTimeout(() => controller.abort(), 10000) // 10s timeout
+
+          const response = await fetch(`${apiUrl}/quote?${params}`, {
+            signal: controller.signal,
+          })
+
+          clearTimeout(timeout)
+
+          if (!response.ok) {
+            console.warn(`Jupiter quote failed from ${apiUrl}: ${response.statusText}`)
+            continue
+          }
+
+          const data = await response.json()
+          if (data) {
+            console.log(`✅ Got Jupiter quote from ${apiUrl}`)
+            return data
+          }
+        } catch (error: any) {
+          if (error.name === 'AbortError') {
+            console.warn(`Jupiter API timeout from ${apiUrl}`)
+          } else if (error.message?.includes('ENOTFOUND') || error.message?.includes('getaddrinfo')) {
+            console.warn(`Jupiter API DNS error from ${apiUrl}: ${error.message}`)
+          } else {
+            console.warn(`Jupiter API error from ${apiUrl}:`, error.message)
+          }
+        }
       }
-
-      return await response.json()
-    } catch (error) {
-      console.error('Failed to get Jupiter quote:', error)
-      return null
+      // Wait before retry
+      if (attempt < 2) {
+        await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1)))
+      }
     }
+
+    console.error('Failed to get Jupiter quote after all retries')
+    return null
   }
 
   async executeSwap(quoteResponse: any): Promise<string | null> {
@@ -108,24 +143,53 @@ export class MarketMaker {
       return null
     }
 
-    try {
-      // Get swap transaction from Jupiter
-      const swapResponse = await fetch(`${env.jupiterApiUrl}/swap`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          quoteResponse,
-          userPublicKey: this.opsWallet.publicKey.toString(),
-          wrapAndUnwrapSol: true,
-        }),
-      })
+    // Try multiple API endpoints
+    const apiUrls = [
+      env.jupiterApiUrl,
+      'https://api.jup.ag/swap/v1',
+      'https://quote-api.jup.ag/v6',
+    ]
 
-      if (!swapResponse.ok) {
-        throw new Error(`Jupiter swap failed: ${swapResponse.statusText}`)
+    let swapTransaction: string | null = null
+
+    for (const apiUrl of apiUrls) {
+      try {
+        const controller = new AbortController()
+        const timeout = setTimeout(() => controller.abort(), 15000) // 15s timeout
+
+        const swapResponse = await fetch(`${apiUrl}/swap`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            quoteResponse,
+            userPublicKey: this.opsWallet.publicKey.toString(),
+            wrapAndUnwrapSol: true,
+          }),
+          signal: controller.signal,
+        })
+
+        clearTimeout(timeout)
+
+        if (!swapResponse.ok) {
+          console.warn(`Jupiter swap failed from ${apiUrl}: ${swapResponse.statusText}`)
+          continue
+        }
+
+        const data = await swapResponse.json() as { swapTransaction: string }
+        swapTransaction = data.swapTransaction
+        console.log(`✅ Got Jupiter swap transaction from ${apiUrl}`)
+        break
+      } catch (error: any) {
+        console.warn(`Jupiter swap API error from ${apiUrl}:`, error.message)
       }
+    }
 
-      const { swapTransaction } = await swapResponse.json() as { swapTransaction: string }
+    if (!swapTransaction) {
+      console.error('Failed to get Jupiter swap transaction from all endpoints')
+      return null
+    }
 
+    try {
       // Deserialize and sign transaction
       const transactionBuf = Buffer.from(swapTransaction, 'base64')
       const transaction = VersionedTransaction.deserialize(transactionBuf)
