@@ -353,11 +353,19 @@ export default function DocsPage() {
 
         {/* Footer */}
         <footer className="mt-16 pt-8 border-t border-border-subtle text-center">
+          <div className="flex justify-center gap-6 mb-4">
+            <Link href="/privacy" className="text-text-muted hover:text-accent-primary font-mono text-sm transition-colors">
+              Privacy Policy
+            </Link>
+            <Link href="/" className="text-text-muted hover:text-accent-primary font-mono text-sm transition-colors">
+              Home
+            </Link>
+          </div>
           <p className="text-text-muted font-mono text-xs">
             CA: 8JLGQ7RqhsvhsDhvjMuJUeeuaQ53GTJqSHNaBWf4BAGS
           </p>
           <p className="text-text-muted/50 font-mono text-xs mt-2">
-            &copy; 2026 Claude Wheel. All rights reserved.
+            &copy; 2025 Claude Wheel. All rights reserved.
           </p>
         </footer>
       </main>

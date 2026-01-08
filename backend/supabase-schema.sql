@@ -352,3 +352,111 @@ ALTER TABLE user_flywheel_state ADD COLUMN IF NOT EXISTS last_check_result TEXT;
 -- Add platform fee tracking columns to user_claim_history
 ALTER TABLE user_claim_history ADD COLUMN IF NOT EXISTS platform_fee_sol DECIMAL DEFAULT 0;
 ALTER TABLE user_claim_history ADD COLUMN IF NOT EXISTS user_received_sol DECIMAL DEFAULT 0;
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- TELEGRAM BOT TABLES
+-- ═══════════════════════════════════════════════════════════════════════════
+
+-- Telegram users table
+CREATE TABLE IF NOT EXISTS telegram_users (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  telegram_id BIGINT UNIQUE NOT NULL,
+  telegram_username TEXT,
+  wallet_address TEXT,
+  wallet_verified BOOLEAN DEFAULT FALSE,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Pending token launches (before SOL deposit)
+CREATE TABLE IF NOT EXISTS pending_token_launches (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  telegram_user_id UUID REFERENCES telegram_users(id) ON DELETE CASCADE,
+
+  -- Token details
+  token_name TEXT NOT NULL,
+  token_symbol TEXT NOT NULL,
+  token_description TEXT,
+  token_image_url TEXT,
+
+  -- Generated wallets (encrypted)
+  dev_wallet_address TEXT NOT NULL,
+  dev_wallet_private_key_encrypted TEXT NOT NULL,
+  dev_encryption_iv TEXT NOT NULL,
+  dev_encryption_auth_tag TEXT,
+
+  ops_wallet_address TEXT NOT NULL,
+  ops_wallet_private_key_encrypted TEXT NOT NULL,
+  ops_encryption_iv TEXT NOT NULL,
+  ops_encryption_auth_tag TEXT,
+
+  -- Status
+  status TEXT DEFAULT 'awaiting_deposit'
+    CHECK (status IN ('awaiting_deposit', 'launching', 'completed', 'failed', 'expired', 'refunded')),
+  deposit_received_sol DECIMAL DEFAULT 0,
+  token_mint_address TEXT, -- Set after successful launch
+
+  -- Error handling
+  error_message TEXT,
+  retry_count INTEGER DEFAULT 0,
+
+  -- Timing
+  expires_at TIMESTAMPTZ DEFAULT (NOW() + INTERVAL '24 hours'),
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Audit log for all critical operations
+CREATE TABLE IF NOT EXISTS audit_log (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  event_type TEXT NOT NULL,
+  user_token_id UUID REFERENCES user_tokens(id),
+  pending_launch_id UUID REFERENCES pending_token_launches(id),
+  telegram_id BIGINT,
+  details JSONB,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Link existing user_tokens to telegram
+ALTER TABLE user_tokens ADD COLUMN IF NOT EXISTS telegram_user_id UUID REFERENCES telegram_users(id);
+
+-- Track if token was launched via telegram bot
+ALTER TABLE user_tokens ADD COLUMN IF NOT EXISTS launched_via_telegram BOOLEAN DEFAULT FALSE;
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- TELEGRAM INDEXES
+-- ═══════════════════════════════════════════════════════════════════════════
+
+CREATE INDEX IF NOT EXISTS idx_telegram_users_telegram_id ON telegram_users(telegram_id);
+CREATE INDEX IF NOT EXISTS idx_pending_launches_status ON pending_token_launches(status);
+CREATE INDEX IF NOT EXISTS idx_pending_launches_telegram ON pending_token_launches(telegram_user_id);
+CREATE INDEX IF NOT EXISTS idx_pending_launches_expires ON pending_token_launches(expires_at);
+CREATE INDEX IF NOT EXISTS idx_pending_launches_dev_wallet ON pending_token_launches(dev_wallet_address);
+CREATE INDEX IF NOT EXISTS idx_audit_log_event ON audit_log(event_type);
+CREATE INDEX IF NOT EXISTS idx_audit_log_created ON audit_log(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_user_tokens_telegram ON user_tokens(telegram_user_id);
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- TELEGRAM RLS POLICIES
+-- ═══════════════════════════════════════════════════════════════════════════
+
+ALTER TABLE telegram_users ENABLE ROW LEVEL SECURITY;
+ALTER TABLE pending_token_launches ENABLE ROW LEVEL SECURITY;
+ALTER TABLE audit_log ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Allow service role all" ON telegram_users;
+CREATE POLICY "Allow service role all" ON telegram_users FOR ALL USING (true);
+
+DROP POLICY IF EXISTS "Allow service role all" ON pending_token_launches;
+CREATE POLICY "Allow service role all" ON pending_token_launches FOR ALL USING (true);
+
+DROP POLICY IF EXISTS "Allow service role all" ON audit_log;
+CREATE POLICY "Allow service role all" ON audit_log FOR ALL USING (true);
+
+-- Enable realtime for telegram tables
+DO $$
+BEGIN
+  ALTER PUBLICATION supabase_realtime ADD TABLE pending_token_launches;
+EXCEPTION WHEN duplicate_object THEN
+  NULL;
+END $$;

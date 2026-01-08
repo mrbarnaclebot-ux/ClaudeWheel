@@ -15,6 +15,8 @@ import authRoutes from './routes/auth.routes'
 import userTokenRoutes from './routes/user-token.routes'
 import { bagsFmService } from './services/bags-fm'
 import { isEncryptionConfigured } from './services/encryption.service'
+import { startTelegramBot, stopTelegramBot, getTelegramWebhookMiddleware } from './telegram/bot'
+import { startDepositMonitorJob, stopDepositMonitorJob } from './jobs/deposit-monitor.job'
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CLAUDE FLYWHEEL BACKEND
@@ -33,6 +35,12 @@ app.use('/api/admin', adminRoutes)
 app.use('/api/bags', bagsRoutes)
 app.use('/api/auth', authRoutes)
 app.use('/api/user', userTokenRoutes)
+
+// Telegram webhook (for production)
+const telegramWebhook = getTelegramWebhookMiddleware()
+if (telegramWebhook) {
+  app.use('/telegram/webhook', telegramWebhook)
+}
 
 // Root endpoint
 app.get('/', (req, res) => {
@@ -69,6 +77,10 @@ app.get('/', (req, res) => {
         claim: '/api/user/tokens/:tokenId/claim (POST)',
         claims: '/api/user/tokens/:tokenId/claims (GET)',
         sell: '/api/user/tokens/:tokenId/sell (POST)',
+      },
+      telegram: {
+        webhook: '/telegram/webhook (POST)',
+        note: 'Use Telegram bot @ClaudeWheelBot for token launch and management',
       },
     },
   })
@@ -155,6 +167,20 @@ async function initializeServices() {
     } else {
       console.log('ℹ️ Multi-user flywheel job disabled via MULTI_USER_FLYWHEEL_ENABLED=false')
     }
+
+    // Start deposit monitor job for Telegram token launches
+    if (process.env.DEPOSIT_MONITOR_ENABLED !== 'false') {
+      startDepositMonitorJob()
+    } else {
+      console.log('ℹ️ Deposit monitor job disabled via DEPOSIT_MONITOR_ENABLED=false')
+    }
+  }
+
+  // Start Telegram bot
+  if (env.telegramBotToken) {
+    await startTelegramBot()
+  } else {
+    console.log('⚠️ Telegram bot not configured (set TELEGRAM_BOT_TOKEN)')
   }
 }
 
@@ -167,6 +193,8 @@ const server = app.listen(env.port, async () => {
 // Graceful shutdown
 process.on('SIGTERM', () => {
   console.log('\n👋 Shutting down gracefully...')
+  stopTelegramBot()
+  stopDepositMonitorJob()
   server.close(() => {
     console.log('Server closed')
     process.exit(0)
@@ -175,6 +203,8 @@ process.on('SIGTERM', () => {
 
 process.on('SIGINT', () => {
   console.log('\n👋 Shutting down gracefully...')
+  stopTelegramBot()
+  stopDepositMonitorJob()
   server.close(() => {
     console.log('Server closed')
     process.exit(0)

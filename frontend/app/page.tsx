@@ -396,6 +396,12 @@ export default function Dashboard() {
                   Docs
                 </a>
                 <a
+                  href="/privacy"
+                  className="hover:text-accent-primary transition-colors"
+                >
+                  Privacy
+                </a>
+                <a
                   href="https://github.com/mrbarnaclebot-ux/ClaudeWheel"
                   target="_blank"
                   rel="noopener noreferrer"

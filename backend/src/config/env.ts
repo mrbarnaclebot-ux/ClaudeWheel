@@ -44,6 +44,10 @@ const envSchema = z.object({
 
   // Bags.fm
   BAGS_FM_API_KEY: z.string().optional(),
+
+  // Telegram Bot
+  TELEGRAM_BOT_TOKEN: z.string().optional(),
+  TELEGRAM_WEBHOOK_URL: z.string().url().optional(),
 })
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -97,6 +101,10 @@ export const env = {
 
   // Bags.fm
   bagsFmApiKey: parsed.data.BAGS_FM_API_KEY,
+
+  // Telegram Bot
+  telegramBotToken: parsed.data.TELEGRAM_BOT_TOKEN,
+  telegramWebhookUrl: parsed.data.TELEGRAM_WEBHOOK_URL,
 }
 
 export type Env = typeof env
