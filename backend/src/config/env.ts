@@ -38,6 +38,7 @@ const envSchema = z.object({
   MAX_BUY_AMOUNT_SOL: z.string().default('0.5'),
   MAX_SELL_AMOUNT_TOKENS: z.string().default('100000'),
   PLATFORM_FEE_PERCENTAGE: z.string().default('10'), // Platform fee % taken from user claims
+  PLATFORM_FEE_WALLET: z.string().optional(), // Wallet to receive platform fees
 
   // Jupiter
   JUPITER_API_URL: z.string().url().default('https://quote-api.jup.ag/v6'),
@@ -95,6 +96,7 @@ export const env = {
   maxBuyAmountSol: parseFloat(parsed.data.MAX_BUY_AMOUNT_SOL),
   maxSellAmountTokens: parseFloat(parsed.data.MAX_SELL_AMOUNT_TOKENS),
   platformFeePercentage: parseFloat(parsed.data.PLATFORM_FEE_PERCENTAGE),
+  platformFeeWallet: parsed.data.PLATFORM_FEE_WALLET,
 
   // Jupiter
   jupiterApiUrl: parsed.data.JUPITER_API_URL,

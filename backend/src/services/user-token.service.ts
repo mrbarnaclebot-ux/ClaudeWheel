@@ -199,24 +199,15 @@ export async function registerToken(params: RegisterTokenParams): Promise<UserTo
       }])
 
     if (stateError) {
-      console.error('⚠️ Failed to create flywheel state:', stateError)
-      // Non-critical, continue
+      console.error('❌ Failed to create flywheel state:', stateError)
+      // Clean up token and config if state creation fails
+      await supabase.from('user_token_config').delete().eq('user_token_id', userToken.id)
+      await supabase.from('user_tokens').delete().eq('id', userToken.id)
+      throw new Error('Failed to create flywheel state')
     }
 
-    // Create default fee stats
-    const { error: feeStatsError } = await supabase
-      .from('user_fee_stats')
-      .insert([{
-        user_token_id: userToken.id,
-        total_claimed_sol: 0,
-        total_claimed_usd: 0,
-        total_claims_count: 0,
-      }])
-
-    if (feeStatsError) {
-      console.error('⚠️ Failed to create fee stats:', feeStatsError)
-      // Non-critical, continue
-    }
+    // Note: Fee stats are tracked via user_claim_history table
+    // Aggregates can be computed from claim history when needed
 
     console.log(`✅ Registered token ${params.tokenSymbol} for user ${params.userId}`)
 

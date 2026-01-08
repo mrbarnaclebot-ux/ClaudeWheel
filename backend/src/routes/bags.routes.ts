@@ -169,14 +169,19 @@ router.get('/quote', async (req: Request, res: Response) => {
 // GET /api/bags/dashboard - Get comprehensive dashboard data
 router.get('/dashboard', async (req: Request, res: Response) => {
   try {
-    // Get token mint from query or env config
-    const tokenMint = req.query.tokenMint as string || env.tokenMintAddress
+    // Get token mint from query - don't fall back to env in multi-user mode
+    // as the default is just a placeholder
+    const queryTokenMint = req.query.tokenMint as string
+    const isEnvTokenConfigured = env.tokenMintAddress &&
+      !env.tokenMintAddress.includes('PLACEHOLDER') &&
+      env.tokenMintAddress.length === 44 // Valid Solana address length
+    const tokenMint = queryTokenMint || (isEnvTokenConfigured ? env.tokenMintAddress : null)
     const wallet = req.query.wallet as string
 
     if (!tokenMint) {
       return res.status(400).json({
         success: false,
-        error: 'No token mint configured',
+        error: 'Token mint is required. Pass tokenMint as query parameter.',
         timestamp: new Date().toISOString(),
       })
     }

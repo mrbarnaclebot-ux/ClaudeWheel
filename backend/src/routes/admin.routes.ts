@@ -632,6 +632,11 @@ router.post('/tokens/:id/suspend', verifyAdminAuth, async (req: Request, res: Re
       return res.status(400).json({ error: 'Suspension reason is required' })
     }
 
+    // Validate reason length
+    if (reason.length > 500) {
+      return res.status(400).json({ error: 'Suspension reason must be 500 characters or less' })
+    }
+
     // Suspend the token and disable all automation
     const { error: tokenError } = await supabase
       .from('user_tokens')
@@ -718,18 +723,34 @@ router.put('/tokens/:id/limits', verifyAdminAuth, async (req: Request, res: Resp
     const { id } = req.params
     const { dailyTradeLimitSol, maxPositionSizeSol, riskLevel } = req.body
 
+    // Define reasonable upper bounds
+    const MAX_DAILY_LIMIT_SOL = 1000
+    const MAX_POSITION_SIZE_SOL = 100
+
     const updates: any = {}
 
-    if (typeof dailyTradeLimitSol === 'number' && dailyTradeLimitSol >= 0) {
+    if (typeof dailyTradeLimitSol === 'number') {
+      if (dailyTradeLimitSol < 0 || dailyTradeLimitSol > MAX_DAILY_LIMIT_SOL) {
+        return res.status(400).json({
+          error: `Daily trade limit must be between 0 and ${MAX_DAILY_LIMIT_SOL} SOL`
+        })
+      }
       updates.daily_trade_limit_sol = dailyTradeLimitSol
     }
 
-    if (typeof maxPositionSizeSol === 'number' && maxPositionSizeSol >= 0) {
+    if (typeof maxPositionSizeSol === 'number') {
+      if (maxPositionSizeSol < 0 || maxPositionSizeSol > MAX_POSITION_SIZE_SOL) {
+        return res.status(400).json({
+          error: `Max position size must be between 0 and ${MAX_POSITION_SIZE_SOL} SOL`
+        })
+      }
       updates.max_position_size_sol = maxPositionSizeSol
     }
 
     if (riskLevel && ['low', 'medium', 'high'].includes(riskLevel)) {
       updates.risk_level = riskLevel
+    } else if (riskLevel !== undefined) {
+      return res.status(400).json({ error: 'Risk level must be low, medium, or high' })
     }
 
     if (Object.keys(updates).length === 0) {

@@ -98,14 +98,20 @@ export function validatePrivateKey(privateKeyBase58: string): string | null {
 
 /**
  * Get keypair from encrypted data
+ * @throws Error if decryption fails or key is invalid
  */
 export function getKeypairFromEncrypted(
   encryptedPrivateKey: string,
   iv: string,
   authTag: string
 ): Keypair {
-  const { decrypt } = require('./encryption.service')
-  const decrypted = decrypt({ ciphertext: encryptedPrivateKey, iv, authTag })
-  const secretKey = bs58.decode(decrypted)
-  return Keypair.fromSecretKey(secretKey)
+  try {
+    const { decrypt } = require('./encryption.service')
+    const decrypted = decrypt({ ciphertext: encryptedPrivateKey, iv, authTag })
+    const secretKey = bs58.decode(decrypted)
+    return Keypair.fromSecretKey(secretKey)
+  } catch (error: any) {
+    const errorMessage = error?.message || 'Unknown error'
+    throw new Error(`Failed to decrypt wallet key: ${errorMessage}`)
+  }
 }
