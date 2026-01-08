@@ -103,29 +103,31 @@ class TokenLauncherService {
       }
 
       // Step 2: Configure fee sharing (optional but recommended)
-      let configKey: string | undefined
+      let configKey: string
       const feeShareResult = await this.configureFeeSharing({
         tokenMint: tokenInfoResult.tokenMint,
         creatorWallet: params.devWalletAddress,
         creatorBps: 10000, // 100% to creator (10000 bps = 100%)
       })
 
-      if (!feeShareResult.success) {
+      if (!feeShareResult.success || !feeShareResult.configKey) {
         console.warn(`⚠️ Fee sharing configuration failed: ${feeShareResult.error}`)
-        // Continue anyway - some launches may work without explicit fee config
+        // Generate a config keypair as fallback - API requires configKey to be a valid public key
+        const configKeypair = Keypair.generate()
+        configKey = configKeypair.publicKey.toString()
+        console.log(`📝 Generated fallback configKey: ${configKey.slice(0, 8)}...`)
       } else {
         console.log(`💰 Fee sharing configured: 100% to creator`)
         configKey = feeShareResult.configKey
       }
 
       // Step 3: Create launch transaction with correct parameters
-      // Note: Only pass configKey if we have a valid one from fee share config
-      // The launchId from token info is a MongoDB ObjectId, not a valid Solana public key
+      // configKey must be a valid Solana public key (base58 encoded, 32 bytes)
       const launchTxResult = await this.createLaunchTransaction({
         tokenMint: tokenInfoResult.tokenMint,
         creatorWallet: params.devWalletAddress,
         tokenMetadata: tokenInfoResult.tokenMetadata, // IPFS URL from step 1
-        launchId: configKey, // Only pass if fee share config succeeded
+        launchId: configKey, // Always pass a valid public key
       })
 
       if (!launchTxResult.success || !launchTxResult.transaction) {
