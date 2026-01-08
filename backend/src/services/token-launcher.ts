@@ -119,11 +119,13 @@ class TokenLauncherService {
       }
 
       // Step 3: Create launch transaction with correct parameters
+      // Note: Only pass configKey if we have a valid one from fee share config
+      // The launchId from token info is a MongoDB ObjectId, not a valid Solana public key
       const launchTxResult = await this.createLaunchTransaction({
         tokenMint: tokenInfoResult.tokenMint,
         creatorWallet: params.devWalletAddress,
         tokenMetadata: tokenInfoResult.tokenMetadata, // IPFS URL from step 1
-        launchId: configKey || tokenInfoResult.launchId, // Use configKey if available, else launchId
+        launchId: configKey, // Only pass if fee share config succeeded
       })
 
       if (!launchTxResult.success || !launchTxResult.transaction) {
