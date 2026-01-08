@@ -188,9 +188,14 @@ class BagsFmService {
         tokenInfo.tokenName = dexData.tokenName || tokenInfo.tokenName
         tokenInfo.tokenSymbol = dexData.tokenSymbol || tokenInfo.tokenSymbol
         tokenInfo.tokenImage = dexData.tokenImage || tokenInfo.tokenImage
+        // Set graduated status from DexScreener (checks if on Raydium vs bonding curve)
+        tokenInfo.isGraduated = dexData.isGraduated
         // Estimate bonding curve progress from market cap (bonding curves typically graduate at ~$69k)
         // Progress is stored as decimal 0-1 for frontend compatibility
-        if (dexData.marketCap > 0) {
+        // If graduated, show 100% complete
+        if (dexData.isGraduated) {
+          tokenInfo.bondingCurveProgress = 1
+        } else if (dexData.marketCap > 0) {
           tokenInfo.bondingCurveProgress = Math.min(1, dexData.marketCap / 69000)
         }
       }
@@ -220,6 +225,7 @@ class BagsFmService {
     tokenName: string
     tokenSymbol: string
     tokenImage: string
+    isGraduated: boolean
   } | null> {
     try {
       const response = await fetch(
@@ -238,12 +244,19 @@ class BagsFmService {
         return (pair.liquidity?.usd || 0) > (best.liquidity?.usd || 0) ? pair : best
       }, data.pairs[0])
 
+      // Check if token has graduated (moved to Raydium or other DEX from bonding curve)
+      // Graduated tokens are on raydium, orca, meteora, etc. instead of bonding curve
+      const bondingCurveDexes = ['pump', 'bags', 'moonshot', 'bonding']
+      const dexId = (bestPair.dexId || '').toLowerCase()
+      const isGraduated = !bondingCurveDexes.some(bc => dexId.includes(bc))
+
       return {
         marketCap: bestPair.marketCap || bestPair.fdv || 0,
         volume24h: bestPair.volume?.h24 || 0,
         tokenName: bestPair.baseToken?.name || '',
         tokenSymbol: bestPair.baseToken?.symbol || '',
         tokenImage: bestPair.info?.imageUrl || '',
+        isGraduated,
       }
     } catch (error) {
       return null
