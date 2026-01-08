@@ -194,7 +194,7 @@ class TokenLauncherService {
       const response = await fetch(`${BAGS_API_BASE}/token-launch/create-token-info`, {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${this.apiKey}`,
+          'x-api-key': this.apiKey!,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify(requestBody),
@@ -242,7 +242,7 @@ class TokenLauncherService {
       const response = await fetch(`${BAGS_API_BASE}/token-launch/create-launch-transaction`, {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${this.apiKey}`,
+          'x-api-key': this.apiKey!,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
@@ -351,7 +351,7 @@ class TokenLauncherService {
     try {
       const response = await fetch(`${BAGS_API_BASE}/health`, {
         headers: {
-          'Authorization': `Bearer ${this.apiKey}`,
+          'x-api-key': this.apiKey!,
         },
       })
       return response.ok
@@ -368,7 +368,7 @@ class TokenLauncherService {
       const response = await fetch(
         `${BAGS_API_BASE}/token-launch/creator/v3?tokenMint=${tokenMint}`,
         {
-          headers: this.apiKey ? { 'Authorization': `Bearer ${this.apiKey}` } : {},
+          headers: this.apiKey ? { 'x-api-key': this.apiKey } : {},
         }
       )
 
