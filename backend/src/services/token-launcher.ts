@@ -203,6 +203,9 @@ class TokenLauncherService {
 
       const data = await response.json() as any
 
+      // Log the full response to debug token mint extraction
+      console.log('📥 Token info API response:', JSON.stringify(data, null, 2))
+
       if (!response.ok) {
         return {
           success: false,
@@ -210,13 +213,22 @@ class TokenLauncherService {
         }
       }
 
-      // Handle different response formats
-      const tokenMint = data.response?.token_mint || data.data?.token_mint || data.token_mint
+      // Handle different response formats - check both camelCase and snake_case
+      const tokenMint = data.response?.tokenMint || data.response?.token_mint ||
+                        data.data?.tokenMint || data.data?.token_mint ||
+                        data.tokenMint || data.token_mint ||
+                        data.response?.mint || data.data?.mint || data.mint ||
+                        data.response?.mintAddress || data.data?.mintAddress || data.mintAddress
 
       if (!tokenMint) {
+        console.error('❌ Could not find token mint in response. Available keys:', {
+          topLevel: Object.keys(data),
+          response: data.response ? Object.keys(data.response) : 'N/A',
+          data: data.data ? Object.keys(data.data) : 'N/A',
+        })
         return {
           success: false,
-          error: 'No token mint in response',
+          error: `No token mint in response. Response keys: ${Object.keys(data).join(', ')}`,
         }
       }
 
