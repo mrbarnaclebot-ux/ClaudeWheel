@@ -454,11 +454,224 @@ _Use /settings ${symbol} to configure_
       return
     }
   })
+
+  // Handle photo uploads for launch wizard image step
+  bot.on('photo', async (ctx) => {
+    ctx.session = ctx.session || {}
+    const data = ctx.session.launchData as any
+
+    // Only handle photos during launch wizard image step
+    if (!data || data.step !== 'image') {
+      return
+    }
+
+    try {
+      await ctx.reply('📤 *Uploading your image...*', { parse_mode: 'Markdown' })
+
+      // Get the largest photo (last in array)
+      const photos = ctx.message.photo
+      const largestPhoto = photos[photos.length - 1]
+
+      // Get file info from Telegram
+      const file = await ctx.telegram.getFile(largestPhoto.file_id)
+      const fileUrl = `https://api.telegram.org/file/bot${env.telegramBotToken}/${file.file_path}`
+
+      // Download the image
+      const response = await fetch(fileUrl)
+      if (!response.ok) {
+        throw new Error('Failed to download image from Telegram')
+      }
+      const imageBuffer = Buffer.from(await response.arrayBuffer())
+
+      // Upload to Supabase Storage
+      const publicUrl = await uploadTokenImage(imageBuffer, file.file_path || 'image.jpg')
+
+      if (!publicUrl) {
+        await ctx.reply('⚠️ Could not upload image. Please try sending a URL instead, or type "skip":')
+        return
+      }
+
+      data.tokenImageUrl = publicUrl
+      data.step = 'confirm'
+
+      await ctx.reply(`✅ *Image uploaded successfully!*`, { parse_mode: 'Markdown' })
+
+      // Continue to wallet generation
+      await ctx.reply('🔐 *Generating Secure Wallets...*', { parse_mode: 'Markdown' })
+      await finalizeLaunchWizard(ctx)
+    } catch (error) {
+      console.error('Error handling photo upload:', error)
+      await ctx.reply('⚠️ Error uploading image. Please try sending a URL instead, or type "skip":')
+    }
+  })
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
 // HELPER FUNCTIONS
 // ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Upload token image to Supabase Storage
+ * Returns the public URL or null on failure
+ */
+async function uploadTokenImage(imageBuffer: Buffer, originalPath: string): Promise<string | null> {
+  try {
+    if (!supabase) {
+      console.warn('⚠️ Supabase not configured - cannot upload image')
+      return null
+    }
+
+    // Generate unique filename
+    const extension = originalPath.split('.').pop() || 'jpg'
+    const filename = `token-${Date.now()}-${Math.random().toString(36).substring(7)}.${extension}`
+    const storagePath = `token-images/${filename}`
+
+    // Determine content type
+    const contentType = extension === 'png' ? 'image/png' : 'image/jpeg'
+
+    // Upload to Supabase Storage
+    const { data, error } = await supabase.storage
+      .from('public-assets')
+      .upload(storagePath, imageBuffer, {
+        contentType,
+        upsert: false,
+      })
+
+    if (error) {
+      console.error('Supabase storage upload error:', error)
+      return null
+    }
+
+    // Get public URL
+    const { data: urlData } = supabase.storage
+      .from('public-assets')
+      .getPublicUrl(storagePath)
+
+    console.log(`✅ Image uploaded to Supabase: ${urlData.publicUrl}`)
+    return urlData.publicUrl
+  } catch (error) {
+    console.error('Failed to upload token image:', error)
+    return null
+  }
+}
+
+/**
+ * Finalize launch wizard - generate wallets and create pending launch
+ * Called after image step is complete (either URL, upload, or skip)
+ */
+async function finalizeLaunchWizard(ctx: BotContext): Promise<void> {
+  const data = ctx.session.launchData as any
+
+  try {
+    const { generateEncryptedWalletPair } = await import('../services/wallet-generator')
+    const wallets = generateEncryptedWalletPair()
+    const db = requireSupabase()
+
+    data.devWalletAddress = wallets.devWallet.address
+    data.opsWalletAddress = wallets.opsWallet.address
+
+    // Store pending launch in database
+    const telegramId = ctx.from?.id
+
+    // Get or create telegram user
+    let { data: telegramUser } = await db
+      .from('telegram_users')
+      .select('id')
+      .eq('telegram_id', telegramId)
+      .single()
+
+    if (!telegramUser) {
+      const { data: newUser } = await db
+        .from('telegram_users')
+        .insert({
+          telegram_id: telegramId,
+          telegram_username: ctx.from?.username,
+        })
+        .select('id')
+        .single()
+      telegramUser = newUser
+    }
+
+    // Create pending launch
+    const { data: pendingLaunch, error } = await db
+      .from('pending_token_launches')
+      .insert({
+        telegram_user_id: telegramUser?.id,
+        token_name: data.tokenName,
+        token_symbol: data.tokenSymbol,
+        token_description: data.tokenDescription,
+        token_image_url: data.tokenImageUrl,
+        dev_wallet_address: wallets.devWallet.address,
+        dev_wallet_private_key_encrypted: wallets.devWallet.encryptedPrivateKey,
+        dev_encryption_iv: wallets.devWallet.iv,
+        dev_encryption_auth_tag: wallets.devWallet.authTag,
+        ops_wallet_address: wallets.opsWallet.address,
+        ops_wallet_private_key_encrypted: wallets.opsWallet.encryptedPrivateKey,
+        ops_encryption_iv: wallets.opsWallet.iv,
+        ops_encryption_auth_tag: wallets.opsWallet.authTag,
+        status: 'awaiting_deposit',
+      })
+      .select('id')
+      .single()
+
+    if (error) {
+      console.error('Error creating pending launch:', error)
+      await ctx.reply('Error creating launch. Please try again with /launch')
+      ctx.session.launchData = undefined
+      return
+    }
+
+    data.pendingLaunchId = pendingLaunch?.id
+
+    // Log audit event
+    await db.from('audit_log').insert({
+      event_type: 'launch_started',
+      pending_launch_id: pendingLaunch?.id,
+      telegram_id: telegramId,
+      details: { token_name: data.tokenName, token_symbol: data.tokenSymbol },
+    })
+
+    const confirmMessage = `
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+*YOUR TOKEN SETUP*
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+*Token:* ${data.tokenName} (${data.tokenSymbol})
+
+*Dev Wallet* (receives fees):
+\`${wallets.devWallet.address}\`
+
+*Ops Wallet* (runs flywheel):
+\`${wallets.opsWallet.address}\`
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+*FUND TO LAUNCH*
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Send *0.5+ SOL* to your DEV WALLET:
+\`${wallets.devWallet.address}\`
+
+• 0.1 SOL = Token launch fee
+• 0.4+ SOL = Initial liquidity
+
+I'm monitoring for your deposit...
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+⏳ *Waiting for SOL deposit...*
+
+_The launch will expire in 24 hours if no deposit is received._
+_Use /cancel to abort this launch._
+`
+    await ctx.replyWithMarkdown(confirmMessage)
+
+    // Clear launch data from session (deposit monitor will handle the rest)
+    ctx.session.launchData = undefined
+  } catch (error) {
+    console.error('Error in finalizeLaunchWizard:', error)
+    await ctx.reply('Error generating wallets. Please try again with /launch')
+    ctx.session.launchData = undefined
+  }
+}
 
 async function sendWelcomeMessage(ctx: BotContext) {
   const welcomeMessage = `
@@ -900,14 +1113,14 @@ async function handleLaunchWizard(ctx: BotContext, text: string) {
       }
       data.tokenDescription = text
       data.step = 'image'
-      await ctx.reply(`Perfect!\n\n🖼️ *IMAGE URL?*\n(Direct link to PNG/JPG, recommended 400x400)\n\nOr type "skip" to use a default image.`, { parse_mode: 'Markdown' })
+      await ctx.reply(`Perfect!\n\n🖼️ *TOKEN IMAGE*\n\nYou can either:\n• 📤 *Upload a photo* directly in this chat\n• 🔗 *Send a URL* (direct link to PNG/JPG)\n• Type "skip" to use a default image\n\n_Recommended: 400x400 square image_`, { parse_mode: 'Markdown' })
       break
 
     case 'image':
       if (text.toLowerCase() !== 'skip') {
         // Basic URL validation
         if (!text.startsWith('http://') && !text.startsWith('https://')) {
-          await ctx.reply('Please provide a valid URL starting with http:// or https://, or type "skip":')
+          await ctx.reply('Please provide a valid URL starting with http:// or https://, upload a photo, or type "skip":')
           return
         }
         data.tokenImageUrl = text
@@ -916,116 +1129,7 @@ async function handleLaunchWizard(ctx: BotContext, text: string) {
 
       // Generate wallets and show confirmation
       await ctx.reply('🔐 *Generating Secure Wallets...*', { parse_mode: 'Markdown' })
-
-      try {
-        const { generateEncryptedWalletPair } = await import('../services/wallet-generator')
-        const wallets = generateEncryptedWalletPair()
-        const db = requireSupabase()
-
-        data.devWalletAddress = wallets.devWallet.address
-        data.opsWalletAddress = wallets.opsWallet.address
-
-        // Store pending launch in database
-        const telegramId = ctx.from?.id
-
-        // Get or create telegram user
-        let { data: telegramUser } = await db
-          .from('telegram_users')
-          .select('id')
-          .eq('telegram_id', telegramId)
-          .single()
-
-        if (!telegramUser) {
-          const { data: newUser } = await db
-            .from('telegram_users')
-            .insert({
-              telegram_id: telegramId,
-              telegram_username: ctx.from?.username,
-            })
-            .select('id')
-            .single()
-          telegramUser = newUser
-        }
-
-        // Create pending launch
-        const { data: pendingLaunch, error } = await db
-          .from('pending_token_launches')
-          .insert({
-            telegram_user_id: telegramUser?.id,
-            token_name: data.tokenName,
-            token_symbol: data.tokenSymbol,
-            token_description: data.tokenDescription,
-            token_image_url: data.tokenImageUrl,
-            dev_wallet_address: wallets.devWallet.address,
-            dev_wallet_private_key_encrypted: wallets.devWallet.encryptedPrivateKey,
-            dev_encryption_iv: wallets.devWallet.iv,
-            dev_encryption_auth_tag: wallets.devWallet.authTag,
-            ops_wallet_address: wallets.opsWallet.address,
-            ops_wallet_private_key_encrypted: wallets.opsWallet.encryptedPrivateKey,
-            ops_encryption_iv: wallets.opsWallet.iv,
-            ops_encryption_auth_tag: wallets.opsWallet.authTag,
-            status: 'awaiting_deposit',
-          })
-          .select('id')
-          .single()
-
-        if (error) {
-          console.error('Error creating pending launch:', error)
-          await ctx.reply('Error creating launch. Please try again with /launch')
-          ctx.session.launchData = undefined
-          return
-        }
-
-        data.pendingLaunchId = pendingLaunch?.id
-
-        // Log audit event
-        await db.from('audit_log').insert({
-          event_type: 'launch_started',
-          pending_launch_id: pendingLaunch?.id,
-          telegram_id: telegramId,
-          details: { token_name: data.tokenName, token_symbol: data.tokenSymbol },
-        })
-
-        const confirmMessage = `
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-*YOUR TOKEN SETUP*
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-*Token:* ${data.tokenName} (${data.tokenSymbol})
-
-*Dev Wallet* (receives fees):
-\`${wallets.devWallet.address}\`
-
-*Ops Wallet* (runs flywheel):
-\`${wallets.opsWallet.address}\`
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-*FUND TO LAUNCH*
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-Send *0.5+ SOL* to your DEV WALLET:
-\`${wallets.devWallet.address}\`
-
-• 0.1 SOL = Token launch fee
-• 0.4+ SOL = Initial liquidity
-
-I'm monitoring for your deposit...
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-⏳ *Waiting for SOL deposit...*
-
-_The launch will expire in 24 hours if no deposit is received._
-_Use /cancel to abort this launch._
-`
-        await ctx.replyWithMarkdown(confirmMessage)
-
-        // Clear launch data from session (deposit monitor will handle the rest)
-        ctx.session.launchData = undefined
-      } catch (error) {
-        console.error('Error generating wallets:', error)
-        await ctx.reply('Error generating wallets. Please try again with /launch')
-        ctx.session.launchData = undefined
-      }
+      await finalizeLaunchWizard(ctx)
       break
   }
 }
