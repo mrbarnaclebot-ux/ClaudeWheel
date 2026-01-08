@@ -1677,3 +1677,62 @@ export async function exportTelegramLaunches(
     return null
   }
 }
+
+// Chart data types
+export interface DailyChartData {
+  date: string
+  displayDate: string
+  total: number
+  completed: number
+  failed: number
+  expired: number
+  refunded: number
+  awaiting: number
+  launching: number
+  solProcessed: number
+}
+
+export interface SuccessRateData {
+  date: string
+  displayDate: string
+  successRate: number
+}
+
+export interface StatusDistribution {
+  name: string
+  value: number
+  color: string
+}
+
+export interface ChartData {
+  dailyData: DailyChartData[]
+  successRateData: SuccessRateData[]
+  statusDistribution: StatusDistribution[]
+  summary: {
+    totalLaunches: number
+    avgLaunchesPerDay: number
+    overallSuccessRate: number
+  }
+}
+
+// Get chart data for trends (admin only)
+export async function fetchChartData(
+  publicKey: string,
+  signature: string,
+  message: string,
+  days: number = 30
+): Promise<ChartData | null> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/admin/telegram/chart-data?days=${days}`, {
+      headers: createAdminHeaders(publicKey, signature, message),
+    })
+
+    if (!response.ok) return null
+
+    const json = await response.json()
+    return json.success ? json.data : null
+  } catch (error) {
+    console.error('Failed to fetch chart data:', error)
+    return null
+  }
+}

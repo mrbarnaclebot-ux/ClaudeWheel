@@ -2033,4 +2033,165 @@ router.get('/telegram/export', verifyAdminAuth, async (req: Request, res: Respon
   }
 })
 
+/**
+ * GET /api/admin/telegram/chart-data
+ * Get time-series data for charts (admin only)
+ */
+router.get('/telegram/chart-data', verifyAdminAuth, async (req: Request, res: Response) => {
+  try {
+    if (!supabase) {
+      return res.status(500).json({ error: 'Database not configured' })
+    }
+
+    const { days = 30 } = req.query
+    const daysNum = Math.min(Number(days) || 30, 90) // Max 90 days
+
+    // Calculate date range
+    const endDate = new Date()
+    const startDate = new Date()
+    startDate.setDate(startDate.getDate() - daysNum)
+
+    // Get all launches in date range
+    const { data: launches, error } = await supabase
+      .from('pending_token_launches')
+      .select('status, deposit_received_sol, created_at, updated_at')
+      .gte('created_at', startDate.toISOString())
+      .order('created_at', { ascending: true })
+
+    if (error) {
+      console.error('Error fetching chart data:', error)
+      return res.status(500).json({ error: 'Failed to fetch chart data' })
+    }
+
+    // Initialize daily data structure
+    const dailyData: Record<string, {
+      date: string
+      total: number
+      completed: number
+      failed: number
+      expired: number
+      refunded: number
+      awaiting: number
+      launching: number
+      solProcessed: number
+    }> = {}
+
+    // Initialize all days in range
+    for (let d = new Date(startDate); d <= endDate; d.setDate(d.getDate() + 1)) {
+      const dateKey = d.toISOString().split('T')[0]
+      dailyData[dateKey] = {
+        date: dateKey,
+        total: 0,
+        completed: 0,
+        failed: 0,
+        expired: 0,
+        refunded: 0,
+        awaiting: 0,
+        launching: 0,
+        solProcessed: 0,
+      }
+    }
+
+    // Aggregate status totals
+    const statusTotals = {
+      completed: 0,
+      failed: 0,
+      expired: 0,
+      refunded: 0,
+      awaiting_deposit: 0,
+      launching: 0,
+    }
+
+    // Process launches
+    for (const launch of launches || []) {
+      const dateKey = launch.created_at.split('T')[0]
+      const depositSol = Number(launch.deposit_received_sol) || 0
+
+      if (dailyData[dateKey]) {
+        dailyData[dateKey].total++
+
+        switch (launch.status) {
+          case 'completed':
+            dailyData[dateKey].completed++
+            dailyData[dateKey].solProcessed += depositSol
+            statusTotals.completed++
+            break
+          case 'failed':
+            dailyData[dateKey].failed++
+            statusTotals.failed++
+            break
+          case 'expired':
+            dailyData[dateKey].expired++
+            statusTotals.expired++
+            break
+          case 'refunded':
+            dailyData[dateKey].refunded++
+            statusTotals.refunded++
+            break
+          case 'awaiting_deposit':
+            dailyData[dateKey].awaiting++
+            statusTotals.awaiting_deposit++
+            break
+          case 'launching':
+            dailyData[dateKey].launching++
+            statusTotals.launching++
+            break
+        }
+      }
+    }
+
+    // Convert to array for charts
+    const dailyChartData = Object.values(dailyData).map(day => ({
+      ...day,
+      // Format date for display (MM/DD)
+      displayDate: `${day.date.split('-')[1]}/${day.date.split('-')[2]}`,
+    }))
+
+    // Calculate success rate over time (7-day rolling average)
+    const successRateData = dailyChartData.map((day, index) => {
+      // Get last 7 days including current
+      const windowStart = Math.max(0, index - 6)
+      const window = dailyChartData.slice(windowStart, index + 1)
+      const totalInWindow = window.reduce((sum, d) => sum + d.total, 0)
+      const completedInWindow = window.reduce((sum, d) => sum + d.completed, 0)
+      const successRate = totalInWindow > 0 ? (completedInWindow / totalInWindow) * 100 : 0
+
+      return {
+        date: day.date,
+        displayDate: day.displayDate,
+        successRate: Math.round(successRate * 10) / 10,
+      }
+    })
+
+    // Status distribution for pie chart
+    const statusDistribution = [
+      { name: 'Completed', value: statusTotals.completed, color: '#22c55e' },
+      { name: 'Failed', value: statusTotals.failed, color: '#ef4444' },
+      { name: 'Expired', value: statusTotals.expired, color: '#6b7280' },
+      { name: 'Refunded', value: statusTotals.refunded, color: '#8b5cf6' },
+      { name: 'Awaiting', value: statusTotals.awaiting_deposit, color: '#f59e0b' },
+      { name: 'Launching', value: statusTotals.launching, color: '#3b82f6' },
+    ].filter(s => s.value > 0)
+
+    return res.json({
+      success: true,
+      data: {
+        dailyData: dailyChartData,
+        successRateData,
+        statusDistribution,
+        summary: {
+          totalLaunches: launches?.length || 0,
+          avgLaunchesPerDay: Math.round(((launches?.length || 0) / daysNum) * 10) / 10,
+          overallSuccessRate: launches?.length
+            ? Math.round((statusTotals.completed / launches.length) * 1000) / 10
+            : 0,
+        },
+      },
+    })
+  } catch (error) {
+    console.error('Error fetching chart data:', error)
+    return res.status(500).json({ error: 'Internal server error' })
+  }
+})
+
 export default router

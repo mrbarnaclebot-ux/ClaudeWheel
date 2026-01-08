@@ -99,7 +99,21 @@ class TokenLauncherService {
 
       console.log(`📝 Token info created, mint: ${tokenInfoResult.tokenMint}`)
 
-      // Step 2: Create launch transaction
+      // Step 2: Configure fee sharing (required for Token Launch v2)
+      const feeShareResult = await this.configureFeeSharing({
+        tokenMint: tokenInfoResult.tokenMint,
+        creatorWallet: params.devWalletAddress,
+        creatorBps: 10000, // 100% to creator (10000 bps = 100%)
+      })
+
+      if (!feeShareResult.success) {
+        console.warn(`⚠️ Fee sharing configuration failed: ${feeShareResult.error}`)
+        // Continue anyway - some launches may work without explicit fee config
+      } else {
+        console.log(`💰 Fee sharing configured: 100% to creator`)
+      }
+
+      // Step 3: Create launch transaction
       const launchTxResult = await this.createLaunchTransaction({
         tokenMint: tokenInfoResult.tokenMint,
         creatorWallet: params.devWalletAddress,
@@ -114,7 +128,7 @@ class TokenLauncherService {
 
       console.log(`📄 Launch transaction created`)
 
-      // Step 3: Sign and submit the transaction
+      // Step 4: Sign and submit the transaction
       const connection = getConnection()
       const signature = await this.signAndSubmitTransaction(
         connection,
@@ -161,35 +175,22 @@ class TokenLauncherService {
     discordUrl?: string
   }): Promise<{ success: boolean; tokenMint?: string; error?: string }> {
     try {
-      // Build social links object (only include non-empty values)
-      const socialLinks: Record<string, string> = {}
-      if (params.twitterUrl) socialLinks.twitter = params.twitterUrl
-      if (params.telegramUrl) socialLinks.telegram = params.telegramUrl
-      if (params.websiteUrl) socialLinks.website = params.websiteUrl
-      if (params.discordUrl) socialLinks.discord = params.discordUrl
-
+      // Build request with only the fields the API accepts
+      // Note: Fee sharing is configured via separate endpoint /token-launch/fee-share/create-config
       const requestBody: Record<string, unknown> = {
         name: params.name,
         symbol: params.symbol,
         description: params.description,
-        image: params.imageUrl,
-        creator_wallet: params.creatorWallet,
-        // Fee sharing - 100% to dev wallet (creator)
-        fee_sharing: {
-          enabled: true,
-          recipients: [
-            {
-              wallet: params.creatorWallet,
-              percentage: 100,
-            },
-          ],
-        },
+        imageUrl: params.imageUrl,
       }
 
-      // Only add social_links if at least one is provided
-      if (Object.keys(socialLinks).length > 0) {
-        requestBody.social_links = socialLinks
-      }
+      // Add social links as individual fields if provided
+      if (params.twitterUrl) requestBody.twitter = params.twitterUrl
+      if (params.telegramUrl) requestBody.telegram = params.telegramUrl
+      if (params.websiteUrl) requestBody.website = params.websiteUrl
+      if (params.discordUrl) requestBody.discord = params.discordUrl
+
+      console.log('📤 Creating token info with:', JSON.stringify(requestBody, null, 2))
 
       const response = await fetch(`${BAGS_API_BASE}/token-launch/create-token-info`, {
         method: 'POST',
@@ -232,6 +233,45 @@ class TokenLauncherService {
   }
 
   /**
+   * Configure fee sharing for a token (required for Token Launch v2)
+   */
+  private async configureFeeSharing(params: {
+    tokenMint: string
+    creatorWallet: string
+    creatorBps: number // Basis points (10000 = 100%)
+  }): Promise<{ success: boolean; error?: string }> {
+    try {
+      const response = await fetch(`${BAGS_API_BASE}/token-launch/fee-share/create-config`, {
+        method: 'POST',
+        headers: {
+          'x-api-key': this.apiKey!,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          tokenMint: params.tokenMint,
+          userBps: params.creatorBps,
+        }),
+      })
+
+      const data = await response.json() as any
+
+      if (!response.ok) {
+        return {
+          success: false,
+          error: data.error || data.message || `API error: ${response.status}`,
+        }
+      }
+
+      return { success: true }
+    } catch (error: any) {
+      return {
+        success: false,
+        error: error.message || 'Failed to configure fee sharing',
+      }
+    }
+  }
+
+  /**
    * Create launch transaction on Bags.fm
    */
   private async createLaunchTransaction(params: {
@@ -246,12 +286,13 @@ class TokenLauncherService {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          token_mint: params.tokenMint,
-          creator_wallet: params.creatorWallet,
+          tokenMint: params.tokenMint,
+          creatorWallet: params.creatorWallet,
         }),
       })
 
       const data = await response.json() as any
+      console.log('📤 Launch transaction response:', JSON.stringify(data, null, 2).slice(0, 500))
 
       if (!response.ok) {
         return {

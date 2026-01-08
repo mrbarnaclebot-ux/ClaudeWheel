@@ -7,6 +7,23 @@ import { motion, AnimatePresence } from 'framer-motion'
 import Link from 'next/link'
 import bs58 from 'bs58'
 import {
+  BarChart,
+  Bar,
+  LineChart,
+  Line,
+  PieChart,
+  Pie,
+  Cell,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend,
+  ResponsiveContainer,
+  AreaChart,
+  Area,
+} from 'recharts'
+import {
   fetchAdminAuthNonce,
   fetchTelegramStats,
   fetchTelegramLaunches,
@@ -20,18 +37,20 @@ import {
   executeBulkRefunds,
   searchTelegramLaunches,
   exportTelegramLaunches,
+  fetchChartData,
   type TelegramLaunchStats,
   type TelegramLaunch,
   type TelegramAuditLog,
   type BotHealthStatus,
   type FinancialMetrics,
   type TelegramUser,
+  type ChartData,
 } from '@/lib/api'
 
 const DEV_WALLET_ADDRESS = process.env.NEXT_PUBLIC_DEV_WALLET_ADDRESS || ''
 
 type StatusFilter = 'all' | 'awaiting_deposit' | 'launching' | 'completed' | 'failed' | 'expired' | 'refunded'
-type TabView = 'launches' | 'users' | 'logs'
+type TabView = 'launches' | 'users' | 'logs' | 'charts'
 
 export default function TelegramAdminPage() {
   const { publicKey, connected, signMessage } = useWallet()
@@ -51,6 +70,8 @@ export default function TelegramAdminPage() {
   const [financialMetrics, setFinancialMetrics] = useState<FinancialMetrics | null>(null)
   const [telegramUsers, setTelegramUsers] = useState<TelegramUser[]>([])
   const [totalUsers, setTotalUsers] = useState(0)
+  const [chartData, setChartData] = useState<ChartData | null>(null)
+  const [chartDays, setChartDays] = useState(30)
   const [isLoading, setIsLoading] = useState(false)
 
   // UI state
@@ -124,7 +145,7 @@ export default function TelegramAdminPage() {
   const loadAllData = async (pubkey: string, sig: string, msg: string) => {
     setIsLoading(true)
     try {
-      const [statsData, launchesData, refundsData, logsData, healthData, metricsData, usersData] = await Promise.all([
+      const [statsData, launchesData, refundsData, logsData, healthData, metricsData, usersData, chartsData] = await Promise.all([
         fetchTelegramStats(pubkey, sig, msg),
         searchTelegramLaunches(pubkey, sig, msg, {
           status: statusFilter === 'all' ? undefined : statusFilter,
@@ -137,6 +158,7 @@ export default function TelegramAdminPage() {
         fetchBotHealth(pubkey, sig, msg),
         fetchFinancialMetrics(pubkey, sig, msg),
         fetchTelegramUsers(pubkey, sig, msg, { limit: 50 }),
+        fetchChartData(pubkey, sig, msg, chartDays),
       ])
 
       if (statsData) setStats(statsData)
@@ -152,6 +174,7 @@ export default function TelegramAdminPage() {
         setTelegramUsers(usersData.users)
         setTotalUsers(usersData.total)
       }
+      if (chartsData) setChartData(chartsData)
       setLastRefresh(new Date())
     } catch (error) {
       console.error('Failed to load data:', error)
@@ -607,7 +630,7 @@ export default function TelegramAdminPage() {
 
             {/* Tabs */}
             <div className="flex gap-2 border-b border-border-subtle pb-2">
-              {(['launches', 'users', 'logs'] as TabView[]).map((tab) => (
+              {(['launches', 'users', 'logs', 'charts'] as TabView[]).map((tab) => (
                 <button
                   key={tab}
                   onClick={() => setCurrentTab(tab)}
@@ -620,6 +643,7 @@ export default function TelegramAdminPage() {
                   {tab === 'launches' && `Launches (${totalLaunches})`}
                   {tab === 'users' && `Users (${totalUsers})`}
                   {tab === 'logs' && `Logs (${logs.length})`}
+                  {tab === 'charts' && `Charts`}
                 </button>
               ))}
             </div>
@@ -979,6 +1003,196 @@ export default function TelegramAdminPage() {
                     ))
                   )}
                 </div>
+              </motion.div>
+            )}
+
+            {/* Charts Tab */}
+            {currentTab === 'charts' && (
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="space-y-6"
+              >
+                {/* Chart Controls */}
+                <div className="card-glow bg-bg-card p-4 flex items-center justify-between flex-wrap gap-4">
+                  <h2 className="font-display text-lg font-semibold text-text-primary">
+                    Trends & Analytics
+                  </h2>
+                  <div className="flex items-center gap-4">
+                    <label className="text-sm font-mono text-text-muted">Time Range:</label>
+                    <select
+                      value={chartDays}
+                      onChange={(e) => {
+                        setChartDays(Number(e.target.value))
+                        if (publicKey && adminAuthSignature && adminAuthMessage) {
+                          fetchChartData(publicKey.toString(), adminAuthSignature, adminAuthMessage, Number(e.target.value))
+                            .then(data => data && setChartData(data))
+                        }
+                      }}
+                      className="bg-bg-secondary border border-border-subtle rounded-lg px-3 py-1.5 text-sm font-mono text-text-primary focus:outline-none"
+                    >
+                      <option value={7}>Last 7 days</option>
+                      <option value={14}>Last 14 days</option>
+                      <option value={30}>Last 30 days</option>
+                      <option value={60}>Last 60 days</option>
+                      <option value={90}>Last 90 days</option>
+                    </select>
+                  </div>
+                </div>
+
+                {chartData ? (
+                  <>
+                    {/* Summary Stats */}
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                      <div className="card-glow bg-bg-card p-4 text-center">
+                        <div className="text-3xl font-bold text-accent-primary">{chartData.summary.totalLaunches}</div>
+                        <div className="text-sm text-text-muted font-mono">Total Launches ({chartDays}d)</div>
+                      </div>
+                      <div className="card-glow bg-bg-card p-4 text-center">
+                        <div className="text-3xl font-bold text-success">{chartData.summary.overallSuccessRate}%</div>
+                        <div className="text-sm text-text-muted font-mono">Success Rate</div>
+                      </div>
+                      <div className="card-glow bg-bg-card p-4 text-center">
+                        <div className="text-3xl font-bold text-warning">{chartData.summary.avgLaunchesPerDay}</div>
+                        <div className="text-sm text-text-muted font-mono">Avg/Day</div>
+                      </div>
+                    </div>
+
+                    {/* Charts Grid */}
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                      {/* Daily Launch Volume */}
+                      <div className="card-glow bg-bg-card p-4">
+                        <h3 className="font-display text-md font-semibold text-text-primary mb-4">
+                          Daily Launch Volume
+                        </h3>
+                        <div className="h-64">
+                          <ResponsiveContainer width="100%" height="100%">
+                            <BarChart data={chartData.dailyData} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
+                              <CartesianGrid strokeDasharray="3 3" stroke="#333" />
+                              <XAxis
+                                dataKey="displayDate"
+                                tick={{ fill: '#888', fontSize: 10 }}
+                                interval={Math.ceil(chartData.dailyData.length / 10)}
+                              />
+                              <YAxis tick={{ fill: '#888', fontSize: 10 }} />
+                              <Tooltip
+                                contentStyle={{ backgroundColor: '#1a1a1a', border: '1px solid #333' }}
+                                labelStyle={{ color: '#fff' }}
+                              />
+                              <Legend wrapperStyle={{ fontSize: 12 }} />
+                              <Bar dataKey="completed" name="Completed" stackId="a" fill="#22c55e" />
+                              <Bar dataKey="failed" name="Failed" stackId="a" fill="#ef4444" />
+                              <Bar dataKey="expired" name="Expired" stackId="a" fill="#6b7280" />
+                              <Bar dataKey="refunded" name="Refunded" stackId="a" fill="#8b5cf6" />
+                            </BarChart>
+                          </ResponsiveContainer>
+                        </div>
+                      </div>
+
+                      {/* Status Distribution Pie Chart */}
+                      <div className="card-glow bg-bg-card p-4">
+                        <h3 className="font-display text-md font-semibold text-text-primary mb-4">
+                          Status Distribution
+                        </h3>
+                        <div className="h-64">
+                          <ResponsiveContainer width="100%" height="100%">
+                            <PieChart>
+                              <Pie
+                                data={chartData.statusDistribution as any}
+                                cx="50%"
+                                cy="50%"
+                                innerRadius={50}
+                                outerRadius={80}
+                                paddingAngle={2}
+                                dataKey="value"
+                                nameKey="name"
+                                label={({ name, percent }: any) => `${name || ''} ${((percent || 0) * 100).toFixed(0)}%`}
+                                labelLine={{ stroke: '#666' }}
+                              >
+                                {chartData.statusDistribution.map((entry, index) => (
+                                  <Cell key={`cell-${index}`} fill={entry.color} />
+                                ))}
+                              </Pie>
+                              <Tooltip
+                                contentStyle={{ backgroundColor: '#1a1a1a', border: '1px solid #333' }}
+                              />
+                            </PieChart>
+                          </ResponsiveContainer>
+                        </div>
+                      </div>
+
+                      {/* Success Rate Trend */}
+                      <div className="card-glow bg-bg-card p-4">
+                        <h3 className="font-display text-md font-semibold text-text-primary mb-4">
+                          Success Rate Trend (7-day rolling)
+                        </h3>
+                        <div className="h-64">
+                          <ResponsiveContainer width="100%" height="100%">
+                            <LineChart data={chartData.successRateData} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
+                              <CartesianGrid strokeDasharray="3 3" stroke="#333" />
+                              <XAxis
+                                dataKey="displayDate"
+                                tick={{ fill: '#888', fontSize: 10 }}
+                                interval={Math.ceil(chartData.successRateData.length / 10)}
+                              />
+                              <YAxis tick={{ fill: '#888', fontSize: 10 }} domain={[0, 100]} />
+                              <Tooltip
+                                contentStyle={{ backgroundColor: '#1a1a1a', border: '1px solid #333' }}
+                                labelStyle={{ color: '#fff' }}
+                                formatter={(value: any) => [`${value}%`, 'Success Rate']}
+                              />
+                              <Line
+                                type="monotone"
+                                dataKey="successRate"
+                                stroke="#22c55e"
+                                strokeWidth={2}
+                                dot={false}
+                              />
+                            </LineChart>
+                          </ResponsiveContainer>
+                        </div>
+                      </div>
+
+                      {/* SOL Processed Over Time */}
+                      <div className="card-glow bg-bg-card p-4">
+                        <h3 className="font-display text-md font-semibold text-text-primary mb-4">
+                          SOL Processed Daily
+                        </h3>
+                        <div className="h-64">
+                          <ResponsiveContainer width="100%" height="100%">
+                            <AreaChart data={chartData.dailyData} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
+                              <CartesianGrid strokeDasharray="3 3" stroke="#333" />
+                              <XAxis
+                                dataKey="displayDate"
+                                tick={{ fill: '#888', fontSize: 10 }}
+                                interval={Math.ceil(chartData.dailyData.length / 10)}
+                              />
+                              <YAxis tick={{ fill: '#888', fontSize: 10 }} />
+                              <Tooltip
+                                contentStyle={{ backgroundColor: '#1a1a1a', border: '1px solid #333' }}
+                                labelStyle={{ color: '#fff' }}
+                                formatter={(value: any) => [`${Number(value).toFixed(2)} SOL`, 'Processed']}
+                              />
+                              <Area
+                                type="monotone"
+                                dataKey="solProcessed"
+                                stroke="#f59e0b"
+                                fill="#f59e0b"
+                                fillOpacity={0.3}
+                              />
+                            </AreaChart>
+                          </ResponsiveContainer>
+                        </div>
+                      </div>
+                    </div>
+                  </>
+                ) : (
+                  <div className="card-glow bg-bg-card p-8 text-center">
+                    <div className="text-text-muted font-mono">
+                      {isLoading ? 'Loading chart data...' : 'No chart data available'}
+                    </div>
+                  </div>
+                )}
               </motion.div>
             )}
           </>
