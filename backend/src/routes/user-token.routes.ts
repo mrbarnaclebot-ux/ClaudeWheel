@@ -14,6 +14,7 @@ import {
 import { isEncryptionConfigured } from '../services/encryption.service'
 import { multiUserClaimService } from '../services/multi-user-claim.service'
 import { bagsFmService } from '../services/bags-fm'
+import { balanceMonitorService } from '../services/balance-monitor.service'
 import crypto from 'crypto'
 
 const router = Router()
@@ -1054,6 +1055,222 @@ router.post('/tokens/:tokenId/sell', verifyWalletOwnership, async (req: Request,
     res.status(500).json({
       success: false,
       error: error.message || 'Failed to execute sell',
+    })
+  }
+})
+
+// ═══════════════════════════════════════════════════════════════════════════
+// WALLET BALANCE ROUTES
+// Cached wallet balances from Solana blockchain
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * GET /api/user/tokens/:tokenId/balances
+ * Get cached wallet balances for a token
+ */
+router.get('/tokens/:tokenId/balances', verifyWalletOwnership, async (req: Request, res: Response) => {
+  try {
+    const { tokenId } = req.params
+    const { userId } = req.body
+
+    const token = await getUserToken(tokenId)
+
+    if (!token) {
+      return res.status(404).json({
+        success: false,
+        error: 'Token not found',
+      })
+    }
+
+    if (token.user_id !== userId) {
+      return res.status(403).json({
+        success: false,
+        error: 'You do not own this token',
+      })
+    }
+
+    // Get cached balances
+    const balances = await balanceMonitorService.getTokenBalance(tokenId)
+
+    if (!balances) {
+      // No cached balance - return empty with suggestion to refresh
+      return res.json({
+        success: true,
+        data: {
+          cached: false,
+          devWallet: {
+            address: token.dev_wallet_address,
+            solBalance: 0,
+            tokenBalance: 0,
+            usdValue: 0,
+          },
+          opsWallet: {
+            address: token.ops_wallet_address,
+            solBalance: 0,
+            tokenBalance: 0,
+            usdValue: 0,
+          },
+          claimableFees: {
+            sol: 0,
+            usd: 0,
+          },
+          lastUpdatedAt: null,
+          message: 'No cached balance. Use POST /balances/refresh to fetch from blockchain.',
+        },
+      })
+    }
+
+    res.json({
+      success: true,
+      data: {
+        cached: true,
+        devWallet: {
+          address: token.dev_wallet_address,
+          solBalance: balances.dev_sol_balance,
+          tokenBalance: balances.dev_token_balance,
+          usdValue: balances.dev_usd_value,
+        },
+        opsWallet: {
+          address: token.ops_wallet_address,
+          solBalance: balances.ops_sol_balance,
+          tokenBalance: balances.ops_token_balance,
+          usdValue: balances.ops_usd_value,
+        },
+        claimableFees: {
+          sol: balances.claimable_fees_sol,
+          usd: balances.claimable_fees_usd,
+        },
+        solPriceUsd: balances.sol_price_usd,
+        lastUpdatedAt: balances.last_updated_at,
+        updateCount: balances.update_count,
+      },
+    })
+  } catch (error) {
+    console.error('Error getting balances:', error)
+    res.status(500).json({
+      success: false,
+      error: 'Failed to get wallet balances',
+    })
+  }
+})
+
+/**
+ * POST /api/user/tokens/:tokenId/balances/refresh
+ * Force refresh wallet balances from blockchain
+ */
+router.post('/tokens/:tokenId/balances/refresh', verifyWalletOwnership, async (req: Request, res: Response) => {
+  try {
+    const { tokenId } = req.params
+    const { userId } = req.body
+
+    const token = await getUserToken(tokenId)
+
+    if (!token) {
+      return res.status(404).json({
+        success: false,
+        error: 'Token not found',
+      })
+    }
+
+    if (token.user_id !== userId) {
+      return res.status(403).json({
+        success: false,
+        error: 'You do not own this token',
+      })
+    }
+
+    // Force refresh from blockchain
+    const result = await balanceMonitorService.updateSingleTokenBalance(tokenId)
+
+    if (!result || !result.success) {
+      return res.status(500).json({
+        success: false,
+        error: result?.error || 'Failed to refresh balances',
+      })
+    }
+
+    // Get the updated cached balance
+    const balances = await balanceMonitorService.getTokenBalance(tokenId)
+
+    res.json({
+      success: true,
+      data: {
+        devWallet: {
+          address: token.dev_wallet_address,
+          solBalance: result.devSol,
+          tokenBalance: result.devToken,
+        },
+        opsWallet: {
+          address: token.ops_wallet_address,
+          solBalance: result.opsSol,
+          tokenBalance: result.opsToken,
+        },
+        claimableFees: {
+          sol: result.claimableFees,
+        },
+        lastUpdatedAt: balances?.last_updated_at || new Date().toISOString(),
+      },
+      message: 'Balances refreshed from blockchain',
+    })
+  } catch (error) {
+    console.error('Error refreshing balances:', error)
+    res.status(500).json({
+      success: false,
+      error: 'Failed to refresh balances',
+    })
+  }
+})
+
+/**
+ * GET /api/user/tokens/:tokenId/balances/history
+ * Get balance history for a token (for charts/analytics)
+ */
+router.get('/tokens/:tokenId/balances/history', verifyWalletOwnership, async (req: Request, res: Response) => {
+  try {
+    const { tokenId } = req.params
+    const { userId } = req.body
+    const limit = Math.min(parseInt(req.query.limit as string) || 100, 500)
+
+    const token = await getUserToken(tokenId)
+
+    if (!token) {
+      return res.status(404).json({
+        success: false,
+        error: 'Token not found',
+      })
+    }
+
+    if (token.user_id !== userId) {
+      return res.status(403).json({
+        success: false,
+        error: 'You do not own this token',
+      })
+    }
+
+    const history = await balanceMonitorService.getTokenBalanceHistory(tokenId, limit)
+
+    res.json({
+      success: true,
+      data: {
+        tokenId,
+        tokenSymbol: token.token_symbol,
+        history: history.map(h => ({
+          devSolBalance: h.dev_sol_balance,
+          devTokenBalance: h.dev_token_balance,
+          opsSolBalance: h.ops_sol_balance,
+          opsTokenBalance: h.ops_token_balance,
+          claimableFeesSol: h.claimable_fees_sol,
+          solPriceUsd: h.sol_price_usd,
+          snapshotAt: h.snapshot_at,
+        })),
+        count: history.length,
+      },
+    })
+  } catch (error) {
+    console.error('Error getting balance history:', error)
+    res.status(500).json({
+      success: false,
+      error: 'Failed to get balance history',
     })
   }
 })

@@ -7,6 +7,8 @@ import { marketMaker } from '../services/market-maker'
 import { walletMonitor } from '../services/wallet-monitor'
 import { getClaimJobStatus, restartClaimJob } from '../jobs/claim.job'
 import { getMultiUserFlywheelJobStatus, restartFlywheelJob } from '../jobs/multi-flywheel.job'
+import { getFastClaimJobStatus, triggerFastClaimCycle, restartFastClaimJob } from '../jobs/fast-claim.job'
+import { getBalanceUpdateJobStatus, triggerBalanceUpdate, restartBalanceUpdateJob } from '../jobs/balance-update.job'
 import { requestConfigReload, getCurrentAlgorithmMode, getCachedConfig } from '../jobs/flywheel.job'
 import {
   getPendingRefunds,
@@ -784,6 +786,8 @@ router.get('/platform-stats', verifyAdminAuth, async (req: Request, res: Respons
     // Get job statuses
     const claimJobStatus = getClaimJobStatus()
     const flywheelJobStatus = getMultiUserFlywheelJobStatus()
+    const fastClaimJobStatus = getFastClaimJobStatus()
+    const balanceUpdateJobStatus = getBalanceUpdateJobStatus()
 
     return res.json({
       success: true,
@@ -798,8 +802,10 @@ router.get('/platform-stats', verifyAdminAuth, async (req: Request, res: Respons
           activeFlywheels: activeFlywheels || 0,
         },
         jobs: {
+          fastClaim: fastClaimJobStatus,
           claim: claimJobStatus,
           flywheel: flywheelJobStatus,
+          balanceUpdate: balanceUpdateJobStatus,
         },
       },
     })
@@ -1015,13 +1021,182 @@ router.get('/platform-settings', verifyAdminAuth, async (req: Request, res: Resp
     return res.json({
       success: true,
       data: {
+        fastClaim: getFastClaimJobStatus(),
         claim: getClaimJobStatus(),
         flywheel: getMultiUserFlywheelJobStatus(),
+        balanceUpdate: getBalanceUpdateJobStatus(),
         platformToken: PLATFORM_TOKEN_MINT,
       },
     })
   } catch (error) {
     console.error('Error fetching platform settings:', error)
+    return res.status(500).json({ error: 'Internal server error' })
+  }
+})
+
+// ═══════════════════════════════════════════════════════════════════════════
+// FAST CLAIM JOB MANAGEMENT
+// High-frequency fee claiming (every 30 seconds, >= 0.15 SOL threshold)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * GET /api/admin/fast-claim/status
+ * Get fast claim job status (admin only)
+ */
+router.get('/fast-claim/status', verifyAdminAuth, async (req: Request, res: Response) => {
+  try {
+    const status = getFastClaimJobStatus()
+
+    return res.json({
+      success: true,
+      data: {
+        ...status,
+        description: 'High-frequency fee claiming - checks every 30 seconds, claims when >= 0.15 SOL',
+        feeSplit: {
+          platformFee: '10%',
+          userReceives: '90%',
+        },
+      },
+    })
+  } catch (error) {
+    console.error('Error fetching fast claim status:', error)
+    return res.status(500).json({ error: 'Internal server error' })
+  }
+})
+
+/**
+ * POST /api/admin/fast-claim/trigger
+ * Manually trigger a fast claim cycle (admin only)
+ */
+router.post('/fast-claim/trigger', verifyAdminAuth, async (req: Request, res: Response) => {
+  try {
+    console.log('⚡ Admin triggered manual fast claim cycle')
+
+    // Run async - don't wait for completion
+    triggerFastClaimCycle().catch(err => {
+      console.error('Fast claim cycle error:', err)
+    })
+
+    return res.json({
+      success: true,
+      message: 'Fast claim cycle triggered. Check logs for results.',
+    })
+  } catch (error) {
+    console.error('Error triggering fast claim:', error)
+    return res.status(500).json({ error: 'Internal server error' })
+  }
+})
+
+/**
+ * POST /api/admin/fast-claim/restart
+ * Restart fast claim job with optional new interval (admin only)
+ */
+router.post('/fast-claim/restart', verifyAdminAuth, async (req: Request, res: Response) => {
+  try {
+    const { intervalSeconds } = req.body
+
+    // Validate interval if provided
+    if (intervalSeconds !== undefined) {
+      if (typeof intervalSeconds !== 'number' || intervalSeconds < 10 || intervalSeconds > 3600) {
+        return res.status(400).json({
+          error: 'Invalid interval. Must be between 10 and 3600 seconds.',
+        })
+      }
+    }
+
+    restartFastClaimJob(intervalSeconds)
+
+    const newStatus = getFastClaimJobStatus()
+
+    return res.json({
+      success: true,
+      message: 'Fast claim job restarted',
+      data: newStatus,
+    })
+  } catch (error) {
+    console.error('Error restarting fast claim job:', error)
+    return res.status(500).json({ error: 'Internal server error' })
+  }
+})
+
+// ═══════════════════════════════════════════════════════════════════════════
+// BALANCE UPDATE JOB MANAGEMENT
+// Periodic wallet balance caching (every 5 minutes by default)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * GET /api/admin/balance-update/status
+ * Get balance update job status (admin only)
+ */
+router.get('/balance-update/status', verifyAdminAuth, async (req: Request, res: Response) => {
+  try {
+    const status = getBalanceUpdateJobStatus()
+
+    return res.json({
+      success: true,
+      data: {
+        ...status,
+        description: 'Periodic wallet balance caching - updates dev/ops wallet balances for all active tokens',
+        batchSize: process.env.BALANCE_UPDATE_BATCH_SIZE || '50',
+      },
+    })
+  } catch (error) {
+    console.error('Error fetching balance update status:', error)
+    return res.status(500).json({ error: 'Internal server error' })
+  }
+})
+
+/**
+ * POST /api/admin/balance-update/trigger
+ * Manually trigger a balance update cycle (admin only)
+ */
+router.post('/balance-update/trigger', verifyAdminAuth, async (req: Request, res: Response) => {
+  try {
+    console.log('💰 Admin triggered manual balance update cycle')
+
+    // Run async - don't wait for completion
+    triggerBalanceUpdate().catch(err => {
+      console.error('Balance update cycle error:', err)
+    })
+
+    return res.json({
+      success: true,
+      message: 'Balance update cycle triggered. Check logs for results.',
+    })
+  } catch (error) {
+    console.error('Error triggering balance update:', error)
+    return res.status(500).json({ error: 'Internal server error' })
+  }
+})
+
+/**
+ * POST /api/admin/balance-update/restart
+ * Restart balance update job with optional new interval (admin only)
+ */
+router.post('/balance-update/restart', verifyAdminAuth, async (req: Request, res: Response) => {
+  try {
+    const { intervalSeconds } = req.body
+
+    // Validate interval if provided
+    if (intervalSeconds !== undefined) {
+      if (typeof intervalSeconds !== 'number' || intervalSeconds < 60 || intervalSeconds > 3600) {
+        return res.status(400).json({
+          error: 'Invalid interval. Must be between 60 and 3600 seconds.',
+        })
+      }
+    }
+
+    restartBalanceUpdateJob(intervalSeconds)
+
+    const newStatus = getBalanceUpdateJobStatus()
+
+    return res.json({
+      success: true,
+      message: 'Balance update job restarted',
+      data: newStatus,
+    })
+  } catch (error) {
+    console.error('Error restarting balance update job:', error)
     return res.status(500).json({ error: 'Internal server error' })
   }
 })

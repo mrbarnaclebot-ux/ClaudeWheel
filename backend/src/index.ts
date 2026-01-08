@@ -8,6 +8,8 @@ import { walletMonitor } from './services/wallet-monitor'
 import { startFlywheelJob } from './jobs/flywheel.job'
 import { startClaimJob, getClaimJobStatus } from './jobs/claim.job'
 import { startMultiUserFlywheelJob, getMultiUserFlywheelJobStatus } from './jobs/multi-flywheel.job'
+import { startFastClaimJob, stopFastClaimJob, getFastClaimJobStatus } from './jobs/fast-claim.job'
+import { startBalanceUpdateJob, stopBalanceUpdateJob } from './jobs/balance-update.job'
 import statusRoutes from './routes/status.routes'
 import adminRoutes from './routes/admin.routes'
 import bagsRoutes from './routes/bags.routes'
@@ -154,11 +156,18 @@ async function initializeServices() {
   if (encryptionReady) {
     console.log('\n🚀 Starting multi-user automation...')
 
-    // Start claim job (hourly by default)
-    if (process.env.CLAIM_JOB_ENABLED !== 'false') {
+    // Start FAST claim job (every 30 seconds - claims when >= 0.15 SOL)
+    if (process.env.FAST_CLAIM_JOB_ENABLED !== 'false') {
+      startFastClaimJob()
+    } else {
+      console.log('ℹ️ Fast claim job disabled via FAST_CLAIM_JOB_ENABLED=false')
+    }
+
+    // Start legacy claim job (hourly by default - disabled by default if fast claim is running)
+    if (process.env.CLAIM_JOB_ENABLED === 'true') {
       startClaimJob()
     } else {
-      console.log('ℹ️ Multi-user claim job disabled via CLAIM_JOB_ENABLED=false')
+      console.log('ℹ️ Legacy claim job disabled (fast claim job handles this)')
     }
 
     // Start multi-user flywheel job (every minute by default)
@@ -173,6 +182,13 @@ async function initializeServices() {
       startDepositMonitorJob()
     } else {
       console.log('ℹ️ Deposit monitor job disabled via DEPOSIT_MONITOR_ENABLED=false')
+    }
+
+    // Start balance update job (every 5 minutes by default)
+    if (process.env.BALANCE_UPDATE_JOB_ENABLED !== 'false') {
+      startBalanceUpdateJob()
+    } else {
+      console.log('ℹ️ Balance update job disabled via BALANCE_UPDATE_JOB_ENABLED=false')
     }
   }
 
@@ -195,6 +211,8 @@ process.on('SIGTERM', () => {
   console.log('\n👋 Shutting down gracefully...')
   stopTelegramBot()
   stopDepositMonitorJob()
+  stopFastClaimJob()
+  stopBalanceUpdateJob()
   server.close(() => {
     console.log('Server closed')
     process.exit(0)
@@ -205,6 +223,8 @@ process.on('SIGINT', () => {
   console.log('\n👋 Shutting down gracefully...')
   stopTelegramBot()
   stopDepositMonitorJob()
+  stopFastClaimJob()
+  stopBalanceUpdateJob()
   server.close(() => {
     console.log('Server closed')
     process.exit(0)
