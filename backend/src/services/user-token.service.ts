@@ -621,3 +621,213 @@ export async function updateGraduationStatus(userTokenId: string, isGraduated: b
 
   return true
 }
+
+/**
+ * Check if a token exists but is suspended (is_active = false)
+ * Returns the suspended token data if found, null otherwise
+ */
+export async function getSuspendedTokenByMint(tokenMintAddress: string): Promise<{
+  id: string
+  token_symbol: string
+  token_name: string | null
+  dev_wallet_address: string
+  ops_wallet_address: string
+  telegram_user_id: string | null
+  user_id: string | null
+} | null> {
+  if (!supabase) {
+    return null
+  }
+
+  const { data, error } = await supabase
+    .from('user_tokens')
+    .select('id, token_symbol, token_name, dev_wallet_address, ops_wallet_address, telegram_user_id, user_id')
+    .eq('token_mint_address', tokenMintAddress)
+    .eq('is_active', false)
+    .single()
+
+  if (error) {
+    if (error.code !== 'PGRST116') {
+      console.error('❌ Failed to check for suspended token:', error)
+    }
+    return null
+  }
+
+  return data
+}
+
+/**
+ * Verify that provided private keys match the stored encrypted keys for a suspended token
+ * This is used to verify ownership before reactivating a suspended token
+ *
+ * @param userTokenId The ID of the suspended token
+ * @param devPrivateKey The dev wallet private key (base58)
+ * @param opsPrivateKey The ops wallet private key (base58)
+ * @returns Object with verification result and any error message
+ */
+export async function verifySuspendedTokenOwnership(
+  userTokenId: string,
+  devPrivateKey: string,
+  opsPrivateKey: string
+): Promise<{ verified: boolean; error?: string }> {
+  if (!supabase) {
+    return { verified: false, error: 'Database not configured' }
+  }
+
+  try {
+    // Get the encrypted keys and wallet addresses from the suspended token
+    const { data, error } = await supabase
+      .from('user_tokens')
+      .select(`
+        dev_wallet_address,
+        dev_wallet_private_key_encrypted,
+        encryption_iv,
+        encryption_auth_tag,
+        ops_wallet_address,
+        ops_wallet_private_key_encrypted,
+        ops_encryption_iv,
+        ops_encryption_auth_tag
+      `)
+      .eq('id', userTokenId)
+      .eq('is_active', false)
+      .single()
+
+    if (error || !data) {
+      return { verified: false, error: 'Token not found or not suspended' }
+    }
+
+    // Validate dev private key format and derive address
+    let providedDevAddress: string
+    try {
+      const secretKey = bs58.decode(devPrivateKey)
+      const keypair = Keypair.fromSecretKey(secretKey)
+      providedDevAddress = keypair.publicKey.toString()
+    } catch {
+      return { verified: false, error: 'Invalid dev wallet private key format' }
+    }
+
+    // Check if provided dev key derives to the stored dev wallet address
+    if (providedDevAddress !== data.dev_wallet_address) {
+      return {
+        verified: false,
+        error: 'Dev wallet private key does not match the registered dev wallet address'
+      }
+    }
+
+    // Validate ops private key format and derive address
+    let providedOpsAddress: string
+    try {
+      const secretKey = bs58.decode(opsPrivateKey)
+      const keypair = Keypair.fromSecretKey(secretKey)
+      providedOpsAddress = keypair.publicKey.toString()
+    } catch {
+      return { verified: false, error: 'Invalid ops wallet private key format' }
+    }
+
+    // Check if provided ops key derives to the stored ops wallet address
+    if (providedOpsAddress !== data.ops_wallet_address) {
+      return {
+        verified: false,
+        error: 'Ops wallet private key does not match the registered ops wallet address'
+      }
+    }
+
+    // Both keys verified - the user has proven ownership
+    console.log(`✅ Ownership verified for suspended token ${userTokenId}`)
+    return { verified: true }
+  } catch (error) {
+    console.error('❌ Error verifying suspended token ownership:', error)
+    return { verified: false, error: 'Verification failed due to an internal error' }
+  }
+}
+
+/**
+ * Reactivate a suspended token after ownership verification
+ * Updates the encrypted keys with the newly provided ones (in case encryption changed)
+ * and sets is_active to true
+ *
+ * @param userTokenId The ID of the suspended token
+ * @param devPrivateKey The dev wallet private key (base58)
+ * @param opsPrivateKey The ops wallet private key (base58)
+ * @param newTelegramUserId Optional new telegram user ID (if reactivating from a different account)
+ * @returns The reactivated token or null on failure
+ */
+export async function reactivateSuspendedToken(
+  userTokenId: string,
+  devPrivateKey: string,
+  opsPrivateKey: string,
+  newTelegramUserId?: string
+): Promise<UserToken | null> {
+  if (!supabase) {
+    return null
+  }
+
+  try {
+    // First verify ownership
+    const verification = await verifySuspendedTokenOwnership(userTokenId, devPrivateKey, opsPrivateKey)
+    if (!verification.verified) {
+      console.error('❌ Reactivation failed - ownership not verified:', verification.error)
+      return null
+    }
+
+    // Re-encrypt the keys with current encryption (in case master key changed)
+    const encryptedDevKey = encrypt(devPrivateKey)
+    const encryptedOpsKey = encrypt(opsPrivateKey)
+
+    // Build update object
+    const updateData: Record<string, unknown> = {
+      is_active: true,
+      dev_wallet_private_key_encrypted: encryptedDevKey.ciphertext,
+      encryption_iv: encryptedDevKey.iv,
+      encryption_auth_tag: encryptedDevKey.authTag,
+      ops_wallet_private_key_encrypted: encryptedOpsKey.ciphertext,
+      ops_encryption_iv: encryptedOpsKey.iv,
+      ops_encryption_auth_tag: encryptedOpsKey.authTag,
+    }
+
+    // Update telegram_user_id if provided
+    if (newTelegramUserId) {
+      updateData.telegram_user_id = newTelegramUserId
+    }
+
+    // Reactivate the token with fresh encrypted keys
+    const { data, error } = await supabase
+      .from('user_tokens')
+      .update(updateData)
+      .eq('id', userTokenId)
+      .select('id, user_id, token_mint_address, token_symbol, token_name, token_image, token_decimals, dev_wallet_address, ops_wallet_address, is_active, is_graduated, created_at, updated_at')
+      .single()
+
+    if (error) {
+      console.error('❌ Failed to reactivate token:', error)
+      return null
+    }
+
+    // Re-enable default config settings
+    await supabase
+      .from('user_token_config')
+      .update({
+        flywheel_active: false, // Start with flywheel off for safety
+        auto_claim_enabled: true,
+      })
+      .eq('user_token_id', userTokenId)
+
+    // Reset flywheel state
+    await supabase
+      .from('user_flywheel_state')
+      .update({
+        cycle_phase: 'buy',
+        buy_count: 0,
+        sell_count: 0,
+        sell_phase_token_snapshot: 0,
+        sell_amount_per_tx: 0,
+      })
+      .eq('user_token_id', userTokenId)
+
+    console.log(`✅ Reactivated suspended token ${userTokenId}`)
+    return data as UserToken
+  } catch (error) {
+    console.error('❌ Token reactivation failed:', error)
+    return null
+  }
+}

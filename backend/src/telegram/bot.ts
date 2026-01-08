@@ -49,6 +49,13 @@ const confirmRegisterKeyboard = Markup.inlineKeyboard([
   ],
 ])
 
+const reactivateTokenKeyboard = Markup.inlineKeyboard([
+  [
+    Markup.button.callback('🔓 Reactivate Token', 'action_reactivate'),
+    Markup.button.callback('❌ Cancel', 'action_cancel'),
+  ],
+])
+
 /**
  * Check if supabase is configured and throw error if not
  */
@@ -88,6 +95,12 @@ export interface SessionData extends Scenes.WizardSession {
     devWalletAddress?: string
     opsWalletAddress?: string
     step?: string
+    // Reactivation flow fields
+    isReactivation?: boolean // True if reactivating a suspended token
+    suspendedTokenId?: string // ID of the suspended token being reactivated
+    suspendedTokenSymbol?: string // Symbol of the suspended token
+    suspendedDevWallet?: string // Expected dev wallet address
+    suspendedOpsWallet?: string // Expected ops wallet address
   }
   // User data
   telegramUserId?: string
@@ -210,6 +223,31 @@ function setupBot(bot: Telegraf<BotContext>) {
       data.step = 'mint'
       await ctx.editMessageText(
         '🔄 *Let\'s try again*\n\nPlease send the correct token mint address:',
+        { parse_mode: 'Markdown' }
+      )
+    }
+  })
+
+  // Handle reactivation flow - user clicked "Reactivate Token"
+  bot.action('action_reactivate', async (ctx) => {
+    await ctx.answerCbQuery()
+    const data = ctx.session?.registerData as any
+    if (data && data.isReactivation) {
+      data.step = 'reactivate_dev_key'
+      await ctx.editMessageText(
+        `🔓 *Reactivate ${data.suspendedTokenSymbol || 'Token'}*\n\n` +
+        `To prove ownership and reactivate this token, you must provide the private keys for both wallets.\n\n` +
+        `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+        `⚠️ *DEV WALLET VERIFICATION*\n` +
+        `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+        `Expected address:\n\`${data.suspendedDevWallet?.slice(0, 8)}...${data.suspendedDevWallet?.slice(-6)}\`\n\n` +
+        `🔒 *Security:*\n` +
+        `• Key verified against stored wallet\n` +
+        `• Re-encrypted after verification\n` +
+        `• Only you can reactivate\n\n` +
+        `⚠️ *DELETE YOUR MESSAGE after I confirm!*\n\n` +
+        `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+        `📝 *Send your DEV WALLET PRIVATE KEY* (base58):`,
         { parse_mode: 'Markdown' }
       )
     }
@@ -1103,10 +1141,42 @@ async function handleRegisterWizard(ctx: BotContext, text: string) {
       }
       data.tokenMint = text
 
-      // Check if token is already registered for this user
+      // Check if token is already registered for this user or suspended
       try {
         const db = requireSupabase()
         const telegramId = ctx.from?.id
+        const { getSuspendedTokenByMint } = await import('../services/user-token.service')
+
+        // First check if token is suspended (can be reactivated)
+        const suspendedToken = await getSuspendedTokenByMint(text)
+        if (suspendedToken) {
+          // Token exists but is suspended - offer reactivation
+          data.isReactivation = true
+          data.suspendedTokenId = suspendedToken.id
+          data.suspendedTokenSymbol = suspendedToken.token_symbol
+          data.suspendedDevWallet = suspendedToken.dev_wallet_address
+          data.suspendedOpsWallet = suspendedToken.ops_wallet_address
+          data.tokenSymbol = suspendedToken.token_symbol
+          data.tokenName = suspendedToken.token_name || undefined
+
+          await ctx.replyWithMarkdown(
+            `🔒 *Suspended Token Found*\n\n` +
+            `*${suspendedToken.token_name || suspendedToken.token_symbol}* (${suspendedToken.token_symbol})\n\n` +
+            `This token was previously registered but is now suspended.\n\n` +
+            `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+            `💼 *Registered Wallets*\n` +
+            `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+            `Dev: \`${suspendedToken.dev_wallet_address.slice(0, 8)}...${suspendedToken.dev_wallet_address.slice(-6)}\`\n` +
+            `Ops: \`${suspendedToken.ops_wallet_address.slice(0, 8)}...${suspendedToken.ops_wallet_address.slice(-6)}\`\n\n` +
+            `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+            `🔐 *Ownership Verification Required*\n` +
+            `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+            `To reactivate this token, you must provide the private keys for *BOTH* wallets to prove you are the rightful owner.\n\n` +
+            `⚠️ _This is a security measure to prevent unauthorized access._`,
+            reactivateTokenKeyboard
+          )
+          return
+        }
 
         // Get telegram user
         const { data: telegramUser } = await db
@@ -1116,12 +1186,13 @@ async function handleRegisterWizard(ctx: BotContext, text: string) {
           .single()
 
         if (telegramUser) {
-          // Check if this token is already registered
+          // Check if this token is already registered (active)
           const { data: existingToken } = await db
             .from('user_tokens')
-            .select('id, token_symbol, token_name')
+            .select('id, token_symbol, token_name, is_active')
             .eq('telegram_user_id', telegramUser.id)
             .eq('token_mint_address', text)
+            .eq('is_active', true)
             .single()
 
           if (existingToken) {
@@ -1138,11 +1209,12 @@ To register a different token, run /register again.`)
           }
         }
 
-        // Also check if token is registered globally
+        // Also check if token is registered globally (active)
         const { data: globalToken } = await db
           .from('user_tokens')
-          .select('id, token_symbol')
+          .select('id, token_symbol, is_active')
           .eq('token_mint_address', text)
+          .eq('is_active', true)
           .single()
 
         if (globalToken) {
@@ -1371,6 +1443,183 @@ Address: \`${opsAddress.slice(0, 8)}...\`
 
 Reply *"confirm"* or /cancel`
       await ctx.replyWithMarkdown(confirmMsg)
+      break
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // REACTIVATION FLOW - For suspended tokens
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    case 'reactivate_dev_key':
+      // Validate dev private key for reactivation
+      const reactivateDevAddress = validatePrivateKey(text)
+      if (!reactivateDevAddress) {
+        await ctx.reply('Invalid private key format. Must be a base58 encoded Solana keypair. Please try again:')
+        return
+      }
+
+      // Try to delete the message with private key immediately
+      try {
+        await ctx.deleteMessage()
+      } catch (e) {
+        // Can't delete in some cases
+      }
+
+      // Verify the key matches the expected dev wallet
+      if (reactivateDevAddress !== data.suspendedDevWallet) {
+        await ctx.replyWithMarkdown(
+          `⛔ *Dev Wallet Verification Failed*\n\n` +
+          `The private key you provided does not match the registered dev wallet.\n\n` +
+          `*Your key derives to:*\n\`${reactivateDevAddress.slice(0, 8)}...${reactivateDevAddress.slice(-6)}\`\n\n` +
+          `*Expected address:*\n\`${data.suspendedDevWallet?.slice(0, 8)}...${data.suspendedDevWallet?.slice(-6)}\`\n\n` +
+          `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+          `Please provide the correct dev wallet private key:`,
+        )
+        return
+      }
+
+      // Dev key verified, store it and ask for ops key
+      data.devWalletPrivateKey = text
+      data.devWalletAddress = reactivateDevAddress
+      data.step = 'reactivate_ops_key'
+
+      await ctx.replyWithMarkdown(
+        `✅ *Dev Wallet Verified!*\n` +
+        `Address: \`${reactivateDevAddress.slice(0, 8)}...\`\n\n` +
+        `⚠️ *DELETE your previous message NOW!*\n\n` +
+        `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+        `⚠️ *OPS WALLET VERIFICATION*\n` +
+        `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+        `Expected address:\n\`${data.suspendedOpsWallet?.slice(0, 8)}...${data.suspendedOpsWallet?.slice(-6)}\`\n\n` +
+        `📝 *Send your OPS WALLET PRIVATE KEY* (base58):`
+      )
+      break
+
+    case 'reactivate_ops_key':
+      // Validate ops private key for reactivation
+      const reactivateOpsAddress = validatePrivateKey(text)
+      if (!reactivateOpsAddress) {
+        await ctx.reply('Invalid private key format. Please try again:')
+        return
+      }
+
+      // Try to delete the message with private key
+      try {
+        await ctx.deleteMessage()
+      } catch (e) {
+        // Can't delete in some cases
+      }
+
+      // Verify the key matches the expected ops wallet
+      if (reactivateOpsAddress !== data.suspendedOpsWallet) {
+        await ctx.replyWithMarkdown(
+          `⛔ *Ops Wallet Verification Failed*\n\n` +
+          `The private key you provided does not match the registered ops wallet.\n\n` +
+          `*Your key derives to:*\n\`${reactivateOpsAddress.slice(0, 8)}...${reactivateOpsAddress.slice(-6)}\`\n\n` +
+          `*Expected address:*\n\`${data.suspendedOpsWallet?.slice(0, 8)}...${data.suspendedOpsWallet?.slice(-6)}\`\n\n` +
+          `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+          `Please provide the correct ops wallet private key:`,
+        )
+        return
+      }
+
+      // Both keys verified! Proceed to reactivate
+      data.opsWalletPrivateKey = text
+      data.opsWalletAddress = reactivateOpsAddress
+
+      await ctx.replyWithMarkdown(
+        `✅ *Ops Wallet Verified!*\n` +
+        `Address: \`${reactivateOpsAddress.slice(0, 8)}...\`\n\n` +
+        `⚠️ *DELETE your previous message NOW!*\n\n` +
+        `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+        `🔓 *Ownership Verified!*\n\n` +
+        `Both wallet keys have been verified. Reactivating your token...`
+      )
+
+      // Perform the reactivation
+      try {
+        const { reactivateSuspendedToken } = await import('../services/user-token.service')
+        const db = requireSupabase()
+        const telegramId = ctx.from?.id
+
+        // Get or create telegram user
+        let { data: telegramUser } = await db
+          .from('telegram_users')
+          .select('id')
+          .eq('telegram_id', telegramId)
+          .single()
+
+        if (!telegramUser) {
+          const { data: newUser } = await db
+            .from('telegram_users')
+            .insert({
+              telegram_id: telegramId,
+              telegram_username: ctx.from?.username,
+            })
+            .select('id')
+            .single()
+          telegramUser = newUser
+        }
+
+        // Reactivate the token
+        const reactivatedToken = await reactivateSuspendedToken(
+          data.suspendedTokenId,
+          data.devWalletPrivateKey,
+          data.opsWalletPrivateKey,
+          telegramUser?.id
+        )
+
+        if (!reactivatedToken) {
+          await ctx.reply('❌ Failed to reactivate token. Please try again or contact support.')
+          ctx.session.registerData = undefined
+          return
+        }
+
+        // Log audit event
+        await db.from('audit_log').insert({
+          event_type: 'token_reactivated',
+          user_token_id: reactivatedToken.id,
+          telegram_id: telegramId,
+          details: {
+            token_symbol: reactivatedToken.token_symbol,
+            reactivated_by: 'telegram_ownership_verification',
+          },
+        })
+
+        const successMsg = `🎉 *${reactivatedToken.token_name || reactivatedToken.token_symbol}* Reactivated!
+
+✅ Ownership verified
+✅ Keys re-encrypted
+✅ Token active
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+*Status:*
+├ Flywheel: OFF (enable below)
+├ Auto-claim: ON
+└ Mode: Simple
+
+─────────────────────────
+
+*Next Steps:*
+1. Fund ops wallet if needed
+2. Enable flywheel below`
+
+        const successKeyboard = Markup.inlineKeyboard([
+          [Markup.button.callback(`🟢 Enable Flywheel`, `toggle_${reactivatedToken.token_symbol}`)],
+          [
+            Markup.button.callback(`📊 View Status`, `status_${reactivatedToken.token_symbol}`),
+            Markup.button.callback('📊 My Tokens', 'action_mytokens'),
+          ],
+          [Markup.button.url('🌐 Dashboard', 'https://claudewheel.com/dashboard')],
+        ])
+
+        await ctx.replyWithMarkdown(successMsg, successKeyboard)
+        ctx.session.registerData = undefined
+      } catch (error) {
+        console.error('Error reactivating token:', error)
+        await ctx.reply('❌ Error reactivating token. Please try again with /register')
+        ctx.session.registerData = undefined
+      }
       break
 
     case 'confirm':
