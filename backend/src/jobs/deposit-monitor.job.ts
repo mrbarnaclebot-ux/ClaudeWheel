@@ -329,8 +329,8 @@ async function handleSuccessfulLaunch(launch: PendingLaunch, tokenMint: string):
         token_name: launch.token_name,
         dev_wallet_address: launch.dev_wallet_address,
         dev_wallet_private_key_encrypted: launch.dev_wallet_private_key_encrypted,
-        encryption_iv: launch.dev_encryption_iv,
-        encryption_auth_tag: launch.dev_encryption_auth_tag || '', // Fallback to empty string if null
+        dev_encryption_iv: launch.dev_encryption_iv,
+        dev_encryption_auth_tag: launch.dev_encryption_auth_tag || '', // Fallback to empty string if null
         ops_wallet_address: launch.ops_wallet_address,
         ops_wallet_private_key_encrypted: launch.ops_wallet_private_key_encrypted,
         ops_encryption_iv: launch.ops_encryption_iv,
