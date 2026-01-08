@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="frontend/public/logo.png" alt="Claude Wheel Logo" width="120" height="120">
+  <img src="thumbnail%20claude%20wheel.png" alt="Claude Wheel" width="400">
 </p>
 
 <h1 align="center">Claude Wheel</h1>

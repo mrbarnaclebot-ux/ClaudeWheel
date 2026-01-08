@@ -327,7 +327,7 @@ export default function DocsPage() {
             CA: 8JLGQ7RqhsvhsDhvjMuJUeeuaQ53GTJqSHNaBWf4BAGS
           </p>
           <p className="text-text-muted/50 font-mono text-xs mt-2">
-            &copy; 2025 Claude Wheel. All rights reserved.
+            &copy; 2026 Claude Wheel. All rights reserved.
           </p>
         </footer>
       </main>
