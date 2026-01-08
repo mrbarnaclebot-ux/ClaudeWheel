@@ -110,6 +110,36 @@ export function extractConfigHash(message: string): string | null {
 }
 
 /**
+ * Validate a Solana address format
+ * @param address - The address string to validate
+ * @returns Object with validity and optional error message
+ */
+export function isValidSolanaAddress(address: string): { valid: boolean; error?: string } {
+  if (!address || typeof address !== 'string') {
+    return { valid: false, error: 'Address is required' }
+  }
+
+  // Solana addresses are base58 encoded, typically 32-44 characters
+  if (address.length < 32 || address.length > 44) {
+    return { valid: false, error: 'Invalid address length' }
+  }
+
+  // Check for valid base58 characters (no 0, O, I, l)
+  const base58Regex = /^[1-9A-HJ-NP-Za-km-z]+$/
+  if (!base58Regex.test(address)) {
+    return { valid: false, error: 'Invalid base58 characters in address' }
+  }
+
+  try {
+    // Attempt to create a PublicKey - this validates the checksum and format
+    new PublicKey(address)
+    return { valid: true }
+  } catch {
+    return { valid: false, error: 'Invalid Solana address format' }
+  }
+}
+
+/**
  * Generate a nonce message that includes a config hash
  * This cryptographically binds the signature to specific config values
  */

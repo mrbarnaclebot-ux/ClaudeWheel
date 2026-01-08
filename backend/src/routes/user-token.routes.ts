@@ -460,6 +460,16 @@ router.put('/tokens/:tokenId/config', verifyWalletOwnership, async (req: Request
     if (typeof config.max_buy_amount_sol === 'number' && config.max_buy_amount_sol >= 0) {
       validatedConfig.max_buy_amount_sol = config.max_buy_amount_sol
     }
+
+    // Validate min <= max buy amount (using config values or existing defaults)
+    const minBuy = validatedConfig.min_buy_amount_sol ?? config.min_buy_amount_sol
+    const maxBuy = validatedConfig.max_buy_amount_sol ?? config.max_buy_amount_sol
+    if (minBuy !== undefined && maxBuy !== undefined && minBuy > maxBuy) {
+      return res.status(400).json({
+        success: false,
+        error: 'min_buy_amount_sol cannot be greater than max_buy_amount_sol',
+      })
+    }
     if (typeof config.max_sell_amount_tokens === 'number' && config.max_sell_amount_tokens >= 0) {
       validatedConfig.max_sell_amount_tokens = config.max_sell_amount_tokens
     }

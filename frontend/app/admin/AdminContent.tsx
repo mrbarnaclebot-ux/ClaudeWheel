@@ -287,14 +287,20 @@ export default function AdminContent() {
       tokenId
     )
     if (success) {
+      setMessage({ type: 'success', text: 'Token verified successfully' })
       reloadTokens()
+    } else {
+      setMessage({ type: 'error', text: 'Failed to verify token' })
     }
   }
 
   // Handle suspend token
   const handleSuspendToken = async () => {
     if (!publicKey || !adminAuthSignature || !adminAuthMessage || !suspendModal) return
-    if (!suspendReason.trim()) return
+    if (!suspendReason.trim()) {
+      setMessage({ type: 'error', text: 'Suspend reason is required' })
+      return
+    }
 
     const success = await suspendAdminToken(
       publicKey.toString(),
@@ -304,9 +310,12 @@ export default function AdminContent() {
       suspendReason
     )
     if (success) {
+      setMessage({ type: 'success', text: `Token ${suspendModal.symbol} suspended successfully` })
       setSuspendModal(null)
       setSuspendReason('')
       reloadTokens()
+    } else {
+      setMessage({ type: 'error', text: 'Failed to suspend token' })
     }
   }
 
@@ -321,7 +330,10 @@ export default function AdminContent() {
       tokenId
     )
     if (success) {
+      setMessage({ type: 'success', text: 'Token unsuspended successfully' })
       reloadTokens()
+    } else {
+      setMessage({ type: 'error', text: 'Failed to unsuspend token' })
     }
   }
 
@@ -367,7 +379,10 @@ export default function AdminContent() {
   // Handle bulk suspend all tokens
   const handleBulkSuspend = async () => {
     if (!publicKey || !adminAuthSignature || !adminAuthMessage) return
-    if (!bulkSuspendReason.trim()) return
+    if (!bulkSuspendReason.trim()) {
+      setMessage({ type: 'error', text: 'Bulk suspend reason is required' })
+      return
+    }
 
     setIsBulkSuspending(true)
 
@@ -379,12 +394,15 @@ export default function AdminContent() {
     )
 
     if (result) {
+      setMessage({ type: 'success', text: `Suspended ${result.suspendedCount} tokens (${result.skippedCount} skipped)` })
       setBulkSuspendModal(false)
       setBulkSuspendReason('')
       reloadTokens()
       // Refresh platform stats
       const stats = await fetchPlatformStats(publicKey.toString(), adminAuthSignature, adminAuthMessage)
       if (stats) setPlatformStats(stats)
+    } else {
+      setMessage({ type: 'error', text: 'Failed to bulk suspend tokens' })
     }
 
     setIsBulkSuspending(false)
@@ -403,10 +421,13 @@ export default function AdminContent() {
     )
 
     if (result) {
+      setMessage({ type: 'success', text: `Unsuspended ${result.suspendedCount} tokens` })
       reloadTokens()
       // Refresh platform stats
       const stats = await fetchPlatformStats(publicKey.toString(), adminAuthSignature, adminAuthMessage)
       if (stats) setPlatformStats(stats)
+    } else {
+      setMessage({ type: 'error', text: 'Failed to bulk unsuspend tokens' })
     }
 
     setIsBulkUnsuspending(false)
@@ -452,6 +473,8 @@ export default function AdminContent() {
     const result = await fetchOrphanedLaunches(publicKey.toString(), adminAuthSignature, adminAuthMessage)
     if (result) {
       setOrphanedLaunches(result.launches)
+    } else {
+      setJobMessage({ type: 'error', text: 'Failed to load orphaned launches' })
     }
   }
 

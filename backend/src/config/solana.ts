@@ -76,8 +76,35 @@ export function getTokenMint(): PublicKey | null {
 // UTILITY FUNCTIONS
 // ═══════════════════════════════════════════════════════════════════════════
 
+const RPC_TIMEOUT_MS = 30000 // 30 second timeout for RPC calls
+
+/**
+ * Wraps a promise with a timeout
+ */
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, operation: string): Promise<T> {
+  let timeoutId: NodeJS.Timeout
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(() => {
+      reject(new Error(`${operation} timed out after ${timeoutMs}ms`))
+    }, timeoutMs)
+  })
+
+  try {
+    const result = await Promise.race([promise, timeoutPromise])
+    clearTimeout(timeoutId!)
+    return result
+  } catch (error) {
+    clearTimeout(timeoutId!)
+    throw error
+  }
+}
+
 export async function getBalance(publicKey: PublicKey): Promise<number> {
-  const balance = await connection.getBalance(publicKey)
+  const balance = await withTimeout(
+    connection.getBalance(publicKey),
+    RPC_TIMEOUT_MS,
+    'getBalance'
+  )
   return balance / LAMPORTS_PER_SOL
 }
 
@@ -86,9 +113,13 @@ export async function getTokenBalance(
   mintAddress: PublicKey
 ): Promise<number> {
   try {
-    const tokenAccounts = await connection.getParsedTokenAccountsByOwner(
-      walletAddress,
-      { mint: mintAddress }
+    const tokenAccounts = await withTimeout(
+      connection.getParsedTokenAccountsByOwner(
+        walletAddress,
+        { mint: mintAddress }
+      ),
+      RPC_TIMEOUT_MS,
+      'getTokenBalance'
     )
 
     if (tokenAccounts.value.length === 0) {

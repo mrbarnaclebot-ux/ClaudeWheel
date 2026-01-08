@@ -1,5 +1,5 @@
 import { Router, Request, Response } from 'express'
-import { verifySignature } from '../utils/signature-verify'
+import { verifySignature, isValidSolanaAddress } from '../utils/signature-verify'
 import {
   generateAuthNonce,
   verifyNonce,
@@ -30,11 +30,12 @@ router.post('/nonce', async (req: Request, res: Response) => {
       })
     }
 
-    // Validate wallet address format (basic check)
-    if (typeof walletAddress !== 'string' || walletAddress.length < 32 || walletAddress.length > 44) {
+    // Validate wallet address format using proper Solana validation
+    const addressValidation = isValidSolanaAddress(walletAddress)
+    if (!addressValidation.valid) {
       return res.status(400).json({
         success: false,
-        error: 'Invalid wallet address format',
+        error: addressValidation.error || 'Invalid wallet address format',
       })
     }
 

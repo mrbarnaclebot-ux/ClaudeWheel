@@ -373,7 +373,7 @@ class BalanceMonitorService {
       const opsUsd = opsSol * solPrice
       const claimableUsd = claimableFees * solPrice
 
-      await supabase
+      const { error: upsertError } = await supabase
         .from('user_wallet_balances')
         .upsert({
           user_token_id: userTokenId,
@@ -390,6 +390,10 @@ class BalanceMonitorService {
         }, {
           onConflict: 'user_token_id',
         })
+
+      if (upsertError) {
+        console.error(`Failed to upsert balance for ${userTokenId}:`, upsertError)
+      }
     }
   }
 
@@ -402,14 +406,23 @@ class BalanceMonitorService {
     try {
       // Try using RPC function
       for (const id of userTokenIds) {
-        await supabase.rpc('save_balance_snapshot', { p_user_token_id: id })
+        const { error: rpcError } = await supabase.rpc('save_balance_snapshot', { p_user_token_id: id })
+        if (rpcError) {
+          // RPC function doesn't exist, fall through to catch block
+          throw rpcError
+        }
       }
     } catch {
       // Fallback: insert directly
-      const { data: currentBalances } = await supabase
+      const { data: currentBalances, error: selectError } = await supabase
         .from('user_wallet_balances')
         .select('*')
         .in('user_token_id', userTokenIds)
+
+      if (selectError) {
+        console.error('Failed to fetch current balances for snapshot:', selectError)
+        return
+      }
 
       if (currentBalances && currentBalances.length > 0) {
         const snapshots = currentBalances.map((b: any) => ({
@@ -423,7 +436,10 @@ class BalanceMonitorService {
           snapshot_at: new Date().toISOString(),
         }))
 
-        await supabase.from('user_wallet_balance_history').insert(snapshots)
+        const { error: insertError } = await supabase.from('user_wallet_balance_history').insert(snapshots)
+        if (insertError) {
+          console.error('Failed to insert balance snapshots:', insertError)
+        }
       }
     }
   }

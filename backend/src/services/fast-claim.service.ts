@@ -511,7 +511,7 @@ class FastClaimService {
         console.warn('Failed to fetch SOL price for USD calculation:', priceError)
       }
 
-      await supabase.from('user_claim_history').insert([{
+      const { error: historyError } = await supabase.from('user_claim_history').insert([{
         user_token_id: userTokenId,
         amount_sol: amountSol,
         amount_usd: amountUsd,
@@ -521,9 +521,13 @@ class FastClaimService {
         claimed_at: new Date().toISOString(),
       }])
 
+      if (historyError) {
+        console.error('Failed to insert claim history:', historyError)
+      }
+
       // Also record as transaction for activity feed
       const usdStr = amountUsd > 0 ? ` ($${amountUsd.toFixed(2)})` : ''
-      await supabase.from('user_transactions').insert([{
+      const { error: txError } = await supabase.from('user_transactions').insert([{
         user_token_id: userTokenId,
         type: 'transfer',
         amount: amountSol,
@@ -531,6 +535,10 @@ class FastClaimService {
         message: `Claimed ${amountSol.toFixed(4)} SOL${usdStr} fees (${platformFeeSol.toFixed(4)} platform fee)`,
         status: 'confirmed',
       }])
+
+      if (txError) {
+        console.error('Failed to insert transaction record:', txError)
+      }
     } catch (error) {
       console.error('Failed to record claim:', error)
     }
