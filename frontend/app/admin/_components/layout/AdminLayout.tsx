@@ -20,22 +20,11 @@ interface AdminLayoutProps {
 }
 
 function AdminLayoutContent({ children }: AdminLayoutProps) {
+  // ALL HOOKS MUST BE CALLED FIRST - before any early returns
   const hydrated = useHydrateStore()
   const { publicKey, connected, signMessage } = useWallet()
   const { isAuthenticated, setAuth, clearAuth } = useAdminAuth()
   const setWsConnected = useAdminStore((s) => s.setWsConnected)
-
-  // Wait for hydration before rendering to avoid mismatch
-  if (!hydrated) {
-    return (
-      <div className="min-h-screen bg-void flex items-center justify-center p-4">
-        <PageSkeleton />
-      </div>
-    )
-  }
-
-  // Check if wallet is authorized
-  const isAuthorized = connected && publicKey?.toString() === DEV_WALLET_ADDRESS
 
   // Handle authentication
   const handleAuthenticate = useCallback(async () => {
@@ -71,6 +60,20 @@ function AdminLayoutContent({ children }: AdminLayoutProps) {
     // This will be replaced with actual WebSocket connection status
     setWsConnected(isAuthenticated)
   }, [isAuthenticated, setWsConnected])
+
+  // NOW we can have early returns - after all hooks are called
+
+  // Wait for hydration before rendering to avoid mismatch
+  if (!hydrated) {
+    return (
+      <div className="min-h-screen bg-void flex items-center justify-center p-4">
+        <PageSkeleton />
+      </div>
+    )
+  }
+
+  // Check if wallet is authorized
+  const isAuthorized = connected && publicKey?.toString() === DEV_WALLET_ADDRESS
 
   // Not connected to wallet
   if (!connected || !publicKey) {
