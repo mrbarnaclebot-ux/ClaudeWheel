@@ -43,6 +43,8 @@ import {
   disableMaintenanceMode,
   sendBroadcast,
   previewBroadcast,
+  previewTokenRefund,
+  stopFlywheelAndRefund,
   type TelegramLaunchStats,
   type TelegramLaunch,
   type TelegramAuditLog,
@@ -51,6 +53,8 @@ import {
   type TelegramUser,
   type ChartData,
   type BotAlertStatus,
+  type RefundPreview,
+  type StopAndRefundResult,
 } from '@/lib/api'
 
 const DEV_WALLET_ADDRESS = process.env.NEXT_PUBLIC_DEV_WALLET_ADDRESS || ''
@@ -118,6 +122,14 @@ export default function TelegramAdminPage() {
   const [isSendingBroadcast, setIsSendingBroadcast] = useState(false)
   const [isTogglingMaintenance, setIsTogglingMaintenance] = useState(false)
   const [broadcastResult, setBroadcastResult] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+
+  // Stop & Refund state (for completed launches)
+  const [stopRefundModal, setStopRefundModal] = useState<TelegramLaunch | null>(null)
+  const [stopRefundPreview, setStopRefundPreview] = useState<RefundPreview | null>(null)
+  const [isLoadingStopRefundPreview, setIsLoadingStopRefundPreview] = useState(false)
+  const [stopRefundAddress, setStopRefundAddress] = useState('')
+  const [isStopRefunding, setIsStopRefunding] = useState(false)
+  const [stopRefundResult, setStopRefundResult] = useState<StopAndRefundResult | null>(null)
 
   // Check authorization
   useEffect(() => {
@@ -232,6 +244,13 @@ export default function TelegramAdminPage() {
     }
   }, [searchQuery])
 
+  // Filter and pagination effect - reload when filter or page changes
+  useEffect(() => {
+    if (adminAuthSignature && adminAuthMessage && publicKey) {
+      reloadData()
+    }
+  }, [statusFilter, currentPage])
+
   // Handle refund
   const handleRefund = async () => {
     if (!publicKey || !adminAuthSignature || !adminAuthMessage || !refundModal) return
@@ -313,6 +332,61 @@ export default function TelegramAdminPage() {
     if (success) {
       reloadData()
     }
+  }
+
+  // Open Stop & Refund modal for completed launches
+  const openStopRefundModal = async (launch: TelegramLaunch) => {
+    if (!publicKey || !adminAuthSignature || !adminAuthMessage || !launch.user_token_id) return
+
+    setStopRefundModal(launch)
+    setStopRefundPreview(null)
+    setStopRefundAddress('')
+    setStopRefundResult(null)
+    setIsLoadingStopRefundPreview(true)
+
+    const preview = await previewTokenRefund(
+      publicKey.toString(),
+      adminAuthSignature,
+      adminAuthMessage,
+      launch.user_token_id
+    )
+    if (preview) {
+      setStopRefundPreview(preview)
+      if (preview.suggestedRefundAddress) {
+        setStopRefundAddress(preview.suggestedRefundAddress)
+      } else if (launch.original_funder) {
+        setStopRefundAddress(launch.original_funder)
+      }
+    }
+
+    setIsLoadingStopRefundPreview(false)
+  }
+
+  // Execute Stop & Refund
+  const handleStopAndRefund = async () => {
+    if (!publicKey || !adminAuthSignature || !adminAuthMessage || !stopRefundModal?.user_token_id) return
+
+    setIsStopRefunding(true)
+    setStopRefundResult(null)
+
+    const result = await stopFlywheelAndRefund(
+      publicKey.toString(),
+      adminAuthSignature,
+      adminAuthMessage,
+      stopRefundModal.user_token_id,
+      stopRefundAddress || undefined
+    )
+
+    setStopRefundResult(result)
+
+    if (result.success && result.refundExecuted) {
+      setTimeout(() => {
+        setStopRefundModal(null)
+        reloadData()
+      }, 2000)
+    }
+
+    setIsStopRefunding(false)
   }
 
   // Handle export
@@ -841,6 +915,14 @@ export default function TelegramAdminPage() {
                                     >
                                       View
                                     </a>
+                                  )}
+                                  {launch.status === 'completed' && launch.user_token_id && (
+                                    <button
+                                      onClick={() => openStopRefundModal(launch)}
+                                      className="px-2 py-1 text-xs font-mono bg-warning/20 text-warning border border-warning/30 rounded hover:bg-warning/30 transition-colors"
+                                    >
+                                      Stop
+                                    </button>
                                   )}
                                 </div>
                               </td>
@@ -1566,6 +1648,103 @@ export default function TelegramAdminPage() {
                     className="px-4 py-2 text-sm font-mono bg-error/20 text-error border border-error/30 rounded-lg hover:bg-error/30 transition-colors disabled:opacity-50"
                   >
                     {isBulkRefunding ? 'Processing...' : 'Execute Bulk Refund'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Stop & Refund Modal (for completed launches) */}
+        {stopRefundModal && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+            <div className="bg-bg-card border border-border-subtle rounded-xl p-6 max-w-lg w-full mx-4">
+              <h3 className="text-lg font-semibold text-text-primary mb-4">
+                Stop Flywheel & Refund - {stopRefundModal.token_symbol}
+              </h3>
+
+              <div className="space-y-4">
+                {isLoadingStopRefundPreview ? (
+                  <div className="text-center py-4 text-text-muted">Loading wallet balances...</div>
+                ) : stopRefundPreview ? (
+                  <>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="bg-bg-secondary rounded-lg p-3">
+                        <div className="text-xs text-text-muted mb-1">Dev Wallet</div>
+                        <div className="text-lg font-bold text-success">
+                          {stopRefundPreview.wallets.dev.balance.toFixed(6)} SOL
+                        </div>
+                        <div className="text-xs text-text-muted truncate">{stopRefundPreview.wallets.dev.address.slice(0,8)}...</div>
+                      </div>
+                      <div className="bg-bg-secondary rounded-lg p-3">
+                        <div className="text-xs text-text-muted mb-1">Ops Wallet</div>
+                        <div className="text-lg font-bold text-success">
+                          {stopRefundPreview.wallets.ops.balance.toFixed(6)} SOL
+                        </div>
+                        <div className="text-xs text-text-muted truncate">{stopRefundPreview.wallets.ops.address.slice(0,8)}...</div>
+                      </div>
+                    </div>
+
+                    <div className="bg-warning/10 border border-warning/30 rounded-lg p-3">
+                      <div className="text-xs text-warning font-mono mb-1">Total Refundable</div>
+                      <div className="text-2xl font-bold text-warning">
+                        {stopRefundPreview.totalRefundable.toFixed(6)} SOL
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-text-muted font-mono text-xs mb-2">
+                        Refund Address
+                      </label>
+                      <input
+                        type="text"
+                        value={stopRefundAddress}
+                        onChange={(e) => setStopRefundAddress(e.target.value)}
+                        placeholder="Enter Solana address..."
+                        className="w-full bg-bg-secondary border border-border-subtle rounded-lg px-4 py-3 font-mono text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent-primary"
+                      />
+                      {stopRefundPreview.suggestedRefundAddress && stopRefundAddress !== stopRefundPreview.suggestedRefundAddress && (
+                        <button
+                          onClick={() => setStopRefundAddress(stopRefundPreview.suggestedRefundAddress!)}
+                          className="text-xs text-accent-primary mt-2 hover:underline"
+                        >
+                          Use original funder: {stopRefundPreview.suggestedRefundAddress.slice(0, 8)}...
+                        </button>
+                      )}
+                    </div>
+                  </>
+                ) : (
+                  <div className="text-center py-4 text-error">Failed to load wallet balances</div>
+                )}
+
+                {stopRefundResult && (
+                  <div className={`p-3 rounded-lg font-mono text-sm ${
+                    stopRefundResult.success
+                      ? 'bg-success/20 text-success border border-success/30'
+                      : 'bg-error/20 text-error border border-error/30'
+                  }`}>
+                    {stopRefundResult.success
+                      ? `Refunded ${stopRefundResult.totalRefunded?.toFixed(6) || 0} SOL`
+                      : stopRefundResult.error || 'Refund failed'}
+                  </div>
+                )}
+
+                <div className="flex gap-3 justify-end">
+                  <button
+                    onClick={() => {
+                      setStopRefundModal(null)
+                      setStopRefundResult(null)
+                    }}
+                    className="px-4 py-2 text-sm font-mono bg-bg-secondary text-text-muted border border-border-subtle rounded-lg hover:bg-bg-card-hover transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleStopAndRefund}
+                    disabled={isStopRefunding || !stopRefundAddress.trim() || !stopRefundPreview}
+                    className="px-4 py-2 text-sm font-mono bg-warning/20 text-warning border border-warning/30 rounded-lg hover:bg-warning/30 transition-colors disabled:opacity-50"
+                  >
+                    {isStopRefunding ? 'Processing...' : 'Stop & Refund'}
                   </button>
                 </div>
               </div>

@@ -659,14 +659,15 @@ async function finalizeLaunchWizard(ctx: BotContext): Promise<void> {
     const telegramId = ctx.from?.id
 
     // Get or create telegram user
-    let { data: telegramUser } = await db
+    let { data: telegramUser, error: userFetchError } = await db
       .from('telegram_users')
       .select('id')
       .eq('telegram_id', telegramId)
       .single()
 
-    if (!telegramUser) {
-      const { data: newUser } = await db
+    if (!telegramUser && userFetchError?.code === 'PGRST116') {
+      // PGRST116 = no rows returned, create new user
+      const { data: newUser, error: createUserError } = await db
         .from('telegram_users')
         .insert({
           telegram_id: telegramId,
@@ -674,14 +675,33 @@ async function finalizeLaunchWizard(ctx: BotContext): Promise<void> {
         })
         .select('id')
         .single()
+
+      if (createUserError) {
+        console.error('Error creating telegram user:', createUserError)
+        await ctx.reply('Error setting up your account. Please try again with /launch')
+        ctx.session.launchData = undefined
+        return
+      }
       telegramUser = newUser
+    } else if (userFetchError && userFetchError.code !== 'PGRST116') {
+      console.error('Error fetching telegram user:', userFetchError)
+      await ctx.reply('Error fetching your account. Please try again with /launch')
+      ctx.session.launchData = undefined
+      return
+    }
+
+    if (!telegramUser?.id) {
+      console.error('Failed to get or create telegram user')
+      await ctx.reply('Error setting up your account. Please try again with /launch')
+      ctx.session.launchData = undefined
+      return
     }
 
     // Create pending launch
     const { data: pendingLaunch, error } = await db
       .from('pending_token_launches')
       .insert({
-        telegram_user_id: telegramUser?.id,
+        telegram_user_id: telegramUser.id,
         token_name: data.tokenName,
         token_symbol: data.tokenSymbol,
         token_description: data.tokenDescription,

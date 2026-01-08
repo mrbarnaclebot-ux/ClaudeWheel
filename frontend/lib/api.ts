@@ -1284,6 +1284,7 @@ export interface TelegramLaunchStats {
 export interface TelegramLaunch {
   id: string
   telegram_user_id: string
+  user_token_id: string | null  // Reference to user_tokens after successful launch
   token_name: string
   token_symbol: string
   token_description: string | null
