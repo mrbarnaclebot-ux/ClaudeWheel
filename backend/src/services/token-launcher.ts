@@ -102,32 +102,38 @@ class TokenLauncherService {
         console.log(`📝 Token metadata: ${tokenInfoResult.tokenMetadata}`)
       }
 
-      // Step 2: Configure fee sharing (optional but recommended)
+      // Get connection for transaction signing
+      const connection = getConnection()
+
+      // Step 2: Configure fee sharing (required for v2)
+      // Creator must explicitly receive 100% of fees (10000 bps)
       let configKey: string
       const feeShareResult = await this.configureFeeSharing({
         tokenMint: tokenInfoResult.tokenMint,
         creatorWallet: params.devWalletAddress,
         creatorBps: 10000, // 100% to creator (10000 bps = 100%)
+        connection,
+        signer: devKeypair,
       })
 
       if (!feeShareResult.success || !feeShareResult.configKey) {
         console.warn(`⚠️ Fee sharing configuration failed: ${feeShareResult.error}`)
         // Generate a config keypair as fallback - API requires configKey to be a valid public key
+        // Note: With fallback, fees may NOT go to dev wallet as intended
         const configKeypair = Keypair.generate()
         configKey = configKeypair.publicKey.toString()
-        console.log(`📝 Generated fallback configKey: ${configKey.slice(0, 8)}...`)
+        console.log(`📝 Generated fallback configKey: ${configKey.slice(0, 8)}... (fees may not be configured!)`)
       } else {
-        console.log(`💰 Fee sharing configured: 100% to creator`)
+        console.log(`💰 Fee sharing configured: 100% to creator (${params.devWalletAddress.slice(0, 8)}...)`)
         configKey = feeShareResult.configKey
       }
 
-      // Step 3: Create launch transaction with correct parameters
-      // configKey must be a valid Solana public key (base58 encoded, 32 bytes)
+      // Step 3: Create launch transaction with configKey from fee share setup
       const launchTxResult = await this.createLaunchTransaction({
         tokenMint: tokenInfoResult.tokenMint,
         creatorWallet: params.devWalletAddress,
         tokenMetadata: tokenInfoResult.tokenMetadata, // IPFS URL from step 1
-        launchId: configKey, // Always pass a valid public key
+        configKey, // Config key from fee share setup
       })
 
       if (!launchTxResult.success || !launchTxResult.transaction) {
@@ -140,7 +146,6 @@ class TokenLauncherService {
       console.log(`📄 Launch transaction created`)
 
       // Step 4: Sign and submit the transaction
-      const connection = getConnection()
       const signature = await this.signAndSubmitTransaction(
         connection,
         devKeypair,
@@ -276,23 +281,40 @@ class TokenLauncherService {
   }
 
   /**
-   * Configure fee sharing for a token
-   * Note: This endpoint uses /fee-share/config with:
-   * - payer: wallet public key
-   * - baseMint: token mint
-   * - claimersArray: array of wallet addresses
-   * - basisPointsArray: array of basis points (must sum to 10000)
+   * Configure fee sharing for a token using Bags v2 API
    *
-   * This is optional - tokens can be launched without explicit fee share config
+   * Token Launch v2 requires explicit BPS allocation:
+   * - Creator must always be included with their BPS explicitly set
+   * - Total BPS must equal 10000 (100%)
+   *
+   * The API may return transactions that need to be signed and sent,
+   * plus a meteoraConfigKey to use in the launch transaction.
    */
   private async configureFeeSharing(params: {
     tokenMint: string
     creatorWallet: string
     creatorBps: number // Basis points (10000 = 100%)
+    connection: Connection
+    signer: Keypair
   }): Promise<{ success: boolean; configKey?: string; error?: string }> {
     try {
-      // Use the correct endpoint and parameters per API docs
-      const response = await fetch(`${BAGS_API_BASE}/fee-share/config`, {
+      // Build feeClaimers array in v2 format
+      // Creator must always be explicitly included with their BPS
+      const feeClaimers = [
+        {
+          user: params.creatorWallet,
+          userBps: params.creatorBps, // 10000 = 100% to creator
+        },
+      ]
+
+      console.log('📤 Creating fee share config with v2 format:', {
+        payer: params.creatorWallet,
+        baseMint: params.tokenMint,
+        feeClaimers,
+      })
+
+      // Try v2 config endpoint first
+      const response = await fetch(`${BAGS_API_BASE}/config/create-fee-share`, {
         method: 'POST',
         headers: {
           'x-api-key': this.apiKey!,
@@ -301,25 +323,75 @@ class TokenLauncherService {
         body: JSON.stringify({
           payer: params.creatorWallet,
           baseMint: params.tokenMint,
-          claimersArray: [params.creatorWallet], // Creator gets all fees
-          basisPointsArray: [params.creatorBps], // 10000 = 100%
+          feeClaimers,
         }),
       })
 
       const data = await response.json() as any
-      console.log('📥 Fee share config response:', JSON.stringify(data, null, 2).slice(0, 300))
+      console.log('📥 Fee share config response:', JSON.stringify(data, null, 2).slice(0, 500))
 
       if (!response.ok) {
-        // Log the full error for debugging
-        const errorDetails = typeof data === 'string' ? data : JSON.stringify(data)
-        return {
-          success: false,
-          error: errorDetails.slice(0, 200),
+        // Try alternative endpoint format
+        console.log('⚠️ V2 config endpoint failed, trying alternative...')
+        const altResponse = await fetch(`${BAGS_API_BASE}/fee-share/config`, {
+          method: 'POST',
+          headers: {
+            'x-api-key': this.apiKey!,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            payer: params.creatorWallet,
+            baseMint: params.tokenMint,
+            // Try both formats
+            feeClaimers,
+            claimersArray: [params.creatorWallet],
+            basisPointsArray: [params.creatorBps],
+          }),
+        })
+
+        const altData = await altResponse.json() as any
+        console.log('📥 Alternative fee share response:', JSON.stringify(altData, null, 2).slice(0, 500))
+
+        if (!altResponse.ok) {
+          const errorDetails = typeof altData === 'string' ? altData : JSON.stringify(altData)
+          return {
+            success: false,
+            error: `Fee share config failed: ${errorDetails.slice(0, 200)}`,
+          }
         }
+
+        // Extract configKey from alternative response
+        const configKey = altData.response?.meteoraConfigKey || altData.response?.configKey ||
+                         altData.data?.meteoraConfigKey || altData.data?.configKey ||
+                         altData.meteoraConfigKey || altData.configKey
+
+        // Handle transactions if returned
+        if (altData.response?.transactions || altData.transactions) {
+          const transactions = altData.response?.transactions || altData.transactions
+          await this.signAndSendConfigTransactions(params.connection, params.signer, transactions)
+        }
+
+        return { success: true, configKey }
       }
 
-      // Extract configKey if returned
-      const configKey = data.response?.configKey || data.data?.configKey || data.configKey
+      // Extract meteoraConfigKey from v2 response
+      const configKey = data.response?.meteoraConfigKey || data.response?.configKey ||
+                       data.data?.meteoraConfigKey || data.data?.configKey ||
+                       data.meteoraConfigKey || data.configKey
+
+      // Handle transactions if returned (v2 may return transactions to sign)
+      if (data.response?.transactions || data.transactions) {
+        const transactions = data.response?.transactions || data.transactions
+        console.log(`📝 Signing ${transactions.length} fee share config transaction(s)...`)
+        await this.signAndSendConfigTransactions(params.connection, params.signer, transactions)
+      }
+
+      if (!configKey) {
+        return {
+          success: false,
+          error: 'No configKey/meteoraConfigKey in response',
+        }
+      }
 
       return { success: true, configKey }
     } catch (error: any) {
@@ -331,19 +403,62 @@ class TokenLauncherService {
   }
 
   /**
+   * Sign and send fee share config transactions
+   */
+  private async signAndSendConfigTransactions(
+    connection: Connection,
+    signer: Keypair,
+    transactions: string[]
+  ): Promise<void> {
+    for (const txBase64 of transactions) {
+      try {
+        const txBuffer = Buffer.from(txBase64, 'base64')
+
+        // Try versioned transaction first (v2 likely uses these)
+        try {
+          const { VersionedTransaction } = await import('@solana/web3.js')
+          const versionedTx = VersionedTransaction.deserialize(txBuffer)
+          versionedTx.sign([signer])
+
+          const signature = await connection.sendTransaction(versionedTx, {
+            maxRetries: 3,
+          })
+          await connection.confirmTransaction(signature, 'confirmed')
+          console.log(`✅ Config transaction confirmed: ${signature.slice(0, 8)}...`)
+        } catch {
+          // Fall back to legacy transaction
+          const tx = Transaction.from(txBuffer)
+          const { blockhash } = await connection.getLatestBlockhash()
+          tx.recentBlockhash = blockhash
+          tx.feePayer = signer.publicKey
+          tx.sign(signer)
+
+          const signature = await sendAndConfirmTransaction(connection, tx, [signer], {
+            commitment: 'confirmed',
+          })
+          console.log(`✅ Config transaction confirmed: ${signature.slice(0, 8)}...`)
+        }
+      } catch (error: any) {
+        console.error('Error sending config transaction:', error.message)
+        throw error
+      }
+    }
+  }
+
+  /**
    * Create launch transaction on Bags.fm
    * Required params from API docs:
    * - ipfs: IPFS URL of the token metadata (from create-token-info response)
    * - tokenMint: Public key of the token mint
    * - wallet: Public key of the creator wallet
    * - initialBuyLamports: Initial buy amount in lamports (can be 0)
-   * - configKey: Config key (optional - using launchId from token info)
+   * - configKey: Config key from fee share config (required - valid Solana public key)
    */
   private async createLaunchTransaction(params: {
     tokenMint: string
     creatorWallet: string
     tokenMetadata?: string // IPFS URL from create-token-info
-    launchId?: string // Launch ID that may serve as configKey
+    configKey: string // Required - from fee share config
   }): Promise<{ success: boolean; transaction?: string; error?: string }> {
     try {
       // Build request body with correct parameter names from API docs
@@ -351,16 +466,12 @@ class TokenLauncherService {
         tokenMint: params.tokenMint,
         wallet: params.creatorWallet, // API expects 'wallet' not 'creatorWallet'
         initialBuyLamports: 0, // No initial buy, just launch the token
+        configKey: params.configKey, // Config key from fee share setup
       }
 
       // Add IPFS URL if available (required by API)
       if (params.tokenMetadata) {
         requestBody.ipfs = params.tokenMetadata
-      }
-
-      // Add configKey if we have a launch ID
-      if (params.launchId) {
-        requestBody.configKey = params.launchId
       }
 
       console.log('📤 Creating launch transaction with:', JSON.stringify(requestBody, null, 2))
