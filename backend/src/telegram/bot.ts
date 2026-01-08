@@ -631,37 +631,29 @@ async function finalizeLaunchWizard(ctx: BotContext): Promise<void> {
       details: { token_name: data.tokenName, token_symbol: data.tokenSymbol },
     })
 
-    const confirmMessage = `
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-*YOUR TOKEN SETUP*
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    const confirmMessage = `🎯 *${data.tokenName}* (${data.tokenSymbol})
 
-*Token:* ${data.tokenName} (${data.tokenSymbol})
-
-*Dev Wallet* (receives fees):
+📬 *Dev Wallet* — receives fees
 \`${wallets.devWallet.address}\`
 
-*Ops Wallet* (runs flywheel):
+🔧 *Ops Wallet* — runs flywheel
 \`${wallets.opsWallet.address}\`
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-*FUND TO LAUNCH*
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+─────────────────────────
 
-Send *0.5+ SOL* to your DEV WALLET:
+💰 *Fund to Launch*
+
+Send *0.5+ SOL* to Dev Wallet:
 \`${wallets.devWallet.address}\`
 
-• 0.1 SOL = Token launch fee
-• 0.4+ SOL = Initial liquidity
+├ 0.1 SOL → Launch fee
+└ 0.4+ SOL → Initial liquidity
 
-I'm monitoring for your deposit...
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+─────────────────────────
 
-⏳ *Waiting for SOL deposit...*
+⏳ Monitoring for deposit...
 
-_The launch will expire in 24 hours if no deposit is received._
-_Use /cancel to abort this launch._
-`
+_Expires in 24h • /cancel to abort_`
     await ctx.replyWithMarkdown(confirmMessage)
 
     // Clear launch data from session (deposit monitor will handle the rest)
@@ -674,55 +666,45 @@ _Use /cancel to abort this launch._
 }
 
 async function sendWelcomeMessage(ctx: BotContext) {
-  const welcomeMessage = `
-🔷 *Claude Wheel Bot*
-━━━━━━━━━━━━━━━━━━━━━━━━━━
+  const welcomeMessage = `🔷 *Claude Wheel Bot*
 
 Automated market-making for Bags.fm tokens
 
-*What I can do:*
+🚀 *Launch* — Create new token
+├ Auto-generated wallets
+└ Flywheel starts immediately
 
-🚀 *Launch* — Create a new token
-   • Auto-generated wallets
-   • Flywheel starts immediately
+📝 *Register* — Existing token
+├ Enable automated trading
+└ Auto-claim fees
 
-📝 *Register* — Connect existing token
-   • Enable automated trading
-   • Claim fees automatically
+─────────────────────────
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-Select an option below to get started:
-`
+Select an option below:`
   await ctx.replyWithMarkdown(welcomeMessage, mainMenuKeyboard)
 }
 
 async function sendHelpMessage(ctx: BotContext) {
-  const helpMessage = `
-📚 *Command Reference*
-━━━━━━━━━━━━━━━━━━━━━━━━━━
+  const helpMessage = `📚 *Commands*
 
-*Getting Started*
-├ /launch — Launch new token
-├ /register — Register existing token
-└ /cancel — Cancel current operation
+*Start*
+├ /launch — New token
+├ /register — Existing token
+└ /cancel — Abort
 
-*Token Management*
-├ /mytokens — List your tokens
-├ /status \`symbol\` — Check status
-├ /settings \`symbol\` — Configure
-└ /toggle \`symbol\` — Enable/disable
+*Manage*
+├ /mytokens — List tokens
+├ /status \`SYM\` — Check status
+└ /toggle \`SYM\` — On/off
 
-*Algorithm Modes*
-├ \`simple\` — 5 buys → 5 sells
-├ \`smart\` — RSI + Bollinger
-└ \`rebalance\` — Target allocation
+*Modes*
+├ simple — 5 buys → 5 sells
+├ smart — RSI + Bollinger
+└ rebalance — Target %
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━
+─────────────────────────
 
-📖 [Documentation](https://claudewheel.com/docs)
-🌐 [Dashboard](https://claudewheel.com/dashboard)
-`
+📖 [Docs](https://claudewheel.com/docs) • 🌐 [Dashboard](https://claudewheel.com/dashboard)`
   await ctx.replyWithMarkdown(helpMessage, helpKeyboard)
 }
 
@@ -741,23 +723,18 @@ async function startLaunchWizard(ctx: BotContext) {
   ctx.session.launchData = { step: 'name' } as any
   console.log(`📝 Session initialized with launchData:`, ctx.session.launchData)
 
-  const launchIntro = `
-🚀 *Launch New Token*
-━━━━━━━━━━━━━━━━━━━━━━━━━━
+  const launchIntro = `🚀 *Launch New Token*
 
-*How it works:*
+1. Provide token details
+2. We generate wallets
+3. You send SOL
+4. Token mints auto
+5. Flywheel starts
 
-1️⃣ Provide token details
-2️⃣ We generate secure wallets
-3️⃣ You send SOL to fund
-4️⃣ Token mints automatically
-5️⃣ Flywheel starts immediately
+─────────────────────────
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-📝 *What's your TOKEN NAME?*
-_Example: "Claude Wheel", "My Token"_
-`
+📝 *TOKEN NAME?*
+_e.g. "Claude Wheel"_`
   console.log(`📤 Sending launch intro message...`)
   await ctx.replyWithMarkdown(launchIntro, cancelKeyboard)
   console.log(`✅ Launch intro sent successfully`)
@@ -774,22 +751,19 @@ async function startRegisterWizard(ctx: BotContext) {
   ctx.session = ctx.session || {}
   ctx.session.registerData = { step: 'mint' } as any
 
-  const registerIntro = `
-📝 *Register Existing Token*
-━━━━━━━━━━━━━━━━━━━━━━━━━━
+  const registerIntro = `📝 *Register Existing Token*
 
-For tokens already on Bags.fm.
+For tokens already on Bags.fm
 
-⚠️ *Security Notice:*
-• Keys encrypted with AES-256-GCM
-• Only system can decrypt
-• Delete messages with keys!
+🔒 *Security*
+├ AES-256-GCM encryption
+├ Only system can decrypt
+└ Delete key messages!
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━
+─────────────────────────
 
-📝 *Enter TOKEN MINT ADDRESS:*
-_The Solana address of your token_
-`
+📝 *TOKEN MINT ADDRESS?*
+_Solana address of your token_`
   await ctx.replyWithMarkdown(registerIntro, cancelKeyboard)
 }
 
@@ -811,18 +785,15 @@ async function showMyTokens(ctx: BotContext) {
       .single()
 
     if (!telegramUser) {
-      const noTokensMessage = `
-📊 *My Tokens*
-━━━━━━━━━━━━━━━━━━━━━━━━━━
+      const noTokensMessage = `📊 *My Tokens*
 
-You haven't registered any tokens yet.
+No tokens yet.
 
-Get started by launching a new token or registering an existing one!
-`
+Launch a new token or register an existing one to get started!`
       const noTokensKeyboard = Markup.inlineKeyboard([
         [
-          Markup.button.callback('🚀 Launch Token', 'action_launch'),
-          Markup.button.callback('📝 Register Token', 'action_register'),
+          Markup.button.callback('🚀 Launch', 'action_launch'),
+          Markup.button.callback('📝 Register', 'action_register'),
         ],
       ])
       await ctx.replyWithMarkdown(noTokensMessage, noTokensKeyboard)
@@ -849,25 +820,22 @@ Get started by launching a new token or registering an existing one!
       .eq('is_active', true)
 
     if (error || !tokens || tokens.length === 0) {
-      const noTokensMessage = `
-📊 *My Tokens*
-━━━━━━━━━━━━━━━━━━━━━━━━━━
+      const noTokensMessage = `📊 *My Tokens*
 
-You haven't registered any tokens yet.
+No tokens yet.
 
-Get started by launching a new token or registering an existing one!
-`
+Launch a new token or register an existing one to get started!`
       const noTokensKeyboard = Markup.inlineKeyboard([
         [
-          Markup.button.callback('🚀 Launch Token', 'action_launch'),
-          Markup.button.callback('📝 Register Token', 'action_register'),
+          Markup.button.callback('🚀 Launch', 'action_launch'),
+          Markup.button.callback('📝 Register', 'action_register'),
         ],
       ])
       await ctx.replyWithMarkdown(noTokensMessage, noTokensKeyboard)
       return
     }
 
-    let message = `📊 *My Tokens*\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`
+    let message = `📊 *My Tokens*\n\n`
 
     const buttons: any[][] = []
 
@@ -960,26 +928,20 @@ async function showTokenStatus(ctx: BotContext, symbol: string) {
     const buyCount = state?.buy_count || 0
     const sellCount = state?.sell_count || 0
 
-    const statusMessage = `
-📊 *${token.token_name || token.token_symbol}*
-━━━━━━━━━━━━━━━━━━━━━━━━━━
+    const statusMessage = `📊 *${token.token_name || token.token_symbol}* (${token.token_symbol})
 
-*Status*
-┌ Flywheel: ${statusEmoji} ${statusText}
+${statusEmoji} Flywheel: *${statusText}*
 ├ Market: ${graduatedBadge}
 ├ Mode: ${config?.algorithm_mode || 'simple'}
 └ Phase: ${phase} (${phase === 'buy' ? buyCount : sellCount}/5)
 
-*Configuration*
-┌ Buy: ${config?.min_buy_amount_sol || 0.01} - ${config?.max_buy_amount_sol || 0.05} SOL
+⚙️ *Config*
+├ Buy: ${config?.min_buy_amount_sol || 0.01}-${config?.max_buy_amount_sol || 0.05} SOL
 └ Slippage: ${((config?.slippage_bps || 300) / 100).toFixed(1)}%
 
-*Wallets*
-┌ Dev: \`${token.dev_wallet_address.slice(0, 8)}...\`
-└ Ops: \`${token.ops_wallet_address.slice(0, 8)}...\`
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━
-`
+💼 *Wallets*
+├ Dev: \`${token.dev_wallet_address.slice(0, 8)}...\`
+└ Ops: \`${token.ops_wallet_address.slice(0, 8)}...\``
 
     const statusKeyboard = Markup.inlineKeyboard([
       [
@@ -1056,14 +1018,9 @@ async function toggleFlywheel(ctx: BotContext, symbol: string) {
     const emoji = newState ? '🟢' : '🔴'
     const stateText = newState ? 'ENABLED' : 'DISABLED'
 
-    const toggleMessage = `
-${emoji} *Flywheel ${stateText}*
-━━━━━━━━━━━━━━━━━━━━━━━━━━
+    const toggleMessage = `${emoji} *${token.token_symbol}* flywheel ${stateText.toLowerCase()}
 
-*${token.token_symbol}* flywheel is now ${stateText.toLowerCase()}.
-
-${newState ? '✅ The bot will now automatically execute trades.' : '⏸️ Trading has been paused.'}
-`
+${newState ? '✅ Auto-trading now active' : '⏸️ Trading paused'}`
 
     const toggleKeyboard = Markup.inlineKeyboard([
       [Markup.button.callback(`📊 View Status`, `status_${symbol}`)],
@@ -1222,27 +1179,21 @@ Each token can only have one flywheel operator.`)
             ? `\`${tokenInfo.creatorWallet.slice(0, 8)}...${tokenInfo.creatorWallet.slice(-6)}\``
             : '_Unknown_'
 
-          const tokenFoundMessage = `
-✅ *Token Found!*
-━━━━━━━━━━━━━━━━━━━━━━━━━━
+          const tokenFoundMessage = `✅ *Token Found*
 
-*${tokenInfo.tokenName || 'Unknown'}*
-\`${tokenInfo.tokenSymbol || '???'}\`
+*${tokenInfo.tokenName || 'Unknown'}* (${tokenInfo.tokenSymbol || '???'})
 
-┌ Status: ${statusBadge}
-├ Market Cap: ${marketCapStr}
+├ Status: ${statusBadge}
+├ MCap: ${marketCapStr}
 ├ Holders: ${tokenInfo.holders > 0 ? tokenInfo.holders.toLocaleString() : 'N/A'}
 └ Creator: ${creatorInfo}
 
-Mint: \`${text.slice(0, 12)}...${text.slice(-8)}\`
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━
+Mint: \`${text.slice(0, 8)}...${text.slice(-6)}\`
 ${tokenInfo.creatorWallet ? `
-⚠️ *Ownership Verification Enabled*
-Your dev wallet must match the creator address.
-` : ''}
-Is this the correct token?
-`
+⚠️ _Dev wallet must match creator_` : ''}
+─────────────────────────
+
+Is this correct?`
           await ctx.replyWithMarkdown(tokenFoundMessage, confirmTokenKeyboard)
 
           data.step = 'confirm_token'
@@ -1266,24 +1217,20 @@ Is this the correct token?
       if (response === 'yes' || response === 'y') {
         // Token confirmed, proceed to dev key
         data.step = 'dev_key'
-        await ctx.replyWithMarkdown(`
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-⚠️ *PRIVATE KEY REQUIRED*
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        await ctx.replyWithMarkdown(`🔐 *Dev Wallet Private Key*
 
-The dev wallet receives Bags.fm trading fees.
-We need the private key to claim fees.
+Needed to claim Bags.fm fees
 
-*Security:*
-• Encrypted with AES-256-GCM before storage
-• Only automated system can decrypt
-• Used solely for fee claiming
+🔒 *Security*
+├ AES-256-GCM encrypted
+├ Only system can decrypt
+└ Used for fee claiming only
 
-⚠️ *DELETE YOUR MESSAGE after I confirm!*
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⚠️ *DELETE your message after!*
 
-📝 *DEV WALLET PRIVATE KEY* (base58):
-`)
+─────────────────────────
+
+📝 *PRIVATE KEY* (base58):`)
         return
       } else if (response === 'no' || response === 'n') {
         // Wrong token, start over
@@ -1303,23 +1250,20 @@ We need the private key to claim fees.
       }
       data.tokenSymbol = symbol
       data.step = 'dev_key'
-      await ctx.replyWithMarkdown(`
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-⚠️ *PRIVATE KEY REQUIRED*
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+      await ctx.replyWithMarkdown(`🔐 *Dev Wallet Private Key*
 
-The dev wallet receives Bags.fm trading fees.
-We need the private key to claim fees.
+Needed to claim Bags.fm fees
 
-*Security:*
-• Encrypted with AES-256-GCM before storage
-• Only automated system can decrypt
-• Used solely for fee claiming
+🔒 *Security*
+├ AES-256-GCM encrypted
+├ Only system can decrypt
+└ Used for fee claiming only
 
-⚠️ *DELETE YOUR MESSAGE after I confirm!*
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⚠️ *DELETE your message after!*
 
-📝 *DEV WALLET PRIVATE KEY* (base58):
+─────────────────────────
+
+📝 *PRIVATE KEY* (base58):
 `)
       break
 
@@ -1401,27 +1345,24 @@ Address: \`${opsAddress.slice(0, 8)}...\`
 
       // Show confirmation
       data.step = 'confirm'
-      const confirmMsg = `
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-*REVIEW & CONFIRM*
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+      const confirmMsg = `📋 *Review & Confirm*
 
 *Token:* ${data.tokenSymbol}
-*Mint:* \`${data.tokenMint.slice(0, 12)}...\`
+*Mint:* \`${data.tokenMint.slice(0, 8)}...${data.tokenMint.slice(-6)}\`
 
-*Dev Wallet:* \`${data.devWalletAddress.slice(0, 8)}...\`
-*Ops Wallet:* \`${data.opsWalletAddress.slice(0, 8)}...\`
+💼 *Wallets*
+├ Dev: \`${data.devWalletAddress.slice(0, 8)}...\`
+└ Ops: \`${data.opsWalletAddress.slice(0, 8)}...\`
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-*Default Settings:*
-• Flywheel: OFF
-• Algorithm: Simple
-• Buy Range: 0.01 - 0.05 SOL
-• Slippage: 3%
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⚙️ *Defaults*
+├ Flywheel: OFF
+├ Mode: Simple
+├ Buy: 0.01-0.05 SOL
+└ Slippage: 3%
 
-Reply *"confirm"* to register or /cancel to abort.
-`
+─────────────────────────
+
+Reply *"confirm"* or /cancel`
       await ctx.replyWithMarkdown(confirmMsg)
       break
 
@@ -1535,25 +1476,16 @@ Reply *"confirm"* to register or /cancel to abort.
         const tokenDisplay = data.tokenName ? `${data.tokenName}` : data.tokenSymbol
         const graduatedStatus = data.isGraduated ? '✨ Graduated' : '📈 Bonding'
 
-        const successMsg = `
-🎉 *Registration Complete!*
-━━━━━━━━━━━━━━━━━━━━━━━━━━
+        const successMsg = `🎉 *${tokenDisplay}* registered!
 
-*${tokenDisplay}*
-\`${data.tokenSymbol}\`
+${graduatedStatus} • \`${data.tokenSymbol}\`
 
-Status: ${graduatedStatus}
+─────────────────────────
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-*Next Steps:*
-
-1️⃣ Fund your ops wallet with SOL
-2️⃣ Enable the flywheel below
-3️⃣ Watch your token trade automatically!
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━
-`
+*Next:*
+1. Fund ops wallet with SOL
+2. Enable flywheel below
+3. Auto-trading begins!`
         const successKeyboard = Markup.inlineKeyboard([
           [Markup.button.callback(`🟢 Enable Flywheel`, `toggle_${data.tokenSymbol}`)],
           [
