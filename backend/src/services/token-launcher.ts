@@ -162,6 +162,7 @@ class TokenLauncherService {
 
   /**
    * Create token info on Bags.fm
+   * Note: This endpoint requires multipart/form-data, NOT application/json
    */
   private async createTokenInfo(params: {
     name: string
@@ -175,30 +176,38 @@ class TokenLauncherService {
     discordUrl?: string
   }): Promise<{ success: boolean; tokenMint?: string; error?: string }> {
     try {
-      // Build request with only the fields the API accepts
-      // Note: Fee sharing is configured via separate endpoint /token-launch/fee-share/create-config
-      const requestBody: Record<string, unknown> = {
+      // Build FormData - Bags.fm API requires multipart/form-data
+      const formData = new FormData()
+      formData.append('name', params.name)
+      formData.append('symbol', params.symbol)
+      formData.append('description', params.description)
+      formData.append('imageUrl', params.imageUrl)
+
+      // Add social links if provided
+      if (params.twitterUrl) formData.append('twitter', params.twitterUrl)
+      if (params.telegramUrl) formData.append('telegram', params.telegramUrl)
+      if (params.websiteUrl) formData.append('website', params.websiteUrl)
+      if (params.discordUrl) formData.append('discord', params.discordUrl)
+
+      console.log('📤 Creating token info with FormData:', {
         name: params.name,
         symbol: params.symbol,
         description: params.description,
         imageUrl: params.imageUrl,
-      }
+        twitter: params.twitterUrl || 'N/A',
+        telegram: params.telegramUrl || 'N/A',
+        website: params.websiteUrl || 'N/A',
+        discord: params.discordUrl || 'N/A',
+      })
 
-      // Add social links as individual fields if provided
-      if (params.twitterUrl) requestBody.twitter = params.twitterUrl
-      if (params.telegramUrl) requestBody.telegram = params.telegramUrl
-      if (params.websiteUrl) requestBody.website = params.websiteUrl
-      if (params.discordUrl) requestBody.discord = params.discordUrl
-
-      console.log('📤 Creating token info with:', JSON.stringify(requestBody, null, 2))
-
+      // Note: Do NOT set Content-Type header - let fetch set it automatically for FormData
+      // This ensures the correct boundary is included in the multipart/form-data header
       const response = await fetch(`${BAGS_API_BASE}/token-launch/create-token-info`, {
         method: 'POST',
         headers: {
           'x-api-key': this.apiKey!,
-          'Content-Type': 'application/json',
         },
-        body: JSON.stringify(requestBody),
+        body: formData,
       })
 
       const data = await response.json() as any
