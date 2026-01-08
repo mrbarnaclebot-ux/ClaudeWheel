@@ -53,6 +53,17 @@ Claude Wheel is an **autonomous market-making platform** built specifically for 
 | **Algorithm Modes** | Simple (fixed cycles), Smart (RSI + Bollinger Bands), Rebalance (target allocations) |
 | **Manual Controls** | Execute manual buys/sells from the dashboard when needed |
 
+### Telegram Bot
+
+| Feature | Description |
+|---------|-------------|
+| **Launch Tokens** | Create new Bags.fm tokens directly via Telegram `/launch` |
+| **Register Existing** | Connect existing tokens with `/register` command |
+| **Auto Wallet Generation** | System generates secure dev + ops wallets for you |
+| **Deposit Monitoring** | Bot watches for SOL deposits and auto-launches |
+| **Status Updates** | Real-time notifications for launches, refunds, and activity |
+| **Fund Safety** | Automatic refunds for failed/expired launches |
+
 ### Platform Features
 
 | Feature | Description |
@@ -62,6 +73,7 @@ Claude Wheel is an **autonomous market-making platform** built specifically for 
 | **Encrypted Key Storage** | Private keys encrypted with AES-256-GCM before storage |
 | **Real-time Updates** | Live transaction feed and balance updates via Supabase |
 | **Admin Panel** | Platform administrators can monitor all flywheels |
+| **Telegram Admin** | Monitor launches, process refunds, view audit logs |
 
 ---
 
@@ -119,6 +131,51 @@ Smart mode uses technical analysis for intelligent trading decisions:
 - **Trade Cooldown** - 5-minute minimum between trades to prevent over-trading
 - **Confidence Scoring** - Only executes trades above confidence threshold
 
+---
+
+## Telegram Bot
+
+Launch and manage tokens directly from Telegram without visiting the dashboard.
+
+### Bot Commands
+
+| Command | Description |
+|---------|-------------|
+| `/start` | Welcome message and main menu |
+| `/launch` | Launch a NEW token on Bags.fm (guided wizard) |
+| `/register` | Register an existing token for flywheel management |
+| `/mytokens` | List all your tokens (launched + registered) |
+| `/status <symbol>` | Check token status, balances, and flywheel activity |
+| `/help` | Show all available commands |
+| `/cancel` | Cancel current operation |
+
+### Token Launch Flow
+
+```
+/launch ──► Token Details ──► Generate    ──► Fund Dev   ──► MINT
+            (name, symbol,    Wallets         Wallet         TOKEN
+            image, desc)      (auto)          (send SOL)        │
+                                                                ▼
+                                                          Auto-Start
+                                                          Flywheel
+```
+
+1. Run `/launch` and follow the wizard
+2. Provide token name, symbol, description, and image
+3. System generates secure dev + ops wallets automatically
+4. Send SOL to the displayed dev wallet address (min 0.5 SOL)
+5. Bot detects deposit and launches token on Bags.fm
+6. Flywheel starts automatically after successful launch
+
+### Fund Safety
+
+| Scenario | Action |
+|----------|--------|
+| **Launch fails** | SOL automatically returned to original funder |
+| **Launch expires** | Pending launches expire after 24 hours, funds refundable |
+| **Manual refund** | Admins can process refunds from the Telegram admin panel |
+| **Notifications** | Users notified via Telegram when refunds are processed |
+
 ### Fee Structure
 
 | Fee Type | Amount | Description |
@@ -175,6 +232,9 @@ ENCRYPTION_KEY=your_256_bit_encryption_key
 
 # Platform Fee (default 10%)
 PLATFORM_FEE_PERCENTAGE=10
+
+# Telegram Bot (optional, for token launching via Telegram)
+TELEGRAM_BOT_TOKEN=your_bot_token_from_botfather
 ```
 
 2. **Database** - Run the schema in your Supabase SQL editor:
@@ -240,6 +300,7 @@ ClaudeWheel/
 │   │   ├── components/          # React components
 │   │   ├── dashboard/           # User dashboard pages
 │   │   ├── admin/               # Admin panel
+│   │   │   └── telegram/        # Telegram launch monitoring
 │   │   ├── onboarding/          # Token setup wizard
 │   │   └── docs/                # Documentation page
 │   └── lib/
@@ -253,7 +314,12 @@ ClaudeWheel/
 │       │   ├── multi-user-mm.service.ts    # Flywheel engine
 │       │   ├── multi-user-claim.service.ts # Fee claiming
 │       │   ├── price-analyzer.ts           # Smart mode indicators
-│       │   └── user-token.service.ts       # Token management
+│       │   ├── user-token.service.ts       # Token management
+│       │   ├── refund.service.ts           # Refund processing
+│       │   └── wallet-generator.ts         # Wallet generation
+│       ├── telegram/            # Telegram bot
+│       │   ├── bot.ts           # Bot initialization
+│       │   └── commands/        # Bot commands (/launch, /register, etc.)
 │       ├── jobs/                # Cron jobs
 │       └── routes/              # API endpoints
 │
@@ -291,6 +357,18 @@ ClaudeWheel/
 | `GET /api/admin/platform-stats` | GET | Platform-wide statistics |
 | `POST /api/admin/tokens/:id/suspend` | POST | Suspend a token |
 
+### Telegram Admin Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `GET /api/admin/telegram/stats` | GET | Launch statistics (total, by status) |
+| `GET /api/admin/telegram/launches` | GET | List all Telegram launches with filters |
+| `GET /api/admin/telegram/refunds` | GET | Get pending refunds (failed/expired with balance) |
+| `POST /api/admin/telegram/refund/:id` | POST | Execute refund to specified address |
+| `GET /api/admin/telegram/logs` | GET | Audit logs for Telegram operations |
+| `GET /api/admin/telegram/launch/:id` | GET | Get single launch details |
+| `POST /api/admin/telegram/launch/:id/cancel` | POST | Cancel pending launch |
+
 ---
 
 ## Documentation
@@ -300,9 +378,11 @@ Full documentation is available at `/docs` in the running application, covering:
 - How the flywheel mechanism works
 - Algorithm modes (Simple, Smart, Rebalance)
 - Smart mode technical indicators (RSI, Bollinger Bands, EMA)
+- **Telegram bot** - Token launching and management via Telegram
 - Integration guide for token creators
 - Security & encryption details
 - Fee structure breakdown
+- Fund safety & refunds
 - Terms of service
 - Risk disclaimer
 

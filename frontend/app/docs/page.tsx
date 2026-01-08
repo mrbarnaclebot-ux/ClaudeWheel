@@ -45,11 +45,12 @@ export default function DocsPage() {
           <ul className="space-y-2 font-mono text-sm">
             <li><a href="#how-it-works" className="text-accent-primary hover:underline">1. How It Works</a></li>
             <li><a href="#flywheel" className="text-accent-primary hover:underline">2. The Flywheel Mechanism</a></li>
-            <li><a href="#integration" className="text-accent-primary hover:underline">3. Integration Guide</a></li>
-            <li><a href="#security" className="text-accent-primary hover:underline">4. Security & Encryption</a></li>
-            <li><a href="#fees" className="text-accent-primary hover:underline">5. Fee Structure</a></li>
-            <li><a href="#terms" className="text-accent-primary hover:underline">6. Terms of Service</a></li>
-            <li><a href="#disclaimer" className="text-accent-primary hover:underline">7. Risk Disclaimer</a></li>
+            <li><a href="#telegram-bot" className="text-accent-primary hover:underline">3. Telegram Bot</a></li>
+            <li><a href="#integration" className="text-accent-primary hover:underline">4. Integration Guide</a></li>
+            <li><a href="#security" className="text-accent-primary hover:underline">5. Security & Encryption</a></li>
+            <li><a href="#fees" className="text-accent-primary hover:underline">6. Fee Structure</a></li>
+            <li><a href="#terms" className="text-accent-primary hover:underline">7. Terms of Service</a></li>
+            <li><a href="#disclaimer" className="text-accent-primary hover:underline">8. Risk Disclaimer</a></li>
           </ul>
         </nav>
 
@@ -153,10 +154,106 @@ export default function DocsPage() {
             </div>
           </section>
 
+          {/* Telegram Bot */}
+          <section id="telegram-bot" className="scroll-mt-24">
+            <h2 className="font-display text-2xl font-bold text-text-primary mb-4 flex items-center gap-2">
+              <span className="text-accent-primary">3.</span> Telegram Bot
+            </h2>
+            <div className="prose prose-invert max-w-none">
+              <p className="text-text-secondary mb-4">
+                Launch and manage tokens directly from Telegram without visiting the dashboard.
+                The bot provides a guided wizard for launching new tokens on Bags.fm.
+              </p>
+
+              {/* Bot Commands */}
+              <h3 className="font-semibold text-text-primary text-lg mb-3">Bot Commands</h3>
+              <div className="bg-bg-card border border-border-subtle rounded-lg p-4 mb-4 overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-left text-text-muted border-b border-border-subtle">
+                      <th className="pb-2 pr-4">Command</th>
+                      <th className="pb-2">Description</th>
+                    </tr>
+                  </thead>
+                  <tbody className="text-text-secondary">
+                    <tr className="border-b border-border-subtle/50">
+                      <td className="py-2 pr-4 font-mono text-accent-primary">/start</td>
+                      <td className="py-2">Welcome message and main menu</td>
+                    </tr>
+                    <tr className="border-b border-border-subtle/50">
+                      <td className="py-2 pr-4 font-mono text-accent-primary">/launch</td>
+                      <td className="py-2">Launch a NEW token on Bags.fm (guided wizard)</td>
+                    </tr>
+                    <tr className="border-b border-border-subtle/50">
+                      <td className="py-2 pr-4 font-mono text-accent-primary">/register</td>
+                      <td className="py-2">Register an existing token for flywheel management</td>
+                    </tr>
+                    <tr className="border-b border-border-subtle/50">
+                      <td className="py-2 pr-4 font-mono text-accent-primary">/mytokens</td>
+                      <td className="py-2">List all your tokens (launched + registered)</td>
+                    </tr>
+                    <tr className="border-b border-border-subtle/50">
+                      <td className="py-2 pr-4 font-mono text-accent-primary">/status</td>
+                      <td className="py-2">Check token status, balances, and flywheel activity</td>
+                    </tr>
+                    <tr className="border-b border-border-subtle/50">
+                      <td className="py-2 pr-4 font-mono text-accent-primary">/help</td>
+                      <td className="py-2">Show all available commands</td>
+                    </tr>
+                    <tr>
+                      <td className="py-2 pr-4 font-mono text-accent-primary">/cancel</td>
+                      <td className="py-2">Cancel current operation</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Token Launch Flow */}
+              <h3 className="font-semibold text-text-primary text-lg mb-3">Token Launch Flow</h3>
+              <div className="bg-bg-card border border-accent-primary/30 rounded-lg p-4 mb-4">
+                <ol className="list-decimal list-inside space-y-2 text-text-secondary text-sm">
+                  <li>Run <code className="text-accent-primary">/launch</code> and follow the wizard</li>
+                  <li>Provide token name, symbol, description, and image</li>
+                  <li>System generates secure <strong className="text-text-primary">dev + ops wallets</strong> automatically</li>
+                  <li>Send SOL to the displayed dev wallet address (min 0.5 SOL)</li>
+                  <li>Bot detects deposit and launches token on Bags.fm</li>
+                  <li>Flywheel starts automatically after successful launch</li>
+                </ol>
+              </div>
+
+              {/* Fund Safety */}
+              <h3 className="font-semibold text-text-primary text-lg mb-3">Fund Safety</h3>
+              <p className="text-text-secondary mb-4">
+                Your funds are protected with automatic refund mechanisms:
+              </p>
+              <div className="grid md:grid-cols-2 gap-4 mb-4">
+                <div className="bg-bg-card border border-border-subtle rounded-lg p-4">
+                  <h4 className="font-semibold text-error mb-2">Launch Fails</h4>
+                  <p className="text-text-muted text-sm">
+                    If the token launch fails on Bags.fm, SOL is automatically returned to the original funding address.
+                  </p>
+                </div>
+                <div className="bg-bg-card border border-border-subtle rounded-lg p-4">
+                  <h4 className="font-semibold text-warning mb-2">Launch Expires</h4>
+                  <p className="text-text-muted text-sm">
+                    Pending launches expire after 24 hours. Admins can process refunds from the Telegram admin panel.
+                  </p>
+                </div>
+              </div>
+
+              <div className="bg-success/10 border border-success/30 rounded-lg p-4">
+                <p className="text-success text-sm font-mono">
+                  <strong>Telegram Notifications:</strong> You&apos;ll receive a message when your refund is processed,
+                  including the amount, destination address, and transaction link.
+                </p>
+              </div>
+            </div>
+          </section>
+
           {/* Integration Guide */}
           <section id="integration" className="scroll-mt-24">
             <h2 className="font-display text-2xl font-bold text-text-primary mb-4 flex items-center gap-2">
-              <span className="text-accent-primary">3.</span> Integration Guide
+              <span className="text-accent-primary">4.</span> Integration Guide
             </h2>
             <div className="prose prose-invert max-w-none">
               <p className="text-text-secondary mb-4">
@@ -181,7 +278,7 @@ export default function DocsPage() {
           {/* Security */}
           <section id="security" className="scroll-mt-24">
             <h2 className="font-display text-2xl font-bold text-text-primary mb-4 flex items-center gap-2">
-              <span className="text-accent-primary">4.</span> Security & Encryption
+              <span className="text-accent-primary">5.</span> Security & Encryption
             </h2>
             <div className="prose prose-invert max-w-none">
               <p className="text-text-secondary mb-4">
@@ -209,7 +306,7 @@ export default function DocsPage() {
           {/* Fees */}
           <section id="fees" className="scroll-mt-24">
             <h2 className="font-display text-2xl font-bold text-text-primary mb-4 flex items-center gap-2">
-              <span className="text-accent-primary">5.</span> Fee Structure
+              <span className="text-accent-primary">6.</span> Fee Structure
             </h2>
             <div className="prose prose-invert max-w-none">
               <p className="text-text-secondary mb-4">
@@ -280,7 +377,7 @@ export default function DocsPage() {
           {/* Terms of Service */}
           <section id="terms" className="scroll-mt-24">
             <h2 className="font-display text-2xl font-bold text-text-primary mb-4 flex items-center gap-2">
-              <span className="text-accent-primary">6.</span> Terms of Service
+              <span className="text-accent-primary">7.</span> Terms of Service
             </h2>
             <div className="prose prose-invert max-w-none bg-bg-card border border-border-subtle rounded-lg p-6">
               <p className="text-text-secondary mb-4">
@@ -302,7 +399,7 @@ export default function DocsPage() {
           {/* Disclaimer */}
           <section id="disclaimer" className="scroll-mt-24">
             <h2 className="font-display text-2xl font-bold text-text-primary mb-4 flex items-center gap-2">
-              <span className="text-accent-primary">7.</span> Risk Disclaimer
+              <span className="text-accent-primary">8.</span> Risk Disclaimer
             </h2>
             <div className="prose prose-invert max-w-none bg-error/5 border border-error/20 rounded-lg p-6">
               <p className="text-text-secondary mb-4 font-semibold">
