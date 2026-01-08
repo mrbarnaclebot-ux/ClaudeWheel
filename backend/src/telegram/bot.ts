@@ -3,9 +3,51 @@
 // Claude Wheel Telegram Bot for token launch and management
 // ═══════════════════════════════════════════════════════════════════════════
 
-import { Telegraf, Context, Scenes, session } from 'telegraf'
+import { Telegraf, Context, Scenes, session, Markup } from 'telegraf'
 import { env } from '../config/env'
 import { supabase } from '../config/database'
+
+// ═══════════════════════════════════════════════════════════════════════════
+// INLINE KEYBOARDS
+// ═══════════════════════════════════════════════════════════════════════════
+
+const mainMenuKeyboard = Markup.inlineKeyboard([
+  [
+    Markup.button.callback('🚀 Launch Token', 'action_launch'),
+    Markup.button.callback('📝 Register Token', 'action_register'),
+  ],
+  [
+    Markup.button.callback('📊 My Tokens', 'action_mytokens'),
+    Markup.button.callback('❓ Help', 'action_help'),
+  ],
+  [Markup.button.url('🌐 Dashboard', 'https://claudewheel.com/dashboard')],
+])
+
+const helpKeyboard = Markup.inlineKeyboard([
+  [
+    Markup.button.callback('🚀 Launch', 'action_launch'),
+    Markup.button.callback('📝 Register', 'action_register'),
+  ],
+  [Markup.button.callback('« Back to Menu', 'action_start')],
+])
+
+const cancelKeyboard = Markup.inlineKeyboard([
+  [Markup.button.callback('❌ Cancel', 'action_cancel')],
+])
+
+const confirmTokenKeyboard = Markup.inlineKeyboard([
+  [
+    Markup.button.callback('✅ Yes, Continue', 'confirm_token_yes'),
+    Markup.button.callback('❌ No, Try Again', 'confirm_token_no'),
+  ],
+])
+
+const confirmRegisterKeyboard = Markup.inlineKeyboard([
+  [
+    Markup.button.callback('✅ Confirm Registration', 'confirm_register'),
+    Markup.button.callback('❌ Cancel', 'action_cancel'),
+  ],
+])
 
 /**
  * Check if supabase is configured and throw error if not
@@ -93,228 +135,110 @@ function setupBot(bot: Telegraf<BotContext>) {
 
   // /start - Welcome message
   bot.command('start', async (ctx) => {
-    const welcomeMessage = `
-🔷 *Welcome to Claude Wheel Bot!*
+    await sendWelcomeMessage(ctx)
+  })
 
-I help you launch and manage tokens on Bags.fm with automatic market-making.
+  // Action handlers for inline buttons
+  bot.action('action_start', async (ctx) => {
+    await ctx.answerCbQuery()
+    await sendWelcomeMessage(ctx)
+  })
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-*WHAT I CAN DO*
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  bot.action('action_launch', async (ctx) => {
+    await ctx.answerCbQuery()
+    await startLaunchWizard(ctx)
+  })
 
-🚀 */launch* - Launch a NEW token
-   • We generate wallets for you
-   • You send SOL to fund the launch
-   • Flywheel starts automatically!
+  bot.action('action_register', async (ctx) => {
+    await ctx.answerCbQuery()
+    await startRegisterWizard(ctx)
+  })
 
-📝 */register* - Register EXISTING token
-   • Connect your launched token
-   • Provide your wallet keys
-   • Enable automated trading
+  bot.action('action_mytokens', async (ctx) => {
+    await ctx.answerCbQuery()
+    await showMyTokens(ctx)
+  })
 
-📊 */mytokens* - View your tokens
-⚙️ */settings* - Configure flywheel
-❓ */help* - Full command list
+  bot.action('action_help', async (ctx) => {
+    await ctx.answerCbQuery()
+    await sendHelpMessage(ctx)
+  })
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  bot.action('action_cancel', async (ctx) => {
+    await ctx.answerCbQuery('Cancelled')
+    ctx.session = ctx.session || {}
+    ctx.session.launchData = undefined
+    ctx.session.registerData = undefined
+    await ctx.editMessageText('❌ Operation cancelled.\n\nUse /start to begin again.')
+  })
 
-Ready to get started?
-`
-    await ctx.replyWithMarkdown(welcomeMessage)
+  bot.action('confirm_token_yes', async (ctx) => {
+    await ctx.answerCbQuery()
+    const data = ctx.session?.registerData as any
+    if (data) {
+      data.step = 'dev_key'
+      await ctx.editMessageText(
+        `✅ *Token Confirmed*\n\n` +
+        `Now I need your wallet private keys to enable the flywheel.\n\n` +
+        `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+        `⚠️ *PRIVATE KEY REQUIRED*\n` +
+        `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+        `The dev wallet receives Bags.fm trading fees.\n` +
+        `We need the private key to claim fees.\n\n` +
+        `*Security:*\n` +
+        `• Encrypted with AES-256-GCM\n` +
+        `• Only system can decrypt\n` +
+        `• Used solely for fee claiming\n\n` +
+        `⚠️ *DELETE YOUR MESSAGE after I confirm!*\n\n` +
+        `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+        `📝 *Send your DEV WALLET PRIVATE KEY* (base58):`,
+        { parse_mode: 'Markdown' }
+      )
+    }
+  })
+
+  bot.action('confirm_token_no', async (ctx) => {
+    await ctx.answerCbQuery()
+    const data = ctx.session?.registerData as any
+    if (data) {
+      data.step = 'mint'
+      await ctx.editMessageText(
+        '🔄 *Let\'s try again*\n\nPlease send the correct token mint address:',
+        { parse_mode: 'Markdown' }
+      )
+    }
+  })
+
+  bot.action(/^toggle_(.+)$/, async (ctx) => {
+    const symbol = ctx.match[1]
+    await ctx.answerCbQuery(`Toggling ${symbol}...`)
+    await toggleFlywheel(ctx, symbol)
+  })
+
+  bot.action(/^status_(.+)$/, async (ctx) => {
+    const symbol = ctx.match[1]
+    await ctx.answerCbQuery()
+    await showTokenStatus(ctx, symbol)
   })
 
   // /help - Full command list
   bot.command('help', async (ctx) => {
-    const helpMessage = `
-📚 *Claude Wheel Bot Commands*
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-*TOKEN LAUNCH & REGISTRATION*
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-/launch - Launch a new token on Bags.fm
-/register - Register an existing token
-/cancel - Cancel current operation
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-*TOKEN MANAGEMENT*
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-/mytokens - List all your tokens
-/status <symbol> - Check token status
-/settings <symbol> - Configure flywheel
-/toggle <symbol> - Enable/disable flywheel
-/fund <symbol> - Show wallet to add SOL
-/withdraw <symbol> <amount> - Withdraw SOL
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-*ALGORITHM MODES*
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-/mode <symbol> simple - 5 buys → 5 sells
-/mode <symbol> smart - RSI + Bollinger
-/mode <symbol> rebalance - Target allocation
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-🌐 *Web Dashboard:* claudewheel.com
-📖 *Documentation:* /docs
-`
-    await ctx.replyWithMarkdown(helpMessage)
+    await sendHelpMessage(ctx)
   })
 
   // /launch - Start token launch wizard
   bot.command('launch', async (ctx) => {
-    // Check if in private chat
-    if (ctx.chat?.type !== 'private') {
-      await ctx.reply('⚠️ For security, please use /launch in a private chat with me.')
-      return
-    }
-
-    // Initialize session data
-    ctx.session = ctx.session || {}
-    ctx.session.launchData = {}
-
-    const launchIntro = `
-🚀 *Launch a New Token on Bags.fm*
-
-I'll help you launch a token with automatic market-making enabled from day one!
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-*HOW IT WORKS*
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-1️⃣ You provide token details
-2️⃣ We generate secure wallets
-3️⃣ You send SOL to fund launch
-4️⃣ Token mints automatically
-5️⃣ Flywheel starts immediately
-
-No private keys to manage - we handle it!
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-Ready? Let's create your token!
-
-📝 *What's your TOKEN NAME?*
-(e.g., "Claude Wheel", "My Awesome Token")
-
-_Reply with your token name or /cancel to exit_
-`
-    await ctx.replyWithMarkdown(launchIntro)
-
-    // Set state to expect token name
-    ctx.session.launchData = { step: 'name' } as any
+    await startLaunchWizard(ctx)
   })
 
   // /register - Start token registration wizard
   bot.command('register', async (ctx) => {
-    // Check if in private chat
-    if (ctx.chat?.type !== 'private') {
-      await ctx.reply('⚠️ For security, please use /register in a private chat with me.')
-      return
-    }
-
-    // Initialize session data
-    ctx.session = ctx.session || {}
-    ctx.session.registerData = {}
-
-    const registerIntro = `
-📝 *Register an Existing Token*
-
-For tokens already launched on Bags.fm.
-You'll need to provide your wallet private keys.
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-⚠️ *SECURITY NOTICE*
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-• Keys encrypted with AES-256-GCM
-• Only system can decrypt for operations
-• *DELETE messages with keys immediately*
-• Source code is open for audit
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-📝 *Enter your TOKEN MINT ADDRESS:*
-(The Solana address of your token)
-
-_Reply with the mint address or /cancel to exit_
-`
-    await ctx.replyWithMarkdown(registerIntro)
-
-    // Set state to expect mint address
-    ctx.session.registerData = { step: 'mint' } as any
+    await startRegisterWizard(ctx)
   })
 
   // /mytokens - List user's tokens
   bot.command('mytokens', async (ctx) => {
-    const telegramId = ctx.from?.id
-    if (!telegramId) {
-      await ctx.reply('Unable to identify your account.')
-      return
-    }
-
-    try {
-      const db = requireSupabase()
-
-      // Get telegram user
-      const { data: telegramUser } = await db
-        .from('telegram_users')
-        .select('id')
-        .eq('telegram_id', telegramId)
-        .single()
-
-      if (!telegramUser) {
-        await ctx.reply('You haven\'t registered any tokens yet. Use /launch or /register to get started!')
-        return
-      }
-
-      // Get user's tokens
-      const { data: tokens, error } = await db
-        .from('user_tokens')
-        .select(`
-          id,
-          token_symbol,
-          token_mint_address,
-          is_active,
-          launched_via_telegram,
-          user_token_config (
-            flywheel_active,
-            algorithm_mode
-          )
-        `)
-        .eq('telegram_user_id', telegramUser.id)
-        .eq('is_active', true)
-
-      if (error || !tokens || tokens.length === 0) {
-        await ctx.reply('You haven\'t registered any tokens yet. Use /launch or /register to get started!')
-        return
-      }
-
-      let message = `📊 *Your Tokens*\n\n`
-
-      for (const token of tokens) {
-        const config = Array.isArray(token.user_token_config)
-          ? token.user_token_config[0]
-          : token.user_token_config
-        const status = config?.flywheel_active ? '🟢' : '🔴'
-        const mode = config?.algorithm_mode || 'simple'
-        const source = token.launched_via_telegram ? '🚀 Launched' : '📝 Registered'
-
-        message += `*${token.token_symbol}*\n`
-        message += `├ Status: ${status} ${config?.flywheel_active ? 'Active' : 'Inactive'}\n`
-        message += `├ Mode: ${mode}\n`
-        message += `├ Source: ${source}\n`
-        message += `└ Mint: \`${token.token_mint_address.slice(0, 8)}...\`\n\n`
-      }
-
-      message += `\n_Use /status <symbol> for details_`
-
-      await ctx.replyWithMarkdown(message)
-    } catch (error) {
-      console.error('Error fetching tokens:', error)
-      await ctx.reply('Error fetching your tokens. Please try again.')
-    }
+    await showMyTokens(ctx)
   })
 
   // /status <symbol> - Token status
@@ -521,6 +445,408 @@ _Use /settings ${symbol} to configure_
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// HELPER FUNCTIONS
+// ═══════════════════════════════════════════════════════════════════════════
+
+async function sendWelcomeMessage(ctx: BotContext) {
+  const welcomeMessage = `
+🔷 *Claude Wheel Bot*
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Automated market-making for Bags.fm tokens
+
+*What I can do:*
+
+🚀 *Launch* — Create a new token
+   • Auto-generated wallets
+   • Flywheel starts immediately
+
+📝 *Register* — Connect existing token
+   • Enable automated trading
+   • Claim fees automatically
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Select an option below to get started:
+`
+  await ctx.replyWithMarkdown(welcomeMessage, mainMenuKeyboard)
+}
+
+async function sendHelpMessage(ctx: BotContext) {
+  const helpMessage = `
+📚 *Command Reference*
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+*Getting Started*
+├ /launch — Launch new token
+├ /register — Register existing token
+└ /cancel — Cancel current operation
+
+*Token Management*
+├ /mytokens — List your tokens
+├ /status \`symbol\` — Check status
+├ /settings \`symbol\` — Configure
+└ /toggle \`symbol\` — Enable/disable
+
+*Algorithm Modes*
+├ \`simple\` — 5 buys → 5 sells
+├ \`smart\` — RSI + Bollinger
+└ \`rebalance\` — Target allocation
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📖 [Documentation](https://claudewheel.com/docs)
+🌐 [Dashboard](https://claudewheel.com/dashboard)
+`
+  await ctx.replyWithMarkdown(helpMessage, helpKeyboard)
+}
+
+async function startLaunchWizard(ctx: BotContext) {
+  // Check if in private chat
+  if (ctx.chat?.type !== 'private') {
+    await ctx.reply('⚠️ For security, please use /launch in a private chat with me.')
+    return
+  }
+
+  // Initialize session data
+  ctx.session = ctx.session || {}
+  ctx.session.launchData = { step: 'name' } as any
+
+  const launchIntro = `
+🚀 *Launch New Token*
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+*How it works:*
+
+1️⃣ Provide token details
+2️⃣ We generate secure wallets
+3️⃣ You send SOL to fund
+4️⃣ Token mints automatically
+5️⃣ Flywheel starts immediately
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📝 *What's your TOKEN NAME?*
+_Example: "Claude Wheel", "My Token"_
+`
+  await ctx.replyWithMarkdown(launchIntro, cancelKeyboard)
+}
+
+async function startRegisterWizard(ctx: BotContext) {
+  // Check if in private chat
+  if (ctx.chat?.type !== 'private') {
+    await ctx.reply('⚠️ For security, please use /register in a private chat with me.')
+    return
+  }
+
+  // Initialize session data
+  ctx.session = ctx.session || {}
+  ctx.session.registerData = { step: 'mint' } as any
+
+  const registerIntro = `
+📝 *Register Existing Token*
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+For tokens already on Bags.fm.
+
+⚠️ *Security Notice:*
+• Keys encrypted with AES-256-GCM
+• Only system can decrypt
+• Delete messages with keys!
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📝 *Enter TOKEN MINT ADDRESS:*
+_The Solana address of your token_
+`
+  await ctx.replyWithMarkdown(registerIntro, cancelKeyboard)
+}
+
+async function showMyTokens(ctx: BotContext) {
+  const telegramId = ctx.from?.id
+  if (!telegramId) {
+    await ctx.reply('Unable to identify your account.')
+    return
+  }
+
+  try {
+    const db = requireSupabase()
+
+    // Get telegram user
+    const { data: telegramUser } = await db
+      .from('telegram_users')
+      .select('id')
+      .eq('telegram_id', telegramId)
+      .single()
+
+    if (!telegramUser) {
+      const noTokensMessage = `
+📊 *My Tokens*
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+You haven't registered any tokens yet.
+
+Get started by launching a new token or registering an existing one!
+`
+      const noTokensKeyboard = Markup.inlineKeyboard([
+        [
+          Markup.button.callback('🚀 Launch Token', 'action_launch'),
+          Markup.button.callback('📝 Register Token', 'action_register'),
+        ],
+      ])
+      await ctx.replyWithMarkdown(noTokensMessage, noTokensKeyboard)
+      return
+    }
+
+    // Get user's tokens
+    const { data: tokens, error } = await db
+      .from('user_tokens')
+      .select(`
+        id,
+        token_symbol,
+        token_name,
+        token_mint_address,
+        is_active,
+        is_graduated,
+        launched_via_telegram,
+        user_token_config (
+          flywheel_active,
+          algorithm_mode
+        )
+      `)
+      .eq('telegram_user_id', telegramUser.id)
+      .eq('is_active', true)
+
+    if (error || !tokens || tokens.length === 0) {
+      const noTokensMessage = `
+📊 *My Tokens*
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+You haven't registered any tokens yet.
+
+Get started by launching a new token or registering an existing one!
+`
+      const noTokensKeyboard = Markup.inlineKeyboard([
+        [
+          Markup.button.callback('🚀 Launch Token', 'action_launch'),
+          Markup.button.callback('📝 Register Token', 'action_register'),
+        ],
+      ])
+      await ctx.replyWithMarkdown(noTokensMessage, noTokensKeyboard)
+      return
+    }
+
+    let message = `📊 *My Tokens*\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`
+
+    const buttons: any[][] = []
+
+    for (const token of tokens) {
+      const config = Array.isArray(token.user_token_config)
+        ? token.user_token_config[0]
+        : token.user_token_config
+
+      const flywheelStatus = config?.flywheel_active ? '🟢' : '🔴'
+      const graduatedStatus = token.is_graduated ? '✨' : '📈'
+      const mode = config?.algorithm_mode || 'simple'
+      const source = token.launched_via_telegram ? 'Launched' : 'Registered'
+
+      message += `${graduatedStatus} *${token.token_name || token.token_symbol}*\n`
+      message += `┌ Symbol: \`${token.token_symbol}\`\n`
+      message += `├ Flywheel: ${flywheelStatus} ${config?.flywheel_active ? 'Active' : 'Inactive'}\n`
+      message += `├ Mode: ${mode}\n`
+      message += `└ ${source}\n\n`
+
+      // Add buttons for this token
+      buttons.push([
+        Markup.button.callback(`📊 ${token.token_symbol}`, `status_${token.token_symbol}`),
+        Markup.button.callback(
+          config?.flywheel_active ? `🔴 Disable` : `🟢 Enable`,
+          `toggle_${token.token_symbol}`
+        ),
+      ])
+    }
+
+    // Add main menu button at the bottom
+    buttons.push([Markup.button.callback('➕ Add Token', 'action_register')])
+
+    await ctx.replyWithMarkdown(message, Markup.inlineKeyboard(buttons))
+  } catch (error) {
+    console.error('Error fetching tokens:', error)
+    await ctx.reply('Error fetching your tokens. Please try again.')
+  }
+}
+
+async function showTokenStatus(ctx: BotContext, symbol: string) {
+  const telegramId = ctx.from?.id
+  if (!telegramId) {
+    await ctx.reply('Unable to identify your account.')
+    return
+  }
+
+  try {
+    const db = requireSupabase()
+
+    // Get telegram user
+    const { data: telegramUser } = await db
+      .from('telegram_users')
+      .select('id')
+      .eq('telegram_id', telegramId)
+      .single()
+
+    if (!telegramUser) {
+      await ctx.reply('You haven\'t registered any tokens yet.')
+      return
+    }
+
+    // Get token by symbol
+    const { data: token } = await db
+      .from('user_tokens')
+      .select(`
+        *,
+        user_token_config (*),
+        user_flywheel_state (*)
+      `)
+      .eq('telegram_user_id', telegramUser.id)
+      .ilike('token_symbol', symbol)
+      .single()
+
+    if (!token) {
+      await ctx.reply(`Token ${symbol} not found. Use /mytokens to see your tokens.`)
+      return
+    }
+
+    const config = Array.isArray(token.user_token_config)
+      ? token.user_token_config[0]
+      : token.user_token_config
+    const state = Array.isArray(token.user_flywheel_state)
+      ? token.user_flywheel_state[0]
+      : token.user_flywheel_state
+
+    const statusEmoji = config?.flywheel_active ? '🟢' : '🔴'
+    const statusText = config?.flywheel_active ? 'ACTIVE' : 'INACTIVE'
+    const graduatedBadge = token.is_graduated ? '✨ Graduated' : '📈 Bonding'
+    const phase = state?.cycle_phase || 'buy'
+    const buyCount = state?.buy_count || 0
+    const sellCount = state?.sell_count || 0
+
+    const statusMessage = `
+📊 *${token.token_name || token.token_symbol}*
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+*Status*
+┌ Flywheel: ${statusEmoji} ${statusText}
+├ Market: ${graduatedBadge}
+├ Mode: ${config?.algorithm_mode || 'simple'}
+└ Phase: ${phase} (${phase === 'buy' ? buyCount : sellCount}/5)
+
+*Configuration*
+┌ Buy: ${config?.min_buy_amount_sol || 0.01} - ${config?.max_buy_amount_sol || 0.05} SOL
+└ Slippage: ${((config?.slippage_bps || 300) / 100).toFixed(1)}%
+
+*Wallets*
+┌ Dev: \`${token.dev_wallet_address.slice(0, 8)}...\`
+└ Ops: \`${token.ops_wallet_address.slice(0, 8)}...\`
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+`
+
+    const statusKeyboard = Markup.inlineKeyboard([
+      [
+        Markup.button.callback(
+          config?.flywheel_active ? '🔴 Disable Flywheel' : '🟢 Enable Flywheel',
+          `toggle_${symbol}`
+        ),
+      ],
+      [
+        Markup.button.callback('📊 My Tokens', 'action_mytokens'),
+        Markup.button.url('🌐 Dashboard', 'https://claudewheel.com/dashboard'),
+      ],
+    ])
+
+    await ctx.replyWithMarkdown(statusMessage, statusKeyboard)
+  } catch (error) {
+    console.error('Error fetching token status:', error)
+    await ctx.reply('Error fetching token status. Please try again.')
+  }
+}
+
+async function toggleFlywheel(ctx: BotContext, symbol: string) {
+  const telegramId = ctx.from?.id
+  if (!telegramId) {
+    await ctx.reply('Unable to identify your account.')
+    return
+  }
+
+  try {
+    const db = requireSupabase()
+
+    // Get telegram user
+    const { data: telegramUser } = await db
+      .from('telegram_users')
+      .select('id')
+      .eq('telegram_id', telegramId)
+      .single()
+
+    if (!telegramUser) {
+      await ctx.reply('You haven\'t registered any tokens yet.')
+      return
+    }
+
+    // Get token by symbol
+    const { data: token } = await db
+      .from('user_tokens')
+      .select('id, token_symbol, user_token_config(id, flywheel_active)')
+      .eq('telegram_user_id', telegramUser.id)
+      .ilike('token_symbol', symbol)
+      .single()
+
+    if (!token) {
+      await ctx.reply(`Token ${symbol} not found.`)
+      return
+    }
+
+    const config = Array.isArray(token.user_token_config)
+      ? token.user_token_config[0]
+      : token.user_token_config
+
+    if (!config) {
+      await ctx.reply('Token configuration not found.')
+      return
+    }
+
+    // Toggle flywheel
+    const newState = !config.flywheel_active
+
+    await db
+      .from('user_token_config')
+      .update({ flywheel_active: newState })
+      .eq('id', config.id)
+
+    const emoji = newState ? '🟢' : '🔴'
+    const stateText = newState ? 'ENABLED' : 'DISABLED'
+
+    const toggleMessage = `
+${emoji} *Flywheel ${stateText}*
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+*${token.token_symbol}* flywheel is now ${stateText.toLowerCase()}.
+
+${newState ? '✅ The bot will now automatically execute trades.' : '⏸️ Trading has been paused.'}
+`
+
+    const toggleKeyboard = Markup.inlineKeyboard([
+      [Markup.button.callback(`📊 View Status`, `status_${symbol}`)],
+      [Markup.button.callback('📊 My Tokens', 'action_mytokens')],
+    ])
+
+    await ctx.replyWithMarkdown(toggleMessage, toggleKeyboard)
+  } catch (error) {
+    console.error('Error toggling flywheel:', error)
+    await ctx.reply('Error toggling flywheel. Please try again.')
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // WIZARD HANDLERS
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -697,9 +1023,147 @@ async function handleRegisterWizard(ctx: BotContext, text: string) {
         return
       }
       data.tokenMint = text
+
+      // Check if token is already registered for this user
+      try {
+        const db = requireSupabase()
+        const telegramId = ctx.from?.id
+
+        // Get telegram user
+        const { data: telegramUser } = await db
+          .from('telegram_users')
+          .select('id')
+          .eq('telegram_id', telegramId)
+          .single()
+
+        if (telegramUser) {
+          // Check if this token is already registered
+          const { data: existingToken } = await db
+            .from('user_tokens')
+            .select('id, token_symbol, token_name')
+            .eq('telegram_user_id', telegramUser.id)
+            .eq('token_mint_address', text)
+            .single()
+
+          if (existingToken) {
+            await ctx.replyWithMarkdown(`⚠️ *Token Already Registered!*
+
+This token (${existingToken.token_symbol || existingToken.token_name || 'Unknown'}) is already registered to your account.
+
+Use \`/status ${existingToken.token_symbol || 'TOKEN'}\` to check its status.
+Use \`/settings ${existingToken.token_symbol || 'TOKEN'}\` to adjust config.
+
+To register a different token, run /register again.`)
+            ctx.session.registerData = undefined
+            return
+          }
+        }
+
+        // Also check if token is registered globally
+        const { data: globalToken } = await db
+          .from('user_tokens')
+          .select('id, token_symbol')
+          .eq('token_mint_address', text)
+          .single()
+
+        if (globalToken) {
+          await ctx.replyWithMarkdown(`⚠️ *Token Already Registered!*
+
+This token (${globalToken.token_symbol || 'Unknown'}) is already registered by another user.
+
+Each token can only have one flywheel operator.`)
+          ctx.session.registerData = undefined
+          return
+        }
+      } catch (error) {
+        // Continue if check fails (table might not exist yet)
+        console.warn('Could not check for existing token:', error)
+      }
+
+      // Fetch token data from DexScreener
+      await ctx.reply('🔍 Fetching token data...')
+
+      try {
+        const { bagsFmService } = await import('../services/bags-fm')
+        const tokenInfo = await bagsFmService.getTokenCreatorInfo(text)
+
+        if (tokenInfo && (tokenInfo.tokenSymbol || tokenInfo.tokenName)) {
+          data.tokenSymbol = tokenInfo.tokenSymbol || ''
+          data.tokenName = tokenInfo.tokenName || ''
+          data.tokenImage = tokenInfo.tokenImage || ''
+          data.isGraduated = tokenInfo.isGraduated
+
+          const statusBadge = tokenInfo.isGraduated ? '🟢 GRADUATED' : '🟡 BONDING'
+          const marketCapStr = tokenInfo.marketCap > 0 ? `$${tokenInfo.marketCap.toLocaleString()}` : 'N/A'
+
+          const tokenFoundMessage = `
+✅ *Token Found!*
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+*${tokenInfo.tokenName || 'Unknown'}*
+\`${tokenInfo.tokenSymbol || '???'}\`
+
+┌ Status: ${statusBadge}
+├ Market Cap: ${marketCapStr}
+└ Holders: ${tokenInfo.holders > 0 ? tokenInfo.holders.toLocaleString() : 'N/A'}
+
+Mint: \`${text.slice(0, 12)}...${text.slice(-8)}\`
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Is this the correct token?
+`
+          await ctx.replyWithMarkdown(tokenFoundMessage, confirmTokenKeyboard)
+
+          data.step = 'confirm_token'
+          return
+        }
+      } catch (error) {
+        console.warn('Could not fetch token info:', error)
+      }
+
+      // Could not fetch token data, ask for symbol manually
       data.step = 'symbol'
-      await ctx.replyWithMarkdown(`✅ Token mint verified!\n\n📝 *TOKEN SYMBOL?* (e.g., BAGS)`)
+      await ctx.replyWithMarkdown(`✅ Token mint verified!
+
+⚠️ Could not fetch token data automatically.
+
+📝 *TOKEN SYMBOL?* (e.g., BAGS)`)
       break
+
+    case 'confirm_token':
+      const response = text.toLowerCase()
+      if (response === 'yes' || response === 'y') {
+        // Token confirmed, proceed to dev key
+        data.step = 'dev_key'
+        await ctx.replyWithMarkdown(`
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⚠️ *PRIVATE KEY REQUIRED*
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+The dev wallet receives Bags.fm trading fees.
+We need the private key to claim fees.
+
+*Security:*
+• Encrypted with AES-256-GCM before storage
+• Only automated system can decrypt
+• Used solely for fee claiming
+
+⚠️ *DELETE YOUR MESSAGE after I confirm!*
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📝 *DEV WALLET PRIVATE KEY* (base58):
+`)
+        return
+      } else if (response === 'no' || response === 'n') {
+        // Wrong token, start over
+        data.step = 'mint'
+        await ctx.reply('Please enter the correct token mint address:')
+        return
+      } else {
+        await ctx.reply('Please reply "yes" to continue or "no" to enter a different mint.')
+        return
+      }
 
     case 'symbol':
       const symbol = text.toUpperCase()
@@ -866,6 +1330,8 @@ Reply *"confirm"* to register or /cancel to abort.
             telegram_user_id: telegramUser?.id,
             token_mint_address: data.tokenMint,
             token_symbol: data.tokenSymbol,
+            token_name: data.tokenName || null,
+            token_image: data.tokenImage || null,
             dev_wallet_address: data.devWalletAddress,
             dev_wallet_private_key_encrypted: devEncrypted.ciphertext,
             encryption_iv: devEncrypted.iv,
@@ -875,6 +1341,7 @@ Reply *"confirm"* to register or /cancel to abort.
             ops_encryption_iv: opsEncrypted.iv,
             ops_encryption_auth_tag: opsEncrypted.authTag,
             launched_via_telegram: false,
+            is_graduated: data.isGraduated || false,
           })
           .select('id')
           .single()
@@ -912,27 +1379,38 @@ Reply *"confirm"* to register or /cancel to abort.
           details: { token_symbol: data.tokenSymbol },
         })
 
+        const tokenDisplay = data.tokenName ? `${data.tokenName}` : data.tokenSymbol
+        const graduatedStatus = data.isGraduated ? '✨ Graduated' : '📈 Bonding'
+
         const successMsg = `
-🎉 *Token Registered Successfully!*
+🎉 *Registration Complete!*
+━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-*${data.tokenSymbol}* is now connected to Claude Wheel!
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+*${tokenDisplay}*
+\`${data.tokenSymbol}\`
 
-📊 *Next Steps:*
-1. Fund your ops wallet with SOL
-2. Run /toggle ${data.tokenSymbol} to enable flywheel
-3. Use /settings ${data.tokenSymbol} to adjust config
+Status: ${graduatedStatus}
 
-*Commands:*
-• /status ${data.tokenSymbol} - Check status
-• /mytokens - View all tokens
+━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+*Next Steps:*
 
-🌐 *Dashboard:* claudewheel.com/dashboard
+1️⃣ Fund your ops wallet with SOL
+2️⃣ Enable the flywheel below
+3️⃣ Watch your token trade automatically!
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━
 `
-        await ctx.replyWithMarkdown(successMsg)
+        const successKeyboard = Markup.inlineKeyboard([
+          [Markup.button.callback(`🟢 Enable Flywheel`, `toggle_${data.tokenSymbol}`)],
+          [
+            Markup.button.callback(`📊 View Status`, `status_${data.tokenSymbol}`),
+            Markup.button.callback('📊 My Tokens', 'action_mytokens'),
+          ],
+          [Markup.button.url('🌐 Dashboard', 'https://claudewheel.com/dashboard')],
+        ])
+
+        await ctx.replyWithMarkdown(successMsg, successKeyboard)
         ctx.session.registerData = undefined
       } catch (error) {
         console.error('Error registering token:', error)
