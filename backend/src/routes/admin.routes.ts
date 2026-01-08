@@ -8,6 +8,12 @@ import { walletMonitor } from '../services/wallet-monitor'
 import { getClaimJobStatus, restartClaimJob } from '../jobs/claim.job'
 import { getMultiUserFlywheelJobStatus, restartFlywheelJob } from '../jobs/multi-flywheel.job'
 import { requestConfigReload, getCurrentAlgorithmMode, getCachedConfig } from '../jobs/flywheel.job'
+import {
+  getPendingRefunds,
+  executeRefund,
+  getTelegramAuditLogs,
+  getLaunchStats,
+} from '../services/refund.service'
 
 // Platform token CA - this token cannot be suspended
 const PLATFORM_TOKEN_MINT = '8JLGQ7RqhsvhsDhvjMuJUeeuaQ53GTJqSHNaBWf4BAGS'
@@ -1061,6 +1067,307 @@ router.post('/config/reload', verifyAdminAuth, async (req: Request, res: Respons
     })
   } catch (error) {
     console.error('Error triggering config reload:', error)
+    return res.status(500).json({ error: 'Internal server error' })
+  }
+})
+
+// ═══════════════════════════════════════════════════════════════════════════
+// TELEGRAM LAUNCH MANAGEMENT
+// Monitor pending/failed launches and process refunds
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * GET /api/admin/telegram/stats
+ * Get launch statistics (admin only)
+ */
+router.get('/telegram/stats', verifyAdminAuth, async (req: Request, res: Response) => {
+  try {
+    const stats = await getLaunchStats()
+
+    return res.json({
+      success: true,
+      data: stats,
+    })
+  } catch (error) {
+    console.error('Error fetching launch stats:', error)
+    return res.status(500).json({ error: 'Internal server error' })
+  }
+})
+
+/**
+ * GET /api/admin/telegram/launches
+ * List all pending launches with refund info (admin only)
+ */
+router.get('/telegram/launches', verifyAdminAuth, async (req: Request, res: Response) => {
+  try {
+    if (!supabase) {
+      return res.status(500).json({ error: 'Database not configured' })
+    }
+
+    const { status, limit = 50, offset = 0 } = req.query
+
+    let query = supabase
+      .from('pending_token_launches')
+      .select(`
+        *,
+        telegram_users (telegram_id, telegram_username)
+      `)
+      .order('updated_at', { ascending: false })
+      .range(Number(offset), Number(offset) + Number(limit) - 1)
+
+    // Apply status filter
+    if (status && ['awaiting_deposit', 'launching', 'completed', 'failed', 'expired', 'refunded'].includes(status as string)) {
+      query = query.eq('status', status)
+    }
+
+    const { data: launches, error } = await query
+
+    if (error) {
+      console.error('Error fetching launches:', error)
+      return res.status(500).json({ error: 'Failed to fetch launches' })
+    }
+
+    // Get total count
+    const { count } = await supabase
+      .from('pending_token_launches')
+      .select('*', { count: 'exact', head: true })
+
+    return res.json({
+      success: true,
+      data: {
+        launches: launches || [],
+        total: count || 0,
+        limit: Number(limit),
+        offset: Number(offset),
+      },
+    })
+  } catch (error) {
+    console.error('Error fetching launches:', error)
+    return res.status(500).json({ error: 'Internal server error' })
+  }
+})
+
+/**
+ * GET /api/admin/telegram/refunds
+ * Get launches that need refunds (failed/expired with balance) (admin only)
+ */
+router.get('/telegram/refunds', verifyAdminAuth, async (req: Request, res: Response) => {
+  try {
+    const pendingRefunds = await getPendingRefunds()
+
+    return res.json({
+      success: true,
+      data: {
+        refunds: pendingRefunds,
+        total: pendingRefunds.length,
+      },
+    })
+  } catch (error) {
+    console.error('Error fetching pending refunds:', error)
+    return res.status(500).json({ error: 'Internal server error' })
+  }
+})
+
+/**
+ * POST /api/admin/telegram/refund/:id
+ * Execute a refund for a failed/expired launch (admin only)
+ */
+router.post('/telegram/refund/:id', verifyAdminAuth, async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params
+    const { refundAddress } = req.body
+
+    if (!refundAddress || typeof refundAddress !== 'string') {
+      return res.status(400).json({ error: 'Refund address is required' })
+    }
+
+    console.log(`💸 Admin initiating refund for launch ${id} to ${refundAddress}`)
+
+    const result = await executeRefund(id, refundAddress)
+
+    if (!result.success) {
+      return res.status(400).json({
+        success: false,
+        error: result.error,
+      })
+    }
+
+    return res.json({
+      success: true,
+      data: {
+        signature: result.signature,
+        amountRefunded: result.amountRefunded,
+        refundAddress: result.refundAddress,
+      },
+    })
+  } catch (error) {
+    console.error('Error executing refund:', error)
+    return res.status(500).json({ error: 'Internal server error' })
+  }
+})
+
+/**
+ * GET /api/admin/telegram/logs
+ * Get Telegram audit logs (admin only)
+ */
+router.get('/telegram/logs', verifyAdminAuth, async (req: Request, res: Response) => {
+  try {
+    const { limit = 100, event_type } = req.query
+
+    if (!supabase) {
+      return res.status(500).json({ error: 'Database not configured' })
+    }
+
+    let query = supabase
+      .from('audit_log')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(Number(limit))
+
+    // Filter by event type if specified
+    if (event_type && typeof event_type === 'string') {
+      query = query.eq('event_type', event_type)
+    }
+
+    const { data: logs, error } = await query
+
+    if (error) {
+      console.error('Error fetching audit logs:', error)
+      return res.status(500).json({ error: 'Failed to fetch logs' })
+    }
+
+    return res.json({
+      success: true,
+      data: {
+        logs: logs || [],
+        total: (logs || []).length,
+      },
+    })
+  } catch (error) {
+    console.error('Error fetching audit logs:', error)
+    return res.status(500).json({ error: 'Internal server error' })
+  }
+})
+
+/**
+ * GET /api/admin/telegram/launch/:id
+ * Get detailed info for a specific launch (admin only)
+ */
+router.get('/telegram/launch/:id', verifyAdminAuth, async (req: Request, res: Response) => {
+  try {
+    if (!supabase) {
+      return res.status(500).json({ error: 'Database not configured' })
+    }
+
+    const { id } = req.params
+
+    const { data: launch, error } = await supabase
+      .from('pending_token_launches')
+      .select(`
+        *,
+        telegram_users (telegram_id, telegram_username)
+      `)
+      .eq('id', id)
+      .single()
+
+    if (error || !launch) {
+      return res.status(404).json({ error: 'Launch not found' })
+    }
+
+    // Get related audit logs
+    const { data: auditLogs } = await supabase
+      .from('audit_log')
+      .select('*')
+      .eq('pending_launch_id', id)
+      .order('created_at', { ascending: false })
+
+    return res.json({
+      success: true,
+      data: {
+        launch,
+        auditLogs: auditLogs || [],
+      },
+    })
+  } catch (error) {
+    console.error('Error fetching launch details:', error)
+    return res.status(500).json({ error: 'Internal server error' })
+  }
+})
+
+/**
+ * POST /api/admin/telegram/launch/:id/cancel
+ * Cancel a pending launch (admin only)
+ */
+router.post('/telegram/launch/:id/cancel', verifyAdminAuth, async (req: Request, res: Response) => {
+  try {
+    if (!supabase) {
+      return res.status(500).json({ error: 'Database not configured' })
+    }
+
+    const { id } = req.params
+    const { reason } = req.body
+
+    // Get the launch
+    const { data: launch, error: fetchError } = await supabase
+      .from('pending_token_launches')
+      .select('*, telegram_users (telegram_id)')
+      .eq('id', id)
+      .single()
+
+    if (fetchError || !launch) {
+      return res.status(404).json({ error: 'Launch not found' })
+    }
+
+    // Only allow cancelling awaiting_deposit or launching status
+    if (!['awaiting_deposit', 'launching'].includes(launch.status)) {
+      return res.status(400).json({ error: `Cannot cancel launch with status: ${launch.status}` })
+    }
+
+    // Update status to expired
+    const { error: updateError } = await supabase
+      .from('pending_token_launches')
+      .update({
+        status: 'expired',
+        error_message: reason || 'Cancelled by admin',
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', id)
+
+    if (updateError) {
+      return res.status(500).json({ error: 'Failed to cancel launch' })
+    }
+
+    // Log audit event
+    await supabase.from('audit_log').insert({
+      event_type: 'launch_cancelled',
+      pending_launch_id: id,
+      telegram_id: launch.telegram_users?.telegram_id,
+      details: { reason: reason || 'Cancelled by admin' },
+    })
+
+    // Notify user
+    if (launch.telegram_users?.telegram_id) {
+      try {
+        const { getBot } = await import('../telegram/bot')
+        const bot = getBot()
+        if (bot) {
+          await bot.telegram.sendMessage(
+            launch.telegram_users.telegram_id,
+            `⚠️ Your ${launch.token_symbol} launch has been cancelled.\n\n${reason ? `Reason: ${reason}\n\n` : ''}Use /launch to start a new launch.`,
+            { parse_mode: 'Markdown' }
+          )
+        }
+      } catch (e) {
+        console.error('Error notifying user:', e)
+      }
+    }
+
+    return res.json({
+      success: true,
+      message: 'Launch cancelled',
+    })
+  } catch (error) {
+    console.error('Error cancelling launch:', error)
     return res.status(500).json({ error: 'Internal server error' })
   }
 })

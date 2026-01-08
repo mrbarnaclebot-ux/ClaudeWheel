@@ -626,12 +626,21 @@ export default function AdminContent() {
           <WalletMultiButton className="!bg-success/20 !text-success !font-mono !rounded-lg !border !border-success/30 !text-sm" />
         </div>
 
-        {/* Authorization badge */}
-        <div className="mt-4 flex items-center gap-2">
-          <span className="badge badge-success">AUTHORIZED</span>
-          <span className="text-text-muted font-mono text-xs">
-            {publicKey?.toString().slice(0, 8)}...{publicKey?.toString().slice(-8)}
-          </span>
+        {/* Authorization badge and quick links */}
+        <div className="mt-4 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <span className="badge badge-success">AUTHORIZED</span>
+            <span className="text-text-muted font-mono text-xs">
+              {publicKey?.toString().slice(0, 8)}...{publicKey?.toString().slice(-8)}
+            </span>
+          </div>
+          <a
+            href="/admin/telegram"
+            className="flex items-center gap-2 px-3 py-1 text-xs font-mono bg-accent-primary/20 text-accent-primary border border-accent-primary/30 rounded-lg hover:bg-accent-primary/30 transition-colors"
+          >
+            <span>📱</span>
+            Telegram Launches
+          </a>
         </div>
       </motion.div>
 

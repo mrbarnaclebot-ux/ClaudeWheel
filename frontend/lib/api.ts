@@ -1263,3 +1263,206 @@ export async function updatePlatformSettings(
     return { success: false }
   }
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// TELEGRAM ADMIN API
+// Monitor launches and process refunds
+// ═══════════════════════════════════════════════════════════════════════════
+
+export interface TelegramLaunchStats {
+  total: number
+  awaiting: number
+  launching: number
+  completed: number
+  failed: number
+  expired: number
+  refunded: number
+  totalDeposited: number
+  totalRefunded: number
+}
+
+export interface TelegramLaunch {
+  id: string
+  telegram_user_id: string
+  token_name: string
+  token_symbol: string
+  token_description: string | null
+  token_image_url: string | null
+  dev_wallet_address: string
+  ops_wallet_address: string
+  status: 'awaiting_deposit' | 'launching' | 'completed' | 'failed' | 'expired' | 'refunded'
+  deposit_received_sol: number
+  token_mint_address: string | null
+  error_message: string | null
+  retry_count: number
+  expires_at: string
+  created_at: string
+  updated_at: string
+  telegram_users: {
+    telegram_id: number
+    telegram_username: string | null
+  } | null
+  // Enriched fields from refund service
+  current_balance?: number
+  original_funder?: string | null
+}
+
+export interface TelegramAuditLog {
+  id: string
+  event_type: string
+  pending_launch_id: string | null
+  user_token_id: string | null
+  telegram_id: number | null
+  details: Record<string, any>
+  created_at: string
+}
+
+// Get Telegram launch statistics (admin only)
+export async function fetchTelegramStats(
+  publicKey: string,
+  signature: string,
+  message: string
+): Promise<TelegramLaunchStats | null> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/admin/telegram/stats`, {
+      headers: createAdminHeaders(publicKey, signature, message),
+    })
+
+    if (!response.ok) return null
+
+    const json = await response.json()
+    return json.success ? json.data : null
+  } catch (error) {
+    console.error('Failed to fetch telegram stats:', error)
+    return null
+  }
+}
+
+// Get all Telegram launches (admin only)
+export async function fetchTelegramLaunches(
+  publicKey: string,
+  signature: string,
+  message: string,
+  filters?: { status?: string; limit?: number; offset?: number }
+): Promise<{ launches: TelegramLaunch[]; total: number } | null> {
+  try {
+    const params = new URLSearchParams()
+    if (filters?.status) params.set('status', filters.status)
+    if (filters?.limit) params.set('limit', String(filters.limit))
+    if (filters?.offset) params.set('offset', String(filters.offset))
+
+    const response = await fetch(`${API_BASE_URL}/api/admin/telegram/launches?${params}`, {
+      headers: createAdminHeaders(publicKey, signature, message),
+    })
+
+    if (!response.ok) return null
+
+    const json = await response.json()
+    return json.success ? json.data : null
+  } catch (error) {
+    console.error('Failed to fetch telegram launches:', error)
+    return null
+  }
+}
+
+// Get pending refunds (admin only)
+export async function fetchPendingRefunds(
+  publicKey: string,
+  signature: string,
+  message: string
+): Promise<{ refunds: TelegramLaunch[]; total: number } | null> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/admin/telegram/refunds`, {
+      headers: createAdminHeaders(publicKey, signature, message),
+    })
+
+    if (!response.ok) return null
+
+    const json = await response.json()
+    return json.success ? json.data : null
+  } catch (error) {
+    console.error('Failed to fetch pending refunds:', error)
+    return null
+  }
+}
+
+// Execute a refund (admin only)
+export async function executeRefund(
+  publicKey: string,
+  signature: string,
+  message: string,
+  launchId: string,
+  refundAddress: string
+): Promise<{ success: boolean; signature?: string; amountRefunded?: number; error?: string }> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/admin/telegram/refund/${launchId}`, {
+      method: 'POST',
+      headers: createAdminHeaders(publicKey, signature, message),
+      body: JSON.stringify({ refundAddress }),
+    })
+
+    const json = await response.json()
+
+    if (!response.ok || !json.success) {
+      return { success: false, error: json.error || 'Refund failed' }
+    }
+
+    return {
+      success: true,
+      signature: json.data.signature,
+      amountRefunded: json.data.amountRefunded,
+    }
+  } catch (error) {
+    console.error('Failed to execute refund:', error)
+    return { success: false, error: 'Network error' }
+  }
+}
+
+// Get Telegram audit logs (admin only)
+export async function fetchTelegramLogs(
+  publicKey: string,
+  signature: string,
+  message: string,
+  filters?: { limit?: number; event_type?: string }
+): Promise<{ logs: TelegramAuditLog[]; total: number } | null> {
+  try {
+    const params = new URLSearchParams()
+    if (filters?.limit) params.set('limit', String(filters.limit))
+    if (filters?.event_type) params.set('event_type', filters.event_type)
+
+    const response = await fetch(`${API_BASE_URL}/api/admin/telegram/logs?${params}`, {
+      headers: createAdminHeaders(publicKey, signature, message),
+    })
+
+    if (!response.ok) return null
+
+    const json = await response.json()
+    return json.success ? json.data : null
+  } catch (error) {
+    console.error('Failed to fetch telegram logs:', error)
+    return null
+  }
+}
+
+// Cancel a pending launch (admin only)
+export async function cancelTelegramLaunch(
+  publicKey: string,
+  signature: string,
+  message: string,
+  launchId: string,
+  reason?: string
+): Promise<boolean> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/admin/telegram/launch/${launchId}/cancel`, {
+      method: 'POST',
+      headers: createAdminHeaders(publicKey, signature, message),
+      body: JSON.stringify({ reason }),
+    })
+
+    const json = await response.json()
+    return json.success
+  } catch (error) {
+    console.error('Failed to cancel launch:', error)
+    return false
+  }
+}
