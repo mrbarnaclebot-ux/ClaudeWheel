@@ -1466,3 +1466,214 @@ export async function cancelTelegramLaunch(
     return false
   }
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ENHANCED TELEGRAM ADMIN API
+// Bot health, financial metrics, user analytics, search, bulk operations
+// ═══════════════════════════════════════════════════════════════════════════
+
+export interface BotHealthStatus {
+  depositMonitor: {
+    running: boolean
+    isProcessing: boolean
+  }
+  lastActivity: {
+    timestamp: string
+    eventType: string
+    minutesAgo: number
+  } | null
+  lastLaunch: {
+    timestamp: string
+    tokenSymbol: string
+    status: string
+  } | null
+  botHealthy: boolean
+}
+
+export interface FinancialMetrics {
+  totalSolProcessed: number
+  totalRefunded: number
+  pendingSol: number
+  launchFeesCollected: number
+  platformRevenue: number
+  today: {
+    launches: number
+    deposits: number
+  }
+}
+
+export interface TelegramUser {
+  id: string
+  telegramId: number
+  username: string | null
+  createdAt: string
+  launchCount: number
+}
+
+export interface BulkRefundResult {
+  launchId: string
+  success: boolean
+  signature?: string
+  amountRefunded?: number
+  error?: string
+}
+
+// Get bot health status (admin only)
+export async function fetchBotHealth(
+  publicKey: string,
+  signature: string,
+  message: string
+): Promise<BotHealthStatus | null> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/admin/telegram/bot-health`, {
+      headers: createAdminHeaders(publicKey, signature, message),
+    })
+
+    if (!response.ok) return null
+
+    const json = await response.json()
+    return json.success ? json.data : null
+  } catch (error) {
+    console.error('Failed to fetch bot health:', error)
+    return null
+  }
+}
+
+// Get financial metrics (admin only)
+export async function fetchFinancialMetrics(
+  publicKey: string,
+  signature: string,
+  message: string
+): Promise<FinancialMetrics | null> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/admin/telegram/financial-metrics`, {
+      headers: createAdminHeaders(publicKey, signature, message),
+    })
+
+    if (!response.ok) return null
+
+    const json = await response.json()
+    return json.success ? json.data : null
+  } catch (error) {
+    console.error('Failed to fetch financial metrics:', error)
+    return null
+  }
+}
+
+// Get Telegram users list (admin only)
+export async function fetchTelegramUsers(
+  publicKey: string,
+  signature: string,
+  message: string,
+  filters?: { limit?: number; offset?: number; search?: string }
+): Promise<{ users: TelegramUser[]; total: number } | null> {
+  try {
+    const params = new URLSearchParams()
+    if (filters?.limit) params.set('limit', String(filters.limit))
+    if (filters?.offset) params.set('offset', String(filters.offset))
+    if (filters?.search) params.set('search', filters.search)
+
+    const response = await fetch(`${API_BASE_URL}/api/admin/telegram/users?${params}`, {
+      headers: createAdminHeaders(publicKey, signature, message),
+    })
+
+    if (!response.ok) return null
+
+    const json = await response.json()
+    return json.success ? json.data : null
+  } catch (error) {
+    console.error('Failed to fetch telegram users:', error)
+    return null
+  }
+}
+
+// Execute bulk refunds (admin only)
+export async function executeBulkRefunds(
+  publicKey: string,
+  signature: string,
+  message: string,
+  launchIds: string[]
+): Promise<{ results: BulkRefundResult[]; summary: { total: number; successful: number; failed: number } } | null> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/admin/telegram/bulk-refund`, {
+      method: 'POST',
+      headers: createAdminHeaders(publicKey, signature, message),
+      body: JSON.stringify({ launchIds }),
+    })
+
+    const json = await response.json()
+    return json.success ? json.data : null
+  } catch (error) {
+    console.error('Failed to execute bulk refunds:', error)
+    return null
+  }
+}
+
+// Search launches with advanced filters (admin only)
+export async function searchTelegramLaunches(
+  publicKey: string,
+  signature: string,
+  message: string,
+  filters?: {
+    status?: string
+    search?: string
+    username?: string
+    dateFrom?: string
+    dateTo?: string
+    limit?: number
+    offset?: number
+    sortBy?: string
+    sortOrder?: 'asc' | 'desc'
+  }
+): Promise<{ launches: TelegramLaunch[]; total: number } | null> {
+  try {
+    const params = new URLSearchParams()
+    if (filters?.status) params.set('status', filters.status)
+    if (filters?.search) params.set('search', filters.search)
+    if (filters?.username) params.set('username', filters.username)
+    if (filters?.dateFrom) params.set('dateFrom', filters.dateFrom)
+    if (filters?.dateTo) params.set('dateTo', filters.dateTo)
+    if (filters?.limit) params.set('limit', String(filters.limit))
+    if (filters?.offset) params.set('offset', String(filters.offset))
+    if (filters?.sortBy) params.set('sortBy', filters.sortBy)
+    if (filters?.sortOrder) params.set('sortOrder', filters.sortOrder)
+
+    const response = await fetch(`${API_BASE_URL}/api/admin/telegram/launches/search?${params}`, {
+      headers: createAdminHeaders(publicKey, signature, message),
+    })
+
+    if (!response.ok) return null
+
+    const json = await response.json()
+    return json.success ? json.data : null
+  } catch (error) {
+    console.error('Failed to search launches:', error)
+    return null
+  }
+}
+
+// Export launches data (admin only)
+export async function exportTelegramLaunches(
+  publicKey: string,
+  signature: string,
+  message: string,
+  filters?: { status?: string; dateFrom?: string; dateTo?: string }
+): Promise<Blob | null> {
+  try {
+    const params = new URLSearchParams()
+    if (filters?.status) params.set('status', filters.status)
+    if (filters?.dateFrom) params.set('dateFrom', filters.dateFrom)
+    if (filters?.dateTo) params.set('dateTo', filters.dateTo)
+
+    const response = await fetch(`${API_BASE_URL}/api/admin/telegram/export?${params}`, {
+      headers: createAdminHeaders(publicKey, signature, message),
+    })
+
+    if (!response.ok) return null
+
+    return await response.blob()
+  } catch (error) {
+    console.error('Failed to export launches:', error)
+    return null
+  }
+}

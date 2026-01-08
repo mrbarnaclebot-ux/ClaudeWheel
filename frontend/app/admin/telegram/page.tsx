@@ -1,9 +1,9 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useWallet } from '@solana/wallet-adapter-react'
 import { WalletMultiButton } from '@solana/wallet-adapter-react-ui'
-import { motion } from 'framer-motion'
+import { motion, AnimatePresence } from 'framer-motion'
 import Link from 'next/link'
 import bs58 from 'bs58'
 import {
@@ -14,14 +14,24 @@ import {
   fetchTelegramLogs,
   executeRefund,
   cancelTelegramLaunch,
+  fetchBotHealth,
+  fetchFinancialMetrics,
+  fetchTelegramUsers,
+  executeBulkRefunds,
+  searchTelegramLaunches,
+  exportTelegramLaunches,
   type TelegramLaunchStats,
   type TelegramLaunch,
   type TelegramAuditLog,
+  type BotHealthStatus,
+  type FinancialMetrics,
+  type TelegramUser,
 } from '@/lib/api'
 
 const DEV_WALLET_ADDRESS = process.env.NEXT_PUBLIC_DEV_WALLET_ADDRESS || ''
 
 type StatusFilter = 'all' | 'awaiting_deposit' | 'launching' | 'completed' | 'failed' | 'expired' | 'refunded'
+type TabView = 'launches' | 'users' | 'logs'
 
 export default function TelegramAdminPage() {
   const { publicKey, connected, signMessage } = useWallet()
@@ -37,17 +47,40 @@ export default function TelegramAdminPage() {
   const [launches, setLaunches] = useState<TelegramLaunch[]>([])
   const [pendingRefunds, setPendingRefunds] = useState<TelegramLaunch[]>([])
   const [logs, setLogs] = useState<TelegramAuditLog[]>([])
+  const [botHealth, setBotHealth] = useState<BotHealthStatus | null>(null)
+  const [financialMetrics, setFinancialMetrics] = useState<FinancialMetrics | null>(null)
+  const [telegramUsers, setTelegramUsers] = useState<TelegramUser[]>([])
+  const [totalUsers, setTotalUsers] = useState(0)
   const [isLoading, setIsLoading] = useState(false)
 
-  // Filter state
+  // UI state
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
-  const [showLogs, setShowLogs] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [currentTab, setCurrentTab] = useState<TabView>('launches')
+  const [expandedLaunch, setExpandedLaunch] = useState<string | null>(null)
+  const [selectedLaunches, setSelectedLaunches] = useState<Set<string>>(new Set())
+
+  // Pagination
+  const [currentPage, setCurrentPage] = useState(1)
+  const [totalLaunches, setTotalLaunches] = useState(0)
+  const pageSize = 20
+
+  // Auto-refresh state
+  const [autoRefresh, setAutoRefresh] = useState(false)
+  const [refreshInterval, setRefreshInterval] = useState(30)
+  const autoRefreshRef = useRef<NodeJS.Timeout | null>(null)
+  const [lastRefresh, setLastRefresh] = useState<Date | null>(null)
 
   // Refund modal state
   const [refundModal, setRefundModal] = useState<TelegramLaunch | null>(null)
   const [refundAddress, setRefundAddress] = useState('')
   const [isRefunding, setIsRefunding] = useState(false)
   const [refundMessage, setRefundMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+
+  // Bulk refund state
+  const [showBulkRefundModal, setShowBulkRefundModal] = useState(false)
+  const [isBulkRefunding, setIsBulkRefunding] = useState(false)
+  const [bulkRefundResults, setBulkRefundResults] = useState<{ total: number; successful: number; failed: number } | null>(null)
 
   // Check authorization
   useEffect(() => {
@@ -91,17 +124,35 @@ export default function TelegramAdminPage() {
   const loadAllData = async (pubkey: string, sig: string, msg: string) => {
     setIsLoading(true)
     try {
-      const [statsData, launchesData, refundsData, logsData] = await Promise.all([
+      const [statsData, launchesData, refundsData, logsData, healthData, metricsData, usersData] = await Promise.all([
         fetchTelegramStats(pubkey, sig, msg),
-        fetchTelegramLaunches(pubkey, sig, msg, { status: statusFilter === 'all' ? undefined : statusFilter }),
+        searchTelegramLaunches(pubkey, sig, msg, {
+          status: statusFilter === 'all' ? undefined : statusFilter,
+          search: searchQuery || undefined,
+          limit: pageSize,
+          offset: (currentPage - 1) * pageSize,
+        }),
         fetchPendingRefunds(pubkey, sig, msg),
         fetchTelegramLogs(pubkey, sig, msg, { limit: 100 }),
+        fetchBotHealth(pubkey, sig, msg),
+        fetchFinancialMetrics(pubkey, sig, msg),
+        fetchTelegramUsers(pubkey, sig, msg, { limit: 50 }),
       ])
 
       if (statsData) setStats(statsData)
-      if (launchesData) setLaunches(launchesData.launches)
+      if (launchesData) {
+        setLaunches(launchesData.launches)
+        setTotalLaunches(launchesData.total)
+      }
       if (refundsData) setPendingRefunds(refundsData.refunds)
       if (logsData) setLogs(logsData.logs)
+      if (healthData) setBotHealth(healthData)
+      if (metricsData) setFinancialMetrics(metricsData)
+      if (usersData) {
+        setTelegramUsers(usersData.users)
+        setTotalUsers(usersData.total)
+      }
+      setLastRefresh(new Date())
     } catch (error) {
       console.error('Failed to load data:', error)
     } finally {
@@ -113,7 +164,32 @@ export default function TelegramAdminPage() {
   const reloadData = useCallback(async () => {
     if (!publicKey || !adminAuthSignature || !adminAuthMessage) return
     await loadAllData(publicKey.toString(), adminAuthSignature, adminAuthMessage)
-  }, [publicKey, adminAuthSignature, adminAuthMessage, statusFilter])
+  }, [publicKey, adminAuthSignature, adminAuthMessage, statusFilter, searchQuery, currentPage])
+
+  // Auto-refresh effect
+  useEffect(() => {
+    if (autoRefresh && adminAuthSignature) {
+      autoRefreshRef.current = setInterval(() => {
+        reloadData()
+      }, refreshInterval * 1000)
+    }
+
+    return () => {
+      if (autoRefreshRef.current) {
+        clearInterval(autoRefreshRef.current)
+      }
+    }
+  }, [autoRefresh, refreshInterval, reloadData, adminAuthSignature])
+
+  // Search effect - reload when search changes
+  useEffect(() => {
+    if (adminAuthSignature && adminAuthMessage && publicKey) {
+      const debounce = setTimeout(() => {
+        reloadData()
+      }, 300)
+      return () => clearTimeout(debounce)
+    }
+  }, [searchQuery])
 
   // Handle refund
   const handleRefund = async () => {
@@ -152,6 +228,34 @@ export default function TelegramAdminPage() {
     setIsRefunding(false)
   }
 
+  // Handle bulk refund
+  const handleBulkRefund = async () => {
+    if (!publicKey || !adminAuthSignature || !adminAuthMessage) return
+    if (selectedLaunches.size === 0) return
+
+    setIsBulkRefunding(true)
+    setBulkRefundResults(null)
+
+    const result = await executeBulkRefunds(
+      publicKey.toString(),
+      adminAuthSignature,
+      adminAuthMessage,
+      Array.from(selectedLaunches)
+    )
+
+    if (result) {
+      setBulkRefundResults(result.summary)
+      setTimeout(() => {
+        setShowBulkRefundModal(false)
+        setSelectedLaunches(new Set())
+        setBulkRefundResults(null)
+        reloadData()
+      }, 3000)
+    }
+
+    setIsBulkRefunding(false)
+  }
+
   // Handle cancel launch
   const handleCancel = async (launch: TelegramLaunch) => {
     if (!publicKey || !adminAuthSignature || !adminAuthMessage) return
@@ -168,6 +272,46 @@ export default function TelegramAdminPage() {
     if (success) {
       reloadData()
     }
+  }
+
+  // Handle export
+  const handleExport = async () => {
+    if (!publicKey || !adminAuthSignature || !adminAuthMessage) return
+
+    const blob = await exportTelegramLaunches(
+      publicKey.toString(),
+      adminAuthSignature,
+      adminAuthMessage,
+      { status: statusFilter === 'all' ? undefined : statusFilter }
+    )
+
+    if (blob) {
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `telegram-launches-${new Date().toISOString().split('T')[0]}.json`
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+    }
+  }
+
+  // Toggle launch selection
+  const toggleLaunchSelection = (launchId: string) => {
+    const newSelected = new Set(selectedLaunches)
+    if (newSelected.has(launchId)) {
+      newSelected.delete(launchId)
+    } else {
+      newSelected.add(launchId)
+    }
+    setSelectedLaunches(newSelected)
+  }
+
+  // Select all refundable launches
+  const selectAllRefundable = () => {
+    const refundable = launches.filter(l => ['failed', 'expired'].includes(l.status) && l.deposit_received_sol > 0)
+    setSelectedLaunches(new Set(refundable.map(l => l.id)))
   }
 
   // Get status badge
@@ -232,22 +376,24 @@ export default function TelegramAdminPage() {
     )
   }
 
+  const totalPages = Math.ceil(totalLaunches / pageSize)
+
   return (
     <div className="min-h-screen bg-void p-4 md:p-8">
       {/* Header */}
       <motion.div
         initial={{ opacity: 0, y: -20 }}
         animate={{ opacity: 1, y: 0 }}
-        className="max-w-6xl mx-auto mb-8"
+        className="max-w-7xl mx-auto mb-6"
       >
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between flex-wrap gap-4">
           <div>
             <h1 className="font-display text-2xl font-bold text-text-primary flex items-center gap-2">
               <span className="text-accent-primary">📱</span>
-              Telegram Launches
+              Telegram Dashboard
             </h1>
             <p className="text-text-muted font-mono text-sm mt-1">
-              Monitor launches and process refunds
+              Monitor launches, users, and process refunds
             </p>
           </div>
           <div className="flex items-center gap-3">
@@ -255,7 +401,7 @@ export default function TelegramAdminPage() {
               href="/admin"
               className="px-4 py-2 text-sm font-mono bg-bg-secondary text-text-muted border border-border-subtle rounded-lg hover:bg-bg-card-hover transition-colors"
             >
-              ← Back to Admin
+              ← Back
             </Link>
             <WalletMultiButton className="!bg-success/20 !text-success !font-mono !rounded-lg !border !border-success/30 !text-sm" />
           </div>
@@ -263,7 +409,7 @@ export default function TelegramAdminPage() {
       </motion.div>
 
       {/* Main Content */}
-      <div className="max-w-6xl mx-auto space-y-6">
+      <div className="max-w-7xl mx-auto space-y-6">
         {/* Auth Button */}
         {!adminAuthSignature && (
           <motion.div
@@ -284,281 +430,558 @@ export default function TelegramAdminPage() {
           </motion.div>
         )}
 
-        {/* Stats Cards */}
-        {stats && (
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="grid grid-cols-3 md:grid-cols-6 gap-3"
-          >
-            <div className="card-glow bg-bg-card p-4 text-center">
-              <div className="text-2xl font-bold text-text-primary">{stats.total}</div>
-              <div className="text-xs text-text-muted font-mono">Total</div>
-            </div>
-            <div className="card-glow bg-bg-card p-4 text-center">
-              <div className="text-2xl font-bold text-warning">{stats.awaiting}</div>
-              <div className="text-xs text-text-muted font-mono">Awaiting</div>
-            </div>
-            <div className="card-glow bg-bg-card p-4 text-center">
-              <div className="text-2xl font-bold text-success">{stats.completed}</div>
-              <div className="text-xs text-text-muted font-mono">Completed</div>
-            </div>
-            <div className="card-glow bg-bg-card p-4 text-center">
-              <div className="text-2xl font-bold text-error">{stats.failed}</div>
-              <div className="text-xs text-text-muted font-mono">Failed</div>
-            </div>
-            <div className="card-glow bg-bg-card p-4 text-center">
-              <div className="text-2xl font-bold text-text-muted">{stats.expired}</div>
-              <div className="text-xs text-text-muted font-mono">Expired</div>
-            </div>
-            <div className="card-glow bg-bg-card p-4 text-center">
-              <div className="text-2xl font-bold text-accent-secondary">{stats.refunded}</div>
-              <div className="text-xs text-text-muted font-mono">Refunded</div>
-            </div>
-          </motion.div>
-        )}
-
-        {/* Pending Refunds Alert */}
-        {pendingRefunds.length > 0 && (
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="card-glow bg-error/10 border border-error/30 p-4"
-          >
-            <h2 className="font-display text-lg font-semibold text-error mb-3 flex items-center gap-2">
-              <span>⚠️</span>
-              {pendingRefunds.length} Launch{pendingRefunds.length > 1 ? 'es' : ''} Need Refund
-            </h2>
-            <div className="space-y-2">
-              {pendingRefunds.map((launch) => (
-                <div
-                  key={launch.id}
-                  className="flex items-center justify-between bg-bg-card rounded-lg p-3"
-                >
-                  <div>
-                    <span className="font-semibold text-text-primary">{launch.token_symbol}</span>
-                    <span className="text-text-muted text-sm ml-2">
-                      {launch.current_balance?.toFixed(6) || launch.deposit_received_sol.toFixed(6)} SOL
-                    </span>
-                    {launch.original_funder && (
-                      <span className="text-text-muted text-xs ml-2">
-                        → {launch.original_funder.slice(0, 6)}...
-                      </span>
-                    )}
-                  </div>
-                  <button
-                    onClick={() => {
-                      setRefundModal(launch)
-                      setRefundAddress(launch.original_funder || '')
-                    }}
-                    className="px-3 py-1 text-xs font-mono bg-error/20 text-error border border-error/30 rounded hover:bg-error/30 transition-colors"
-                  >
-                    Refund
-                  </button>
-                </div>
-              ))}
-            </div>
-          </motion.div>
-        )}
-
-        {/* Launches List */}
         {adminAuthSignature && (
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="card-glow bg-bg-card p-4"
-          >
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="font-display text-lg font-semibold text-text-primary">
-                All Launches
-              </h2>
-              <div className="flex items-center gap-2">
-                {/* Status Filter */}
-                <select
-                  value={statusFilter}
-                  onChange={(e) => {
-                    setStatusFilter(e.target.value as StatusFilter)
-                    if (adminAuthSignature && adminAuthMessage && publicKey) {
-                      fetchTelegramLaunches(
-                        publicKey.toString(),
-                        adminAuthSignature,
-                        adminAuthMessage,
-                        { status: e.target.value === 'all' ? undefined : e.target.value }
-                      ).then((data) => {
-                        if (data) setLaunches(data.launches)
-                      })
-                    }
-                  }}
-                  className="bg-bg-secondary border border-border-subtle rounded-lg px-3 py-1 text-sm font-mono text-text-primary focus:outline-none"
-                >
-                  <option value="all">All Status</option>
-                  <option value="awaiting_deposit">Awaiting</option>
-                  <option value="launching">Launching</option>
-                  <option value="completed">Completed</option>
-                  <option value="failed">Failed</option>
-                  <option value="expired">Expired</option>
-                  <option value="refunded">Refunded</option>
-                </select>
+          <>
+            {/* Bot Health & Auto-Refresh Bar */}
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="card-glow bg-bg-card p-4 flex items-center justify-between flex-wrap gap-4"
+            >
+              {/* Bot Health */}
+              <div className="flex items-center gap-4">
+                <div className="flex items-center gap-2">
+                  <div className={`w-3 h-3 rounded-full ${botHealth?.botHealthy ? 'bg-success animate-pulse' : 'bg-error'}`} />
+                  <span className="text-sm font-mono text-text-primary">
+                    Deposit Monitor: {botHealth?.depositMonitor.running ? 'Running' : 'Stopped'}
+                  </span>
+                </div>
+                {botHealth?.lastActivity && (
+                  <span className="text-xs text-text-muted font-mono">
+                    Last activity: {botHealth.lastActivity.minutesAgo}m ago ({botHealth.lastActivity.eventType})
+                  </span>
+                )}
+              </div>
+
+              {/* Auto-Refresh Controls */}
+              <div className="flex items-center gap-4">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={autoRefresh}
+                    onChange={(e) => setAutoRefresh(e.target.checked)}
+                    className="rounded border-border-subtle"
+                  />
+                  <span className="text-sm font-mono text-text-secondary">Auto-refresh</span>
+                </label>
+                {autoRefresh && (
+                  <select
+                    value={refreshInterval}
+                    onChange={(e) => setRefreshInterval(Number(e.target.value))}
+                    className="bg-bg-secondary border border-border-subtle rounded px-2 py-1 text-xs font-mono text-text-primary"
+                  >
+                    <option value={15}>15s</option>
+                    <option value={30}>30s</option>
+                    <option value={60}>60s</option>
+                  </select>
+                )}
+                {lastRefresh && (
+                  <span className="text-xs text-text-muted font-mono">
+                    Updated: {lastRefresh.toLocaleTimeString()}
+                  </span>
+                )}
                 <button
                   onClick={reloadData}
                   disabled={isLoading}
                   className="px-3 py-1 text-xs font-mono bg-bg-secondary hover:bg-bg-card-hover border border-border-subtle rounded-lg transition-colors disabled:opacity-50"
                 >
-                  {isLoading ? 'Loading...' : 'Refresh'}
+                  {isLoading ? '...' : '↻ Refresh'}
                 </button>
               </div>
-            </div>
+            </motion.div>
 
-            {/* Launches Table */}
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-border-subtle">
-                    <th className="text-left py-2 px-3 font-mono text-text-muted">Token</th>
-                    <th className="text-left py-2 px-3 font-mono text-text-muted">User</th>
-                    <th className="text-left py-2 px-3 font-mono text-text-muted">Status</th>
-                    <th className="text-right py-2 px-3 font-mono text-text-muted">Deposit</th>
-                    <th className="text-left py-2 px-3 font-mono text-text-muted">Created</th>
-                    <th className="text-right py-2 px-3 font-mono text-text-muted">Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {launches.length === 0 ? (
-                    <tr>
-                      <td colSpan={6} className="text-center py-8 text-text-muted font-mono">
-                        No launches found
-                      </td>
-                    </tr>
-                  ) : (
-                    launches.map((launch) => (
-                      <tr key={launch.id} className="border-b border-border-subtle hover:bg-bg-secondary/50">
-                        <td className="py-3 px-3">
-                          <div className="font-semibold text-text-primary">{launch.token_symbol}</div>
-                          <div className="text-xs text-text-muted">{launch.token_name}</div>
-                        </td>
-                        <td className="py-3 px-3">
-                          <div className="font-mono text-xs text-text-primary">
-                            @{launch.telegram_users?.telegram_username || 'Unknown'}
-                          </div>
-                          <div className="text-xs text-text-muted">
-                            ID: {launch.telegram_users?.telegram_id}
-                          </div>
-                        </td>
-                        <td className="py-3 px-3">
-                          {getStatusBadge(launch.status)}
-                          {launch.error_message && (
-                            <div className="text-xs text-error mt-1 max-w-[150px] truncate" title={launch.error_message}>
-                              {launch.error_message}
-                            </div>
-                          )}
-                        </td>
-                        <td className="py-3 px-3 text-right">
-                          <div className="font-mono text-text-primary">
-                            {launch.deposit_received_sol > 0 ? `${launch.deposit_received_sol.toFixed(4)} SOL` : '-'}
-                          </div>
-                        </td>
-                        <td className="py-3 px-3">
-                          <div className="text-xs text-text-muted">
-                            {new Date(launch.created_at).toLocaleDateString()}
-                          </div>
-                          <div className="text-xs text-text-muted">
-                            {new Date(launch.created_at).toLocaleTimeString()}
-                          </div>
-                        </td>
-                        <td className="py-3 px-3 text-right">
-                          <div className="flex items-center justify-end gap-2">
-                            {['failed', 'expired'].includes(launch.status) && launch.deposit_received_sol > 0 && (
-                              <button
-                                onClick={() => {
-                                  setRefundModal(launch)
-                                  setRefundAddress(launch.original_funder || '')
-                                }}
-                                className="px-2 py-1 text-xs font-mono bg-error/20 text-error border border-error/30 rounded hover:bg-error/30 transition-colors"
-                              >
-                                Refund
-                              </button>
-                            )}
-                            {['awaiting_deposit', 'launching'].includes(launch.status) && (
-                              <button
-                                onClick={() => handleCancel(launch)}
-                                className="px-2 py-1 text-xs font-mono bg-text-muted/20 text-text-muted border border-text-muted/30 rounded hover:bg-text-muted/30 transition-colors"
-                              >
-                                Cancel
-                              </button>
-                            )}
-                            {launch.token_mint_address && (
-                              <a
-                                href={`https://solscan.io/token/${launch.token_mint_address}`}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="px-2 py-1 text-xs font-mono bg-accent-primary/20 text-accent-primary border border-accent-primary/30 rounded hover:bg-accent-primary/30 transition-colors"
-                              >
-                                View
-                              </a>
-                            )}
-                          </div>
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </motion.div>
-        )}
+            {/* Financial Metrics */}
+            {financialMetrics && (
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3"
+              >
+                <div className="card-glow bg-bg-card p-4">
+                  <div className="text-xs text-text-muted font-mono mb-1">Total SOL Processed</div>
+                  <div className="text-xl font-bold text-success">{financialMetrics.totalSolProcessed.toFixed(2)}</div>
+                </div>
+                <div className="card-glow bg-bg-card p-4">
+                  <div className="text-xs text-text-muted font-mono mb-1">Platform Revenue</div>
+                  <div className="text-xl font-bold text-accent-primary">{financialMetrics.platformRevenue.toFixed(4)}</div>
+                </div>
+                <div className="card-glow bg-bg-card p-4">
+                  <div className="text-xs text-text-muted font-mono mb-1">Pending SOL</div>
+                  <div className="text-xl font-bold text-warning">{financialMetrics.pendingSol.toFixed(2)}</div>
+                </div>
+                <div className="card-glow bg-bg-card p-4">
+                  <div className="text-xs text-text-muted font-mono mb-1">Total Refunded</div>
+                  <div className="text-xl font-bold text-error">{financialMetrics.totalRefunded.toFixed(2)}</div>
+                </div>
+                <div className="card-glow bg-bg-card p-4">
+                  <div className="text-xs text-text-muted font-mono mb-1">Today&apos;s Launches</div>
+                  <div className="text-xl font-bold text-text-primary">{financialMetrics.today.launches}</div>
+                </div>
+                <div className="card-glow bg-bg-card p-4">
+                  <div className="text-xs text-text-muted font-mono mb-1">Today&apos;s Deposits</div>
+                  <div className="text-xl font-bold text-text-primary">{financialMetrics.today.deposits.toFixed(2)}</div>
+                </div>
+              </motion.div>
+            )}
 
-        {/* Audit Logs */}
-        {adminAuthSignature && (
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="card-glow bg-bg-card p-4"
-          >
-            <button
-              onClick={() => setShowLogs(!showLogs)}
-              className="w-full flex items-center justify-between"
-            >
-              <h2 className="font-display text-lg font-semibold text-text-primary flex items-center gap-2">
-                <span className="text-accent-primary">◈</span>
-                Audit Logs
-                <span className="text-xs font-mono text-text-muted">({logs.length})</span>
-              </h2>
-              <span className="text-text-muted text-sm">{showLogs ? '▼' : '▶'}</span>
-            </button>
+            {/* Stats Cards */}
+            {stats && (
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="grid grid-cols-3 md:grid-cols-7 gap-2"
+              >
+                <div className="card-glow bg-bg-card p-3 text-center">
+                  <div className="text-lg font-bold text-text-primary">{stats.total}</div>
+                  <div className="text-xs text-text-muted font-mono">Total</div>
+                </div>
+                <div className="card-glow bg-bg-card p-3 text-center">
+                  <div className="text-lg font-bold text-warning">{stats.awaiting}</div>
+                  <div className="text-xs text-text-muted font-mono">Awaiting</div>
+                </div>
+                <div className="card-glow bg-bg-card p-3 text-center">
+                  <div className="text-lg font-bold text-accent-primary">{stats.launching}</div>
+                  <div className="text-xs text-text-muted font-mono">Launching</div>
+                </div>
+                <div className="card-glow bg-bg-card p-3 text-center">
+                  <div className="text-lg font-bold text-success">{stats.completed}</div>
+                  <div className="text-xs text-text-muted font-mono">Completed</div>
+                </div>
+                <div className="card-glow bg-bg-card p-3 text-center">
+                  <div className="text-lg font-bold text-error">{stats.failed}</div>
+                  <div className="text-xs text-text-muted font-mono">Failed</div>
+                </div>
+                <div className="card-glow bg-bg-card p-3 text-center">
+                  <div className="text-lg font-bold text-text-muted">{stats.expired}</div>
+                  <div className="text-xs text-text-muted font-mono">Expired</div>
+                </div>
+                <div className="card-glow bg-bg-card p-3 text-center">
+                  <div className="text-lg font-bold text-accent-secondary">{stats.refunded}</div>
+                  <div className="text-xs text-text-muted font-mono">Refunded</div>
+                </div>
+              </motion.div>
+            )}
 
-            {showLogs && (
-              <div className="mt-4 bg-bg-secondary rounded-lg p-3 font-mono text-xs max-h-80 overflow-y-auto">
-                {logs.length === 0 ? (
-                  <div className="text-text-muted">No audit logs available</div>
-                ) : (
-                  logs.map((log) => (
-                    <div key={log.id} className="py-1 border-b border-border-subtle last:border-0">
-                      <div className="flex items-center gap-2">
-                        <span className="text-text-muted">
-                          [{new Date(log.created_at).toLocaleString()}]
+            {/* Pending Refunds Alert */}
+            {pendingRefunds.length > 0 && (
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="card-glow bg-error/10 border border-error/30 p-4"
+              >
+                <h2 className="font-display text-lg font-semibold text-error mb-3 flex items-center gap-2">
+                  <span>⚠️</span>
+                  {pendingRefunds.length} Launch{pendingRefunds.length > 1 ? 'es' : ''} Need Refund
+                </h2>
+                <div className="space-y-2 max-h-40 overflow-y-auto">
+                  {pendingRefunds.map((launch) => (
+                    <div
+                      key={launch.id}
+                      className="flex items-center justify-between bg-bg-card rounded-lg p-3"
+                    >
+                      <div>
+                        <span className="font-semibold text-text-primary">{launch.token_symbol}</span>
+                        <span className="text-text-muted text-sm ml-2">
+                          {launch.current_balance?.toFixed(6) || launch.deposit_received_sol.toFixed(6)} SOL
                         </span>
-                        <span className={`font-semibold ${
-                          log.event_type.includes('failed') || log.event_type.includes('error') ? 'text-error' :
-                          log.event_type.includes('completed') || log.event_type.includes('success') ? 'text-success' :
-                          'text-accent-primary'
-                        }`}>
-                          {log.event_type.toUpperCase()}
-                        </span>
-                        {log.telegram_id && (
-                          <span className="text-text-muted">User: {log.telegram_id}</span>
+                        {launch.original_funder && (
+                          <span className="text-text-muted text-xs ml-2">
+                            → {launch.original_funder.slice(0, 6)}...
+                          </span>
                         )}
                       </div>
-                      {log.details && (
-                        <div className="text-text-muted pl-4 mt-1">
-                          {JSON.stringify(log.details)}
-                        </div>
-                      )}
+                      <button
+                        onClick={() => {
+                          setRefundModal(launch)
+                          setRefundAddress(launch.original_funder || '')
+                        }}
+                        className="px-3 py-1 text-xs font-mono bg-error/20 text-error border border-error/30 rounded hover:bg-error/30 transition-colors"
+                      >
+                        Refund
+                      </button>
                     </div>
-                  ))
-                )}
-              </div>
+                  ))}
+                </div>
+              </motion.div>
             )}
-          </motion.div>
+
+            {/* Tabs */}
+            <div className="flex gap-2 border-b border-border-subtle pb-2">
+              {(['launches', 'users', 'logs'] as TabView[]).map((tab) => (
+                <button
+                  key={tab}
+                  onClick={() => setCurrentTab(tab)}
+                  className={`px-4 py-2 text-sm font-mono rounded-t-lg transition-colors ${
+                    currentTab === tab
+                      ? 'bg-bg-card text-accent-primary border-b-2 border-accent-primary'
+                      : 'text-text-muted hover:text-text-primary'
+                  }`}
+                >
+                  {tab === 'launches' && `Launches (${totalLaunches})`}
+                  {tab === 'users' && `Users (${totalUsers})`}
+                  {tab === 'logs' && `Logs (${logs.length})`}
+                </button>
+              ))}
+            </div>
+
+            {/* Launches Tab */}
+            {currentTab === 'launches' && (
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="card-glow bg-bg-card p-4"
+              >
+                {/* Controls Bar */}
+                <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    {/* Search */}
+                    <input
+                      type="text"
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      placeholder="Search token..."
+                      className="bg-bg-secondary border border-border-subtle rounded-lg px-3 py-1.5 text-sm font-mono text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent-primary w-48"
+                    />
+                    {/* Status Filter */}
+                    <select
+                      value={statusFilter}
+                      onChange={(e) => {
+                        setStatusFilter(e.target.value as StatusFilter)
+                        setCurrentPage(1)
+                      }}
+                      className="bg-bg-secondary border border-border-subtle rounded-lg px-3 py-1.5 text-sm font-mono text-text-primary focus:outline-none"
+                    >
+                      <option value="all">All Status</option>
+                      <option value="awaiting_deposit">Awaiting</option>
+                      <option value="launching">Launching</option>
+                      <option value="completed">Completed</option>
+                      <option value="failed">Failed</option>
+                      <option value="expired">Expired</option>
+                      <option value="refunded">Refunded</option>
+                    </select>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {/* Bulk Actions */}
+                    {selectedLaunches.size > 0 && (
+                      <button
+                        onClick={() => setShowBulkRefundModal(true)}
+                        className="px-3 py-1.5 text-xs font-mono bg-error/20 text-error border border-error/30 rounded-lg hover:bg-error/30 transition-colors"
+                      >
+                        Bulk Refund ({selectedLaunches.size})
+                      </button>
+                    )}
+                    <button
+                      onClick={selectAllRefundable}
+                      className="px-3 py-1.5 text-xs font-mono bg-bg-secondary hover:bg-bg-card-hover border border-border-subtle rounded-lg transition-colors"
+                    >
+                      Select Refundable
+                    </button>
+                    <button
+                      onClick={handleExport}
+                      className="px-3 py-1.5 text-xs font-mono bg-bg-secondary hover:bg-bg-card-hover border border-border-subtle rounded-lg transition-colors"
+                    >
+                      Export
+                    </button>
+                  </div>
+                </div>
+
+                {/* Launches Table */}
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-border-subtle">
+                        <th className="text-left py-2 px-2 w-8">
+                          <input
+                            type="checkbox"
+                            checked={selectedLaunches.size === launches.length && launches.length > 0}
+                            onChange={() => {
+                              if (selectedLaunches.size === launches.length) {
+                                setSelectedLaunches(new Set())
+                              } else {
+                                setSelectedLaunches(new Set(launches.map(l => l.id)))
+                              }
+                            }}
+                            className="rounded border-border-subtle"
+                          />
+                        </th>
+                        <th className="text-left py-2 px-3 font-mono text-text-muted">Token</th>
+                        <th className="text-left py-2 px-3 font-mono text-text-muted">User</th>
+                        <th className="text-left py-2 px-3 font-mono text-text-muted">Status</th>
+                        <th className="text-right py-2 px-3 font-mono text-text-muted">Deposit</th>
+                        <th className="text-left py-2 px-3 font-mono text-text-muted">Created</th>
+                        <th className="text-right py-2 px-3 font-mono text-text-muted">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {launches.length === 0 ? (
+                        <tr>
+                          <td colSpan={7} className="text-center py-8 text-text-muted font-mono">
+                            No launches found
+                          </td>
+                        </tr>
+                      ) : (
+                        launches.map((launch) => (
+                          <>
+                            <tr
+                              key={launch.id}
+                              className={`border-b border-border-subtle hover:bg-bg-secondary/50 cursor-pointer ${expandedLaunch === launch.id ? 'bg-bg-secondary/30' : ''}`}
+                              onClick={() => setExpandedLaunch(expandedLaunch === launch.id ? null : launch.id)}
+                            >
+                              <td className="py-3 px-2" onClick={(e) => e.stopPropagation()}>
+                                <input
+                                  type="checkbox"
+                                  checked={selectedLaunches.has(launch.id)}
+                                  onChange={() => toggleLaunchSelection(launch.id)}
+                                  className="rounded border-border-subtle"
+                                />
+                              </td>
+                              <td className="py-3 px-3">
+                                <div className="font-semibold text-text-primary">{launch.token_symbol}</div>
+                                <div className="text-xs text-text-muted">{launch.token_name}</div>
+                              </td>
+                              <td className="py-3 px-3">
+                                <div className="font-mono text-xs text-text-primary">
+                                  @{launch.telegram_users?.telegram_username || 'Unknown'}
+                                </div>
+                                <div className="text-xs text-text-muted">
+                                  ID: {launch.telegram_users?.telegram_id}
+                                </div>
+                              </td>
+                              <td className="py-3 px-3">
+                                {getStatusBadge(launch.status)}
+                                {launch.error_message && (
+                                  <div className="text-xs text-error mt-1 max-w-[150px] truncate" title={launch.error_message}>
+                                    {launch.error_message}
+                                  </div>
+                                )}
+                              </td>
+                              <td className="py-3 px-3 text-right">
+                                <div className="font-mono text-text-primary">
+                                  {launch.deposit_received_sol > 0 ? `${launch.deposit_received_sol.toFixed(4)} SOL` : '-'}
+                                </div>
+                              </td>
+                              <td className="py-3 px-3">
+                                <div className="text-xs text-text-muted">
+                                  {new Date(launch.created_at).toLocaleDateString()}
+                                </div>
+                                <div className="text-xs text-text-muted">
+                                  {new Date(launch.created_at).toLocaleTimeString()}
+                                </div>
+                              </td>
+                              <td className="py-3 px-3 text-right" onClick={(e) => e.stopPropagation()}>
+                                <div className="flex items-center justify-end gap-2">
+                                  {['failed', 'expired'].includes(launch.status) && launch.deposit_received_sol > 0 && (
+                                    <button
+                                      onClick={() => {
+                                        setRefundModal(launch)
+                                        setRefundAddress(launch.original_funder || '')
+                                      }}
+                                      className="px-2 py-1 text-xs font-mono bg-error/20 text-error border border-error/30 rounded hover:bg-error/30 transition-colors"
+                                    >
+                                      Refund
+                                    </button>
+                                  )}
+                                  {['awaiting_deposit', 'launching'].includes(launch.status) && (
+                                    <button
+                                      onClick={() => handleCancel(launch)}
+                                      className="px-2 py-1 text-xs font-mono bg-text-muted/20 text-text-muted border border-text-muted/30 rounded hover:bg-text-muted/30 transition-colors"
+                                    >
+                                      Cancel
+                                    </button>
+                                  )}
+                                  {launch.token_mint_address && (
+                                    <a
+                                      href={`https://solscan.io/token/${launch.token_mint_address}`}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="px-2 py-1 text-xs font-mono bg-accent-primary/20 text-accent-primary border border-accent-primary/30 rounded hover:bg-accent-primary/30 transition-colors"
+                                    >
+                                      View
+                                    </a>
+                                  )}
+                                </div>
+                              </td>
+                            </tr>
+                            {/* Expanded Details Row */}
+                            <AnimatePresence>
+                              {expandedLaunch === launch.id && (
+                                <motion.tr
+                                  key={`${launch.id}-details`}
+                                  initial={{ opacity: 0, height: 0 }}
+                                  animate={{ opacity: 1, height: 'auto' }}
+                                  exit={{ opacity: 0, height: 0 }}
+                                >
+                                  <td colSpan={7} className="bg-bg-secondary/30 p-4">
+                                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-xs">
+                                      <div>
+                                        <div className="text-text-muted font-mono mb-1">Dev Wallet</div>
+                                        <div className="text-text-primary font-mono break-all">{launch.dev_wallet_address}</div>
+                                      </div>
+                                      <div>
+                                        <div className="text-text-muted font-mono mb-1">Ops Wallet</div>
+                                        <div className="text-text-primary font-mono break-all">{launch.ops_wallet_address}</div>
+                                      </div>
+                                      {launch.token_mint_address && (
+                                        <div>
+                                          <div className="text-text-muted font-mono mb-1">Token Mint</div>
+                                          <div className="text-text-primary font-mono break-all">{launch.token_mint_address}</div>
+                                        </div>
+                                      )}
+                                      <div>
+                                        <div className="text-text-muted font-mono mb-1">Expires</div>
+                                        <div className="text-text-primary font-mono">{new Date(launch.expires_at).toLocaleString()}</div>
+                                      </div>
+                                      {launch.token_description && (
+                                        <div className="col-span-2 md:col-span-4">
+                                          <div className="text-text-muted font-mono mb-1">Description</div>
+                                          <div className="text-text-primary">{launch.token_description}</div>
+                                        </div>
+                                      )}
+                                      {launch.error_message && (
+                                        <div className="col-span-2 md:col-span-4">
+                                          <div className="text-error font-mono mb-1">Error</div>
+                                          <div className="text-error">{launch.error_message}</div>
+                                        </div>
+                                      )}
+                                    </div>
+                                  </td>
+                                </motion.tr>
+                              )}
+                            </AnimatePresence>
+                          </>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Pagination */}
+                {totalPages > 1 && (
+                  <div className="flex items-center justify-between mt-4 pt-4 border-t border-border-subtle">
+                    <div className="text-sm text-text-muted font-mono">
+                      Page {currentPage} of {totalPages} ({totalLaunches} total)
+                    </div>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => setCurrentPage(Math.max(1, currentPage - 1))}
+                        disabled={currentPage === 1}
+                        className="px-3 py-1 text-sm font-mono bg-bg-secondary border border-border-subtle rounded disabled:opacity-50"
+                      >
+                        Prev
+                      </button>
+                      <button
+                        onClick={() => setCurrentPage(Math.min(totalPages, currentPage + 1))}
+                        disabled={currentPage === totalPages}
+                        className="px-3 py-1 text-sm font-mono bg-bg-secondary border border-border-subtle rounded disabled:opacity-50"
+                      >
+                        Next
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </motion.div>
+            )}
+
+            {/* Users Tab */}
+            {currentTab === 'users' && (
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="card-glow bg-bg-card p-4"
+              >
+                <h2 className="font-display text-lg font-semibold text-text-primary mb-4">
+                  Telegram Users ({totalUsers})
+                </h2>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-border-subtle">
+                        <th className="text-left py-2 px-3 font-mono text-text-muted">Username</th>
+                        <th className="text-left py-2 px-3 font-mono text-text-muted">Telegram ID</th>
+                        <th className="text-center py-2 px-3 font-mono text-text-muted">Launches</th>
+                        <th className="text-left py-2 px-3 font-mono text-text-muted">Joined</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {telegramUsers.length === 0 ? (
+                        <tr>
+                          <td colSpan={4} className="text-center py-8 text-text-muted font-mono">
+                            No users found
+                          </td>
+                        </tr>
+                      ) : (
+                        telegramUsers.map((user) => (
+                          <tr key={user.id} className="border-b border-border-subtle hover:bg-bg-secondary/50">
+                            <td className="py-3 px-3">
+                              <span className="font-mono text-text-primary">
+                                @{user.username || 'Unknown'}
+                              </span>
+                            </td>
+                            <td className="py-3 px-3">
+                              <span className="font-mono text-text-muted">{user.telegramId}</span>
+                            </td>
+                            <td className="py-3 px-3 text-center">
+                              <span className={`font-mono ${user.launchCount > 0 ? 'text-accent-primary' : 'text-text-muted'}`}>
+                                {user.launchCount}
+                              </span>
+                            </td>
+                            <td className="py-3 px-3">
+                              <span className="text-text-muted text-xs">
+                                {new Date(user.createdAt).toLocaleDateString()}
+                              </span>
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </motion.div>
+            )}
+
+            {/* Logs Tab */}
+            {currentTab === 'logs' && (
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="card-glow bg-bg-card p-4"
+              >
+                <h2 className="font-display text-lg font-semibold text-text-primary mb-4">
+                  Audit Logs ({logs.length})
+                </h2>
+                <div className="bg-bg-secondary rounded-lg p-3 font-mono text-xs max-h-96 overflow-y-auto">
+                  {logs.length === 0 ? (
+                    <div className="text-text-muted">No audit logs available</div>
+                  ) : (
+                    logs.map((log) => (
+                      <div key={log.id} className="py-2 border-b border-border-subtle last:border-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-text-muted">
+                            [{new Date(log.created_at).toLocaleString()}]
+                          </span>
+                          <span className={`font-semibold ${
+                            log.event_type.includes('failed') || log.event_type.includes('error') ? 'text-error' :
+                            log.event_type.includes('completed') || log.event_type.includes('success') ? 'text-success' :
+                            'text-accent-primary'
+                          }`}>
+                            {log.event_type.toUpperCase()}
+                          </span>
+                          {log.telegram_id && (
+                            <span className="text-text-muted">User: {log.telegram_id}</span>
+                          )}
+                        </div>
+                        {log.details && (
+                          <div className="text-text-muted pl-4 mt-1 break-all">
+                            {JSON.stringify(log.details)}
+                          </div>
+                        )}
+                      </div>
+                    ))
+                  )}
+                </div>
+              </motion.div>
+            )}
+          </>
         )}
 
         {/* Refund Modal */}
@@ -625,6 +1048,56 @@ export default function TelegramAdminPage() {
                     className="px-4 py-2 text-sm font-mono bg-success/20 text-success border border-success/30 rounded-lg hover:bg-success/30 transition-colors disabled:opacity-50"
                   >
                     {isRefunding ? 'Processing...' : 'Execute Refund'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Bulk Refund Modal */}
+        {showBulkRefundModal && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+            <div className="bg-bg-card border border-border-subtle rounded-xl p-6 max-w-md w-full mx-4">
+              <h3 className="text-lg font-semibold text-text-primary mb-4">
+                Bulk Refund
+              </h3>
+
+              <div className="space-y-4">
+                <div className="bg-bg-secondary rounded-lg p-3">
+                  <div className="text-xs text-text-muted mb-1">Selected Launches</div>
+                  <div className="text-xl font-bold text-error">
+                    {selectedLaunches.size} launch{selectedLaunches.size !== 1 ? 'es' : ''}
+                  </div>
+                </div>
+
+                <p className="text-text-muted text-sm">
+                  This will automatically refund each selected launch to its original funder address.
+                </p>
+
+                {bulkRefundResults && (
+                  <div className="bg-success/20 text-success border border-success/30 p-3 rounded-lg font-mono text-sm">
+                    Completed: {bulkRefundResults.successful}/{bulkRefundResults.total} successful
+                    {bulkRefundResults.failed > 0 && `, ${bulkRefundResults.failed} failed`}
+                  </div>
+                )}
+
+                <div className="flex gap-3 justify-end">
+                  <button
+                    onClick={() => {
+                      setShowBulkRefundModal(false)
+                      setBulkRefundResults(null)
+                    }}
+                    className="px-4 py-2 text-sm font-mono bg-bg-secondary text-text-muted border border-border-subtle rounded-lg hover:bg-bg-card-hover transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleBulkRefund}
+                    disabled={isBulkRefunding}
+                    className="px-4 py-2 text-sm font-mono bg-error/20 text-error border border-error/30 rounded-lg hover:bg-error/30 transition-colors disabled:opacity-50"
+                  >
+                    {isBulkRefunding ? 'Processing...' : 'Execute Bulk Refund'}
                   </button>
                 </div>
               </div>

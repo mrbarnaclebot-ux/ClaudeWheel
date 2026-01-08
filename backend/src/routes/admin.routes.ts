@@ -16,6 +16,7 @@ import {
   getTelegramAuditLogs,
   getLaunchStats,
 } from '../services/refund.service'
+import { getDepositMonitorStatus } from '../jobs/deposit-monitor.job'
 
 // Platform token CA - this token cannot be suspended
 const PLATFORM_TOKEN_MINT = '8JLGQ7RqhsvhsDhvjMuJUeeuaQ53GTJqSHNaBWf4BAGS'
@@ -1564,6 +1565,470 @@ router.post('/telegram/launch/:id/cancel', verifyAdminAuth, async (req: Request,
     })
   } catch (error) {
     console.error('Error cancelling launch:', error)
+    return res.status(500).json({ error: 'Internal server error' })
+  }
+})
+
+/**
+ * GET /api/admin/telegram/bot-health
+ * Get bot and deposit monitor health status (admin only)
+ */
+router.get('/telegram/bot-health', verifyAdminAuth, async (req: Request, res: Response) => {
+  try {
+    if (!supabase) {
+      return res.status(500).json({ error: 'Database not configured' })
+    }
+
+    // Get deposit monitor status
+    const depositMonitorStatus = getDepositMonitorStatus()
+
+    // Get last activity from audit logs
+    const { data: lastActivity } = await supabase
+      .from('audit_log')
+      .select('created_at, event_type')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .single()
+
+    // Get last successful launch
+    const { data: lastLaunch } = await supabase
+      .from('pending_token_launches')
+      .select('created_at, token_symbol, status')
+      .order('updated_at', { ascending: false })
+      .limit(1)
+      .single()
+
+    // Check if bot is responsive by looking at recent activity
+    const lastActivityTime = lastActivity?.created_at
+      ? new Date(lastActivity.created_at)
+      : null
+    const minutesSinceLastActivity = lastActivityTime
+      ? Math.floor((Date.now() - lastActivityTime.getTime()) / 60000)
+      : null
+
+    return res.json({
+      success: true,
+      data: {
+        depositMonitor: {
+          running: depositMonitorStatus.running,
+          isProcessing: depositMonitorStatus.isProcessing,
+        },
+        lastActivity: lastActivity ? {
+          timestamp: lastActivity.created_at,
+          eventType: lastActivity.event_type,
+          minutesAgo: minutesSinceLastActivity,
+        } : null,
+        lastLaunch: lastLaunch ? {
+          timestamp: lastLaunch.created_at,
+          tokenSymbol: lastLaunch.token_symbol,
+          status: lastLaunch.status,
+        } : null,
+        botHealthy: depositMonitorStatus.running,
+      },
+    })
+  } catch (error) {
+    console.error('Error fetching bot health:', error)
+    return res.status(500).json({ error: 'Internal server error' })
+  }
+})
+
+/**
+ * GET /api/admin/telegram/financial-metrics
+ * Get financial metrics for Telegram launches (admin only)
+ */
+router.get('/telegram/financial-metrics', verifyAdminAuth, async (req: Request, res: Response) => {
+  try {
+    if (!supabase) {
+      return res.status(500).json({ error: 'Database not configured' })
+    }
+
+    // Get all launches for calculations
+    const { data: launches, error } = await supabase
+      .from('pending_token_launches')
+      .select('status, deposit_received_sol, created_at')
+
+    if (error) {
+      console.error('Error fetching launches for metrics:', error)
+      return res.status(500).json({ error: 'Failed to fetch financial metrics' })
+    }
+
+    // Calculate metrics
+    let totalSolProcessed = 0
+    let totalRefunded = 0
+    let pendingSol = 0
+    let launchFeesCollected = 0 // 0.1 SOL per successful launch
+    const todayStart = new Date()
+    todayStart.setHours(0, 0, 0, 0)
+    let todayLaunches = 0
+    let todayDeposits = 0
+
+    for (const launch of launches || []) {
+      const depositSol = Number(launch.deposit_received_sol) || 0
+
+      if (launch.status === 'completed') {
+        totalSolProcessed += depositSol
+        launchFeesCollected += 0.1 // Launch fee per successful launch
+      } else if (launch.status === 'refunded') {
+        totalRefunded += depositSol
+      } else if (['awaiting_deposit', 'launching'].includes(launch.status)) {
+        pendingSol += depositSol
+      }
+
+      // Check if today
+      if (new Date(launch.created_at) >= todayStart) {
+        todayLaunches++
+        todayDeposits += depositSol
+      }
+    }
+
+    // Get platform claim revenue (10% of all claims)
+    const { data: claimHistory } = await supabase
+      .from('user_claim_history')
+      .select('platform_fee_sol')
+
+    let platformRevenue = launchFeesCollected
+    for (const claim of claimHistory || []) {
+      platformRevenue += Number(claim.platform_fee_sol) || 0
+    }
+
+    return res.json({
+      success: true,
+      data: {
+        totalSolProcessed,
+        totalRefunded,
+        pendingSol,
+        launchFeesCollected,
+        platformRevenue,
+        today: {
+          launches: todayLaunches,
+          deposits: todayDeposits,
+        },
+      },
+    })
+  } catch (error) {
+    console.error('Error fetching financial metrics:', error)
+    return res.status(500).json({ error: 'Internal server error' })
+  }
+})
+
+/**
+ * GET /api/admin/telegram/users
+ * Get list of Telegram users with their launch counts (admin only)
+ */
+router.get('/telegram/users', verifyAdminAuth, async (req: Request, res: Response) => {
+  try {
+    if (!supabase) {
+      return res.status(500).json({ error: 'Database not configured' })
+    }
+
+    const { limit = 50, offset = 0, search } = req.query
+
+    // Get telegram users with launch counts
+    let query = supabase
+      .from('telegram_users')
+      .select(`
+        id,
+        telegram_id,
+        telegram_username,
+        created_at,
+        pending_token_launches(count)
+      `)
+      .order('created_at', { ascending: false })
+      .range(Number(offset), Number(offset) + Number(limit) - 1)
+
+    if (search) {
+      query = query.or(`telegram_username.ilike.%${search}%,telegram_id.ilike.%${search}%`)
+    }
+
+    const { data: users, error } = await query
+
+    if (error) {
+      console.error('Error fetching telegram users:', error)
+      return res.status(500).json({ error: 'Failed to fetch users' })
+    }
+
+    // Get total user count
+    const { count: totalCount } = await supabase
+      .from('telegram_users')
+      .select('*', { count: 'exact', head: true })
+
+    // Format response with launch counts
+    const formattedUsers = (users || []).map((user: any) => ({
+      id: user.id,
+      telegramId: user.telegram_id,
+      username: user.telegram_username,
+      createdAt: user.created_at,
+      launchCount: user.pending_token_launches?.[0]?.count || 0,
+    }))
+
+    return res.json({
+      success: true,
+      data: {
+        users: formattedUsers,
+        total: totalCount || 0,
+        limit: Number(limit),
+        offset: Number(offset),
+      },
+    })
+  } catch (error) {
+    console.error('Error fetching telegram users:', error)
+    return res.status(500).json({ error: 'Internal server error' })
+  }
+})
+
+/**
+ * POST /api/admin/telegram/bulk-refund
+ * Execute refunds for multiple launches (admin only)
+ */
+router.post('/telegram/bulk-refund', verifyAdminAuth, async (req: Request, res: Response) => {
+  try {
+    const { launchIds } = req.body
+
+    if (!Array.isArray(launchIds) || launchIds.length === 0) {
+      return res.status(400).json({ error: 'launchIds array is required' })
+    }
+
+    if (launchIds.length > 10) {
+      return res.status(400).json({ error: 'Maximum 10 refunds at a time' })
+    }
+
+    const results: Array<{
+      launchId: string
+      success: boolean
+      signature?: string
+      amountRefunded?: number
+      error?: string
+    }> = []
+
+    // Process refunds sequentially to avoid rate limits
+    for (const launchId of launchIds) {
+      try {
+        // Get the launch to find original funder
+        if (!supabase) continue
+
+        const { data: launch } = await supabase
+          .from('pending_token_launches')
+          .select('dev_wallet_address')
+          .eq('id', launchId)
+          .single()
+
+        if (!launch) {
+          results.push({ launchId, success: false, error: 'Launch not found' })
+          continue
+        }
+
+        // Find original funder
+        const { findOriginalFunder } = await import('../services/refund.service')
+        const originalFunder = await findOriginalFunder(launch.dev_wallet_address)
+
+        if (!originalFunder) {
+          results.push({ launchId, success: false, error: 'Could not find original funder' })
+          continue
+        }
+
+        // Execute refund
+        const result = await executeRefund(launchId, originalFunder)
+        results.push({
+          launchId,
+          success: result.success,
+          signature: result.signature,
+          amountRefunded: result.amountRefunded,
+          error: result.error,
+        })
+      } catch (err: any) {
+        results.push({ launchId, success: false, error: err.message })
+      }
+    }
+
+    const successCount = results.filter(r => r.success).length
+    const failCount = results.filter(r => !r.success).length
+
+    return res.json({
+      success: true,
+      data: {
+        results,
+        summary: {
+          total: launchIds.length,
+          successful: successCount,
+          failed: failCount,
+        },
+      },
+    })
+  } catch (error) {
+    console.error('Error executing bulk refunds:', error)
+    return res.status(500).json({ error: 'Internal server error' })
+  }
+})
+
+/**
+ * GET /api/admin/telegram/launches/search
+ * Search launches with advanced filters (admin only)
+ */
+router.get('/telegram/launches/search', verifyAdminAuth, async (req: Request, res: Response) => {
+  try {
+    if (!supabase) {
+      return res.status(500).json({ error: 'Database not configured' })
+    }
+
+    const {
+      status,
+      search,
+      username,
+      dateFrom,
+      dateTo,
+      limit = 50,
+      offset = 0,
+      sortBy = 'updated_at',
+      sortOrder = 'desc',
+    } = req.query
+
+    let query = supabase
+      .from('pending_token_launches')
+      .select(`
+        *,
+        telegram_users (telegram_id, telegram_username)
+      `)
+
+    // Apply status filter
+    if (status && ['awaiting_deposit', 'launching', 'completed', 'failed', 'expired', 'refunded'].includes(status as string)) {
+      query = query.eq('status', status)
+    }
+
+    // Apply token search (name or symbol)
+    if (search) {
+      query = query.or(`token_name.ilike.%${search}%,token_symbol.ilike.%${search}%,token_mint_address.ilike.%${search}%`)
+    }
+
+    // Apply date filters
+    if (dateFrom) {
+      query = query.gte('created_at', dateFrom)
+    }
+    if (dateTo) {
+      query = query.lte('created_at', dateTo)
+    }
+
+    // Apply sorting
+    const validSortFields = ['created_at', 'updated_at', 'deposit_received_sol', 'token_symbol']
+    const sortField = validSortFields.includes(sortBy as string) ? sortBy as string : 'updated_at'
+    const ascending = sortOrder === 'asc'
+    query = query.order(sortField, { ascending })
+
+    // Apply pagination
+    query = query.range(Number(offset), Number(offset) + Number(limit) - 1)
+
+    const { data: launches, error } = await query
+
+    if (error) {
+      console.error('Error searching launches:', error)
+      return res.status(500).json({ error: 'Failed to search launches' })
+    }
+
+    // Filter by username if provided (done post-query due to join limitations)
+    let filteredLaunches = launches || []
+    if (username) {
+      const usernameLower = (username as string).toLowerCase()
+      filteredLaunches = filteredLaunches.filter((l: any) =>
+        l.telegram_users?.telegram_username?.toLowerCase().includes(usernameLower)
+      )
+    }
+
+    // Get total count for pagination
+    const { count: totalCount } = await supabase
+      .from('pending_token_launches')
+      .select('*', { count: 'exact', head: true })
+
+    return res.json({
+      success: true,
+      data: {
+        launches: filteredLaunches,
+        total: totalCount || 0,
+        limit: Number(limit),
+        offset: Number(offset),
+      },
+    })
+  } catch (error) {
+    console.error('Error searching launches:', error)
+    return res.status(500).json({ error: 'Internal server error' })
+  }
+})
+
+/**
+ * GET /api/admin/telegram/export
+ * Export launches data as JSON (admin only)
+ */
+router.get('/telegram/export', verifyAdminAuth, async (req: Request, res: Response) => {
+  try {
+    if (!supabase) {
+      return res.status(500).json({ error: 'Database not configured' })
+    }
+
+    const { status, dateFrom, dateTo } = req.query
+
+    let query = supabase
+      .from('pending_token_launches')
+      .select(`
+        id,
+        token_name,
+        token_symbol,
+        status,
+        deposit_received_sol,
+        token_mint_address,
+        dev_wallet_address,
+        ops_wallet_address,
+        error_message,
+        created_at,
+        updated_at,
+        telegram_users (telegram_id, telegram_username)
+      `)
+      .order('created_at', { ascending: false })
+
+    // Apply filters
+    if (status && status !== 'all') {
+      query = query.eq('status', status)
+    }
+    if (dateFrom) {
+      query = query.gte('created_at', dateFrom)
+    }
+    if (dateTo) {
+      query = query.lte('created_at', dateTo)
+    }
+
+    const { data: launches, error } = await query
+
+    if (error) {
+      console.error('Error exporting launches:', error)
+      return res.status(500).json({ error: 'Failed to export launches' })
+    }
+
+    // Format for export
+    const exportData = (launches || []).map((launch: any) => ({
+      id: launch.id,
+      tokenName: launch.token_name,
+      tokenSymbol: launch.token_symbol,
+      status: launch.status,
+      depositSol: launch.deposit_received_sol,
+      tokenMint: launch.token_mint_address,
+      devWallet: launch.dev_wallet_address,
+      opsWallet: launch.ops_wallet_address,
+      error: launch.error_message,
+      telegramUsername: launch.telegram_users?.telegram_username,
+      telegramId: launch.telegram_users?.telegram_id,
+      createdAt: launch.created_at,
+      updatedAt: launch.updated_at,
+    }))
+
+    // Set headers for file download
+    res.setHeader('Content-Type', 'application/json')
+    res.setHeader('Content-Disposition', `attachment; filename=telegram-launches-${new Date().toISOString().split('T')[0]}.json`)
+
+    return res.json({
+      exportedAt: new Date().toISOString(),
+      totalRecords: exportData.length,
+      filters: { status, dateFrom, dateTo },
+      data: exportData,
+    })
+  } catch (error) {
+    console.error('Error exporting launches:', error)
     return res.status(500).json({ error: 'Internal server error' })
   }
 })
