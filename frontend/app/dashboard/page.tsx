@@ -95,26 +95,6 @@ function DashboardContent() {
           )}
         </div>
 
-        {/* Quick Links */}
-        <div className="border-t border-gray-800 pt-8">
-          <h3 className="text-sm font-medium text-gray-400 mb-4">Quick Links</h3>
-          <div className="flex flex-wrap gap-4">
-            <Link
-              href="/admin"
-              className="px-4 py-2 bg-gray-800 text-gray-300 rounded-lg hover:bg-gray-700 transition-colors"
-            >
-              Admin Panel
-            </Link>
-            <a
-              href="https://bags.fm"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="px-4 py-2 bg-gray-800 text-gray-300 rounded-lg hover:bg-gray-700 transition-colors"
-            >
-              Bags.fm
-            </a>
-          </div>
-        </div>
       </main>
     </div>
   )
