@@ -50,7 +50,7 @@ Claude Wheel is an **autonomous market-making platform** built specifically for 
 | **Flywheel Automation** | 5 buys followed by 5 sells per cycle, randomized within your configured ranges |
 | **Auto Fee Collection** | Claims fees from dev wallet and transfers to ops wallet automatically |
 | **Real-time Dashboard** | Monitor your token's flywheel status, balances, and transaction history |
-| **Algorithm Modes** | Simple (fixed cycles), Smart (coming soon), Rebalance (target allocations) |
+| **Algorithm Modes** | Simple (fixed cycles), Smart (RSI + Bollinger Bands), Rebalance (target allocations) |
 | **Manual Controls** | Execute manual buys/sells from the dashboard when needed |
 
 ### Platform Features
@@ -99,6 +99,25 @@ Claude Wheel is an **autonomous market-making platform** built specifically for 
 │                                                                          │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
+
+### Algorithm Modes
+
+| Mode | Description | Best For |
+|------|-------------|----------|
+| **Simple** | 5 buys → 5 sells cycle with randomized amounts | Steady, predictable activity |
+| **Smart** | Signal-based trading using technical indicators | Optimal entry/exit timing |
+| **Rebalance** | Maintains target SOL/Token allocation | Portfolio balance |
+
+#### Smart Mode Features
+
+Smart mode uses technical analysis for intelligent trading decisions:
+
+- **RSI Analysis** - Buys on oversold (<30), sells on overbought (>70)
+- **Bollinger Bands** - Detects price reversals at band extremes
+- **EMA Crossover** - Uses EMA-10/EMA-20 for trend direction
+- **Volatility Detection** - Reduces position size during high volatility
+- **Trade Cooldown** - 5-minute minimum between trades to prevent over-trading
+- **Confidence Scoring** - Only executes trades above confidence threshold
 
 ### Fee Structure
 
@@ -233,6 +252,7 @@ ClaudeWheel/
 │       ├── services/            # Core business logic
 │       │   ├── multi-user-mm.service.ts    # Flywheel engine
 │       │   ├── multi-user-claim.service.ts # Fee claiming
+│       │   ├── price-analyzer.ts           # Smart mode indicators
 │       │   └── user-token.service.ts       # Token management
 │       ├── jobs/                # Cron jobs
 │       └── routes/              # API endpoints
@@ -264,9 +284,12 @@ ClaudeWheel/
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `GET /api/admin/users` | GET | List all users |
 | `GET /api/admin/tokens` | GET | List all tokens |
-| `POST /api/admin/flywheel/toggle` | POST | Toggle flywheel |
+| `POST /api/admin/config` | POST | Update flywheel config (requires signature) |
+| `POST /api/admin/config/reload` | POST | Trigger immediate config reload |
+| `GET /api/admin/flywheel-status` | GET | Get current flywheel status & algorithm mode |
+| `GET /api/admin/platform-stats` | GET | Platform-wide statistics |
+| `POST /api/admin/tokens/:id/suspend` | POST | Suspend a token |
 
 ---
 
@@ -275,6 +298,8 @@ ClaudeWheel/
 Full documentation is available at `/docs` in the running application, covering:
 
 - How the flywheel mechanism works
+- Algorithm modes (Simple, Smart, Rebalance)
+- Smart mode technical indicators (RSI, Bollinger Bands, EMA)
 - Integration guide for token creators
 - Security & encryption details
 - Fee structure breakdown

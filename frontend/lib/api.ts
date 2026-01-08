@@ -164,7 +164,7 @@ export async function updateConfigWithSignature(
   signature: string,
   publicKey: string,
   config: AdminConfig
-): Promise<{ success: boolean; error?: string }> {
+): Promise<{ success: boolean; error?: string; configReloadTriggered?: boolean }> {
   try {
     const response = await fetch(`${API_BASE_URL}/api/admin/config`, {
       method: 'POST',
@@ -185,7 +185,7 @@ export async function updateConfigWithSignature(
       return { success: false, error: json.error || 'Failed to update config' }
     }
 
-    return { success: true }
+    return { success: true, configReloadTriggered: json.configReloadTriggered }
   } catch (error) {
     console.error('Failed to update config:', error)
     return { success: false, error: 'Network error' }

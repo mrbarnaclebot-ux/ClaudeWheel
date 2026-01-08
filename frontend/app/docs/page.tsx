@@ -115,11 +115,41 @@ export default function DocsPage() {
               <p className="text-text-secondary mb-4">
                 <strong className="text-text-primary">Algorithm Modes:</strong>
               </p>
-              <ul className="list-disc list-inside space-y-2 text-text-secondary">
-                <li><strong className="text-text-primary">Simple:</strong> 5 buys → 5 sells cycle with randomized amounts within your configured range</li>
-                <li><strong className="text-text-primary">Smart:</strong> Dynamic sizing based on market conditions (coming soon)</li>
-                <li><strong className="text-text-primary">Rebalance:</strong> Maintains target SOL/Token allocation ratios automatically</li>
-              </ul>
+              <div className="space-y-4 mb-4">
+                <div className="bg-bg-card border border-border-subtle rounded-lg p-4">
+                  <h4 className="font-semibold text-text-primary mb-2">Simple Mode</h4>
+                  <p className="text-text-muted text-sm">
+                    Standard 5 buys → 5 sells cycle with randomized amounts within your configured range.
+                    Best for steady, predictable market-making activity.
+                  </p>
+                </div>
+                <div className="bg-bg-card border border-accent-primary/30 rounded-lg p-4">
+                  <h4 className="font-semibold text-accent-primary mb-2">Smart Mode</h4>
+                  <p className="text-text-muted text-sm mb-2">
+                    Signal-based trading using technical analysis for optimal entry and exit points:
+                  </p>
+                  <ul className="list-disc list-inside text-text-muted text-xs space-y-1">
+                    <li><strong className="text-text-primary">RSI Analysis:</strong> Detects oversold (&lt;30) and overbought (&gt;70) conditions</li>
+                    <li><strong className="text-text-primary">Bollinger Bands:</strong> Identifies price reversals at band extremes</li>
+                    <li><strong className="text-text-primary">EMA Crossover:</strong> Uses EMA-10/EMA-20 for trend direction</li>
+                    <li><strong className="text-text-primary">Volatility Detection:</strong> Adjusts position sizing based on market volatility</li>
+                    <li><strong className="text-text-primary">Trade Cooldown:</strong> 5-minute minimum between trades to prevent over-trading</li>
+                  </ul>
+                </div>
+                <div className="bg-bg-card border border-border-subtle rounded-lg p-4">
+                  <h4 className="font-semibold text-text-primary mb-2">Rebalance Mode</h4>
+                  <p className="text-text-muted text-sm">
+                    Maintains target SOL/Token allocation ratios automatically. Set your desired portfolio
+                    split and the system will buy or sell to maintain it.
+                  </p>
+                </div>
+              </div>
+              <div className="bg-success/10 border border-success/30 rounded-lg p-4">
+                <p className="text-success text-sm font-mono">
+                  <strong>Instant Config Updates:</strong> Algorithm mode changes take effect on the next
+                  flywheel cycle (within 1 minute). Mode changes are logged in the backend console.
+                </p>
+              </div>
             </div>
           </section>
 
