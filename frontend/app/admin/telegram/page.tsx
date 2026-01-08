@@ -45,6 +45,7 @@ import {
   previewBroadcast,
   previewTokenRefund,
   stopFlywheelAndRefund,
+  migrateOrphanedLaunches,
   type TelegramLaunchStats,
   type TelegramLaunch,
   type TelegramAuditLog,
@@ -131,6 +132,9 @@ export default function TelegramAdminPage() {
   const [isStopRefunding, setIsStopRefunding] = useState(false)
   const [stopRefundResult, setStopRefundResult] = useState<StopAndRefundResult | null>(null)
 
+  // Link orphaned launches state
+  const [isLinking, setIsLinking] = useState(false)
+
   // Check authorization
   useEffect(() => {
     if (connected && publicKey) {
@@ -169,17 +173,26 @@ export default function TelegramAdminPage() {
     }
   }, [publicKey, signMessage])
 
-  // Load all data
-  const loadAllData = async (pubkey: string, sig: string, msg: string) => {
+  // Load all data - accepts filter params to avoid stale closure issues
+  const loadAllData = async (
+    pubkey: string,
+    sig: string,
+    msg: string,
+    filters?: { status?: StatusFilter; search?: string; page?: number }
+  ) => {
+    const currentStatus = filters?.status ?? statusFilter
+    const currentSearch = filters?.search ?? searchQuery
+    const currentPageNum = filters?.page ?? currentPage
+
     setIsLoading(true)
     try {
       const [statsData, launchesData, refundsData, logsData, healthData, metricsData, usersData, chartsData, alertsData] = await Promise.all([
         fetchTelegramStats(pubkey, sig, msg),
         searchTelegramLaunches(pubkey, sig, msg, {
-          status: statusFilter === 'all' ? undefined : statusFilter,
-          search: searchQuery || undefined,
+          status: currentStatus === 'all' ? undefined : currentStatus,
+          search: currentSearch || undefined,
           limit: pageSize,
-          offset: (currentPage - 1) * pageSize,
+          offset: (currentPageNum - 1) * pageSize,
         }),
         fetchPendingRefunds(pubkey, sig, msg),
         fetchTelegramLogs(pubkey, sig, msg, { limit: 100 }),
@@ -213,10 +226,14 @@ export default function TelegramAdminPage() {
     }
   }
 
-  // Reload data with current auth
+  // Reload data with current auth - passes current filter values to avoid stale closures
   const reloadData = useCallback(async () => {
     if (!publicKey || !adminAuthSignature || !adminAuthMessage) return
-    await loadAllData(publicKey.toString(), adminAuthSignature, adminAuthMessage)
+    await loadAllData(publicKey.toString(), adminAuthSignature, adminAuthMessage, {
+      status: statusFilter,
+      search: searchQuery,
+      page: currentPage,
+    })
   }, [publicKey, adminAuthSignature, adminAuthMessage, statusFilter, searchQuery, currentPage])
 
   // Auto-refresh effect
@@ -387,6 +404,27 @@ export default function TelegramAdminPage() {
     }
 
     setIsStopRefunding(false)
+  }
+
+  // Link orphaned launches to user_tokens
+  const handleLinkOrphanedLaunches = async () => {
+    if (!publicKey || !adminAuthSignature || !adminAuthMessage) return
+
+    setIsLinking(true)
+    try {
+      const result = await migrateOrphanedLaunches(
+        publicKey.toString(),
+        adminAuthSignature,
+        adminAuthMessage
+      )
+      if (result) {
+        // Reload data to show updated launches with user_token_id
+        await reloadData()
+      }
+    } catch (error) {
+      console.error('Failed to link orphaned launches:', error)
+    }
+    setIsLinking(false)
   }
 
   // Handle export
@@ -922,6 +960,15 @@ export default function TelegramAdminPage() {
                                       className="px-2 py-1 text-xs font-mono bg-warning/20 text-warning border border-warning/30 rounded hover:bg-warning/30 transition-colors"
                                     >
                                       Stop
+                                    </button>
+                                  )}
+                                  {launch.status === 'completed' && !launch.user_token_id && (
+                                    <button
+                                      onClick={handleLinkOrphanedLaunches}
+                                      disabled={isLinking}
+                                      className="px-2 py-1 text-xs font-mono bg-accent-primary/20 text-accent-primary border border-accent-primary/30 rounded hover:bg-accent-primary/30 transition-colors disabled:opacity-50"
+                                    >
+                                      {isLinking ? '...' : 'Link'}
                                     </button>
                                   )}
                                 </div>

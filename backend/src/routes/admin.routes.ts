@@ -2491,6 +2491,21 @@ router.post('/migrate-orphaned-launches', verifyAdminAuth, async (req: Request, 
             .update({ user_token_id: existingToken.id })
             .eq('id', launch.id)
 
+          // Also update the user_token's telegram_user_id if it was missing
+          // This ensures /mytokens command works for the telegram user
+          if (launch.telegram_user_id) {
+            await supabase
+              .from('user_tokens')
+              .update({
+                telegram_user_id: launch.telegram_user_id,
+                launched_via_telegram: true,
+              })
+              .eq('id', existingToken.id)
+              .is('telegram_user_id', null)  // Only update if currently null
+
+            console.log(`🔗 Linked existing token ${existingToken.id} to telegram user ${launch.telegram_user_id}`)
+          }
+
           results.push({
             id: launch.id,
             tokenSymbol: launch.token_symbol,
