@@ -98,8 +98,12 @@ class TokenLauncherService {
       }
 
       console.log(`📝 Token info created, mint: ${tokenInfoResult.tokenMint}`)
+      if (tokenInfoResult.tokenMetadata) {
+        console.log(`📝 Token metadata: ${tokenInfoResult.tokenMetadata}`)
+      }
 
-      // Step 2: Configure fee sharing (required for Token Launch v2)
+      // Step 2: Configure fee sharing (optional but recommended)
+      let configKey: string | undefined
       const feeShareResult = await this.configureFeeSharing({
         tokenMint: tokenInfoResult.tokenMint,
         creatorWallet: params.devWalletAddress,
@@ -111,12 +115,15 @@ class TokenLauncherService {
         // Continue anyway - some launches may work without explicit fee config
       } else {
         console.log(`💰 Fee sharing configured: 100% to creator`)
+        configKey = feeShareResult.configKey
       }
 
-      // Step 3: Create launch transaction
+      // Step 3: Create launch transaction with correct parameters
       const launchTxResult = await this.createLaunchTransaction({
         tokenMint: tokenInfoResult.tokenMint,
         creatorWallet: params.devWalletAddress,
+        tokenMetadata: tokenInfoResult.tokenMetadata, // IPFS URL from step 1
+        launchId: configKey || tokenInfoResult.launchId, // Use configKey if available, else launchId
       })
 
       if (!launchTxResult.success || !launchTxResult.transaction) {
@@ -174,7 +181,7 @@ class TokenLauncherService {
     telegramUrl?: string
     websiteUrl?: string
     discordUrl?: string
-  }): Promise<{ success: boolean; tokenMint?: string; error?: string }> {
+  }): Promise<{ success: boolean; tokenMint?: string; tokenMetadata?: string; launchId?: string; error?: string }> {
     try {
       // Build FormData - Bags.fm API requires multipart/form-data
       const formData = new FormData()
@@ -229,6 +236,15 @@ class TokenLauncherService {
                         data.response?.mint || data.data?.mint || data.mint ||
                         data.response?.mintAddress || data.data?.mintAddress || data.mintAddress
 
+      // Extract tokenMetadata (IPFS URL) - needed for launch transaction
+      const tokenMetadata = data.response?.tokenMetadata || data.response?.token_metadata ||
+                           data.data?.tokenMetadata || data.data?.token_metadata ||
+                           data.tokenMetadata || data.token_metadata
+
+      // Extract launch ID (may be needed as configKey)
+      const launchId = data.response?.tokenLaunch?._id || data.response?.tokenLaunch?.id ||
+                       data.data?.tokenLaunch?._id || data.data?.tokenLaunch?.id
+
       if (!tokenMint) {
         console.error('❌ Could not find token mint in response. Available keys:', {
           topLevel: Object.keys(data),
@@ -244,6 +260,8 @@ class TokenLauncherService {
       return {
         success: true,
         tokenMint,
+        tokenMetadata,
+        launchId,
       }
     } catch (error: any) {
       return {
@@ -254,36 +272,52 @@ class TokenLauncherService {
   }
 
   /**
-   * Configure fee sharing for a token (required for Token Launch v2)
+   * Configure fee sharing for a token
+   * Note: This endpoint uses /fee-share/config with:
+   * - payer: wallet public key
+   * - baseMint: token mint
+   * - claimersArray: array of wallet addresses
+   * - basisPointsArray: array of basis points (must sum to 10000)
+   *
+   * This is optional - tokens can be launched without explicit fee share config
    */
   private async configureFeeSharing(params: {
     tokenMint: string
     creatorWallet: string
     creatorBps: number // Basis points (10000 = 100%)
-  }): Promise<{ success: boolean; error?: string }> {
+  }): Promise<{ success: boolean; configKey?: string; error?: string }> {
     try {
-      const response = await fetch(`${BAGS_API_BASE}/token-launch/fee-share/create-config`, {
+      // Use the correct endpoint and parameters per API docs
+      const response = await fetch(`${BAGS_API_BASE}/fee-share/config`, {
         method: 'POST',
         headers: {
           'x-api-key': this.apiKey!,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          tokenMint: params.tokenMint,
-          userBps: params.creatorBps,
+          payer: params.creatorWallet,
+          baseMint: params.tokenMint,
+          claimersArray: [params.creatorWallet], // Creator gets all fees
+          basisPointsArray: [params.creatorBps], // 10000 = 100%
         }),
       })
 
       const data = await response.json() as any
+      console.log('📥 Fee share config response:', JSON.stringify(data, null, 2).slice(0, 300))
 
       if (!response.ok) {
+        // Log the full error for debugging
+        const errorDetails = typeof data === 'string' ? data : JSON.stringify(data)
         return {
           success: false,
-          error: data.error || data.message || `API error: ${response.status}`,
+          error: errorDetails.slice(0, 200),
         }
       }
 
-      return { success: true }
+      // Extract configKey if returned
+      const configKey = data.response?.configKey || data.data?.configKey || data.configKey
+
+      return { success: true, configKey }
     } catch (error: any) {
       return {
         success: false,
@@ -294,31 +328,57 @@ class TokenLauncherService {
 
   /**
    * Create launch transaction on Bags.fm
+   * Required params from API docs:
+   * - ipfs: IPFS URL of the token metadata (from create-token-info response)
+   * - tokenMint: Public key of the token mint
+   * - wallet: Public key of the creator wallet
+   * - initialBuyLamports: Initial buy amount in lamports (can be 0)
+   * - configKey: Config key (optional - using launchId from token info)
    */
   private async createLaunchTransaction(params: {
     tokenMint: string
     creatorWallet: string
+    tokenMetadata?: string // IPFS URL from create-token-info
+    launchId?: string // Launch ID that may serve as configKey
   }): Promise<{ success: boolean; transaction?: string; error?: string }> {
     try {
+      // Build request body with correct parameter names from API docs
+      const requestBody: Record<string, unknown> = {
+        tokenMint: params.tokenMint,
+        wallet: params.creatorWallet, // API expects 'wallet' not 'creatorWallet'
+        initialBuyLamports: 0, // No initial buy, just launch the token
+      }
+
+      // Add IPFS URL if available (required by API)
+      if (params.tokenMetadata) {
+        requestBody.ipfs = params.tokenMetadata
+      }
+
+      // Add configKey if we have a launch ID
+      if (params.launchId) {
+        requestBody.configKey = params.launchId
+      }
+
+      console.log('📤 Creating launch transaction with:', JSON.stringify(requestBody, null, 2))
+
       const response = await fetch(`${BAGS_API_BASE}/token-launch/create-launch-transaction`, {
         method: 'POST',
         headers: {
           'x-api-key': this.apiKey!,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          tokenMint: params.tokenMint,
-          creatorWallet: params.creatorWallet,
-        }),
+        body: JSON.stringify(requestBody),
       })
 
       const data = await response.json() as any
-      console.log('📤 Launch transaction response:', JSON.stringify(data, null, 2).slice(0, 500))
+      console.log('📥 Launch transaction response:', JSON.stringify(data, null, 2).slice(0, 500))
 
       if (!response.ok) {
+        // Include more context in error message
+        const errorDetails = typeof data.response === 'string' ? data.response : JSON.stringify(data)
         return {
           success: false,
-          error: data.error || data.message || `API error: ${response.status}`,
+          error: data.error || data.message || errorDetails || `API error: ${response.status}`,
         }
       }
 
