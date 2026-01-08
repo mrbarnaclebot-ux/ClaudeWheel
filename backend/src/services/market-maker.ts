@@ -89,10 +89,13 @@ export class MarketMaker {
     })
 
     // Try multiple API endpoints with retry logic
+    // Note: quote-api.jup.ag may have DNS issues on some hosts
+    // api.jup.ag/swap/v1 requires API key
     const apiUrls = [
       env.jupiterApiUrl,
-      'https://api.jup.ag/swap/v1', // Newer endpoint
-      'https://quote-api.jup.ag/v6', // Original endpoint
+      'https://public.jupiterapi.com', // Alternative public endpoint
+      'https://lite.jup.ag/v6', // Lite version
+      'https://quote-api.jup.ag/v6', // Original endpoint (may have DNS issues)
     ]
 
     for (let attempt = 0; attempt < 3; attempt++) {
@@ -146,7 +149,8 @@ export class MarketMaker {
     // Try multiple API endpoints
     const apiUrls = [
       env.jupiterApiUrl,
-      'https://api.jup.ag/swap/v1',
+      'https://public.jupiterapi.com',
+      'https://lite.jup.ag/v6',
       'https://quote-api.jup.ag/v6',
     ]
 
