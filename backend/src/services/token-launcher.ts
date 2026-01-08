@@ -17,6 +17,12 @@ export interface LaunchTokenParams {
   tokenSymbol: string
   tokenDescription: string
   tokenImageUrl: string
+  // Social links (optional)
+  twitterUrl?: string
+  telegramUrl?: string
+  websiteUrl?: string
+  discordUrl?: string
+  // Wallet encryption
   devWalletAddress: string
   devWalletPrivateKeyEncrypted: string
   devEncryptionIv: string
@@ -78,6 +84,10 @@ class TokenLauncherService {
         description: params.tokenDescription,
         imageUrl: params.tokenImageUrl,
         creatorWallet: params.devWalletAddress,
+        twitterUrl: params.twitterUrl,
+        telegramUrl: params.telegramUrl,
+        websiteUrl: params.websiteUrl,
+        discordUrl: params.discordUrl,
       })
 
       if (!tokenInfoResult.success || !tokenInfoResult.tokenMint) {
@@ -145,31 +155,49 @@ class TokenLauncherService {
     description: string
     imageUrl: string
     creatorWallet: string
+    twitterUrl?: string
+    telegramUrl?: string
+    websiteUrl?: string
+    discordUrl?: string
   }): Promise<{ success: boolean; tokenMint?: string; error?: string }> {
     try {
+      // Build social links object (only include non-empty values)
+      const socialLinks: Record<string, string> = {}
+      if (params.twitterUrl) socialLinks.twitter = params.twitterUrl
+      if (params.telegramUrl) socialLinks.telegram = params.telegramUrl
+      if (params.websiteUrl) socialLinks.website = params.websiteUrl
+      if (params.discordUrl) socialLinks.discord = params.discordUrl
+
+      const requestBody: Record<string, unknown> = {
+        name: params.name,
+        symbol: params.symbol,
+        description: params.description,
+        image: params.imageUrl,
+        creator_wallet: params.creatorWallet,
+        // Fee sharing - 100% to dev wallet (creator)
+        fee_sharing: {
+          enabled: true,
+          recipients: [
+            {
+              wallet: params.creatorWallet,
+              percentage: 100,
+            },
+          ],
+        },
+      }
+
+      // Only add social_links if at least one is provided
+      if (Object.keys(socialLinks).length > 0) {
+        requestBody.social_links = socialLinks
+      }
+
       const response = await fetch(`${BAGS_API_BASE}/token-launch/create-token-info`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${this.apiKey}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          name: params.name,
-          symbol: params.symbol,
-          description: params.description,
-          image: params.imageUrl,
-          creator_wallet: params.creatorWallet,
-          // Fee sharing - 100% to dev wallet (creator)
-          fee_sharing: {
-            enabled: true,
-            recipients: [
-              {
-                wallet: params.creatorWallet,
-                percentage: 100,
-              },
-            ],
-          },
-        }),
+        body: JSON.stringify(requestBody),
       })
 
       const data = await response.json() as any

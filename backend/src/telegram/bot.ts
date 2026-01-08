@@ -77,6 +77,12 @@ export interface SessionData extends Scenes.WizardSession {
     tokenSymbol?: string
     tokenDescription?: string
     tokenImageUrl?: string
+    // Social links (optional)
+    twitterUrl?: string
+    telegramUrl?: string
+    websiteUrl?: string
+    discordUrl?: string
+    // Wallet data
     devWalletAddress?: string
     opsWalletAddress?: string
     pendingLaunchId?: string
@@ -530,13 +536,21 @@ _Use /settings ${symbol} to configure_
       }
 
       data.tokenImageUrl = publicUrl
-      data.step = 'confirm'
+      data.step = 'socials'
 
       await ctx.reply(`✅ *Image uploaded successfully!*`, { parse_mode: 'Markdown' })
 
-      // Continue to wallet generation
-      await ctx.reply('🔐 *Generating Secure Wallets...*', { parse_mode: 'Markdown' })
-      await finalizeLaunchWizard(ctx)
+      // Continue to social links step (optional)
+      await ctx.replyWithMarkdown(
+        `🔗 *SOCIAL LINKS* _(optional)_\n\n` +
+        `Add your token's social links to increase visibility.\n\n` +
+        `Send links in this format (one per line):\n` +
+        `\`twitter: https://twitter.com/yourtoken\`\n` +
+        `\`telegram: https://t.me/yourgroup\`\n` +
+        `\`website: https://yourtoken.com\`\n` +
+        `\`discord: https://discord.gg/invite\`\n\n` +
+        `Or type *"skip"* to continue without social links.`
+      )
     } catch (error) {
       console.error('Error handling photo upload:', error)
       await ctx.reply('⚠️ Error uploading image. Please try sending a URL instead, or type "skip":')
@@ -639,6 +653,12 @@ async function finalizeLaunchWizard(ctx: BotContext): Promise<void> {
         token_symbol: data.tokenSymbol,
         token_description: data.tokenDescription,
         token_image_url: data.tokenImageUrl,
+        // Social links (optional)
+        twitter_url: data.twitterUrl || null,
+        telegram_url: data.telegramUrl || null,
+        website_url: data.websiteUrl || null,
+        discord_url: data.discordUrl || null,
+        // Wallet encryption
         dev_wallet_address: wallets.devWallet.address,
         dev_wallet_private_key_encrypted: wallets.devWallet.encryptedPrivateKey,
         dev_encryption_iv: wallets.devWallet.iv,
@@ -676,6 +696,17 @@ async function finalizeLaunchWizard(ctx: BotContext): Promise<void> {
 
 🔧 *Ops Wallet* — runs flywheel
 \`${wallets.opsWallet.address}\`
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+💸 *Fee Structure*
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+100% of trading fees go to Dev Wallet
+When claimed, fees are split:
+├ 90% → Your Ops Wallet
+└ 10% → Claude Wheel (platform fee)
+
+_Auto-claim runs every 30 seconds when fees ≥ 0.15 SOL_
 
 ─────────────────────────
 
@@ -1119,6 +1150,61 @@ async function handleLaunchWizard(ctx: BotContext, text: string) {
           return
         }
         data.tokenImageUrl = text
+      }
+      data.step = 'socials'
+
+      // Ask for social links (optional)
+      await ctx.replyWithMarkdown(
+        `🔗 *SOCIAL LINKS* _(optional)_\n\n` +
+        `Add your token's social links to increase visibility.\n\n` +
+        `Send links in this format (one per line):\n` +
+        `\`twitter: https://twitter.com/yourtoken\`\n` +
+        `\`telegram: https://t.me/yourgroup\`\n` +
+        `\`website: https://yourtoken.com\`\n` +
+        `\`discord: https://discord.gg/invite\`\n\n` +
+        `Or type *"skip"* to continue without social links.`
+      )
+      break
+
+    case 'socials':
+      if (text.toLowerCase() !== 'skip') {
+        // Parse social links from the message
+        const lines = text.split('\n')
+        for (const line of lines) {
+          const trimmedLine = line.trim().toLowerCase()
+          if (trimmedLine.startsWith('twitter:')) {
+            data.twitterUrl = line.substring(line.indexOf(':') + 1).trim()
+          } else if (trimmedLine.startsWith('telegram:')) {
+            data.telegramUrl = line.substring(line.indexOf(':') + 1).trim()
+          } else if (trimmedLine.startsWith('website:')) {
+            data.websiteUrl = line.substring(line.indexOf(':') + 1).trim()
+          } else if (trimmedLine.startsWith('discord:')) {
+            data.discordUrl = line.substring(line.indexOf(':') + 1).trim()
+          } else if (line.trim().startsWith('http')) {
+            // If it's just a URL without prefix, try to detect the type
+            const url = line.trim()
+            if (url.includes('twitter.com') || url.includes('x.com')) {
+              data.twitterUrl = url
+            } else if (url.includes('t.me') || url.includes('telegram')) {
+              data.telegramUrl = url
+            } else if (url.includes('discord')) {
+              data.discordUrl = url
+            } else {
+              data.websiteUrl = url
+            }
+          }
+        }
+
+        // Show what was detected
+        const detected = []
+        if (data.twitterUrl) detected.push(`Twitter: ✅`)
+        if (data.telegramUrl) detected.push(`Telegram: ✅`)
+        if (data.websiteUrl) detected.push(`Website: ✅`)
+        if (data.discordUrl) detected.push(`Discord: ✅`)
+
+        if (detected.length > 0) {
+          await ctx.reply(`📝 Social links detected:\n${detected.join('\n')}`)
+        }
       }
       data.step = 'confirm'
 

@@ -379,6 +379,12 @@ CREATE TABLE IF NOT EXISTS pending_token_launches (
   token_description TEXT,
   token_image_url TEXT,
 
+  -- Social links (optional)
+  twitter_url TEXT,
+  telegram_url TEXT,
+  website_url TEXT,
+  discord_url TEXT,
+
   -- Generated wallets (encrypted)
   dev_wallet_address TEXT NOT NULL,
   dev_wallet_private_key_encrypted TEXT NOT NULL,

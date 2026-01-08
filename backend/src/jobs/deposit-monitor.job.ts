@@ -36,6 +36,12 @@ interface PendingLaunch {
   token_symbol: string
   token_description: string | null
   token_image_url: string | null
+  // Social links (optional)
+  twitter_url: string | null
+  telegram_url: string | null
+  website_url: string | null
+  discord_url: string | null
+  // Wallet encryption
   dev_wallet_address: string
   dev_wallet_private_key_encrypted: string
   dev_encryption_iv: string
@@ -232,6 +238,12 @@ async function triggerTokenLaunch(launch: PendingLaunch, depositAmount: number):
       tokenSymbol: launch.token_symbol,
       tokenDescription: launch.token_description || '',
       tokenImageUrl: launch.token_image_url || '',
+      // Social links (optional)
+      twitterUrl: launch.twitter_url || undefined,
+      telegramUrl: launch.telegram_url || undefined,
+      websiteUrl: launch.website_url || undefined,
+      discordUrl: launch.discord_url || undefined,
+      // Wallet encryption
       devWalletAddress: launch.dev_wallet_address,
       devWalletPrivateKeyEncrypted: launch.dev_wallet_private_key_encrypted,
       devEncryptionIv: launch.dev_encryption_iv,
@@ -360,7 +372,15 @@ bags.fm/token/${tokenMint}
 ✅ Fee Claiming: ACTIVE
 ✅ Algorithm: Simple mode
 
-Your token is now live and the flywheel is running automatically!
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+💸 *Fee Split Reminder*
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Trading fees collected automatically:
+├ 90% → Your Ops Wallet
+└ 10% → Claude Wheel (platform fee)
+
+Your token is now live and the flywheel is running!
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
