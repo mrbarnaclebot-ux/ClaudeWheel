@@ -17,6 +17,15 @@ import {
   getLaunchStats,
 } from '../services/refund.service'
 import { getDepositMonitorStatus } from '../jobs/deposit-monitor.job'
+import { triggerFlywheelCycle } from '../jobs/multi-flywheel.job'
+import { getKeypairFromEncrypted } from '../services/wallet-generator'
+import { connection, getBalance } from '../config/solana'
+import {
+  PublicKey,
+  Transaction,
+  SystemProgram,
+  LAMPORTS_PER_SOL,
+} from '@solana/web3.js'
 
 // Platform token CA - this token cannot be suspended
 const PLATFORM_TOKEN_MINT = '8JLGQ7RqhsvhsDhvjMuJUeeuaQ53GTJqSHNaBWf4BAGS'
@@ -2382,6 +2391,669 @@ _Use /alerts to manage your subscription._`
     })
   } catch (error) {
     console.error('Error previewing broadcast:', error)
+    return res.status(500).json({ error: 'Internal server error' })
+  }
+})
+
+// ═══════════════════════════════════════════════════════════════════════════
+// FLYWHEEL MANUAL TRIGGER
+// Manually trigger a flywheel cycle for testing/debugging
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * POST /api/admin/flywheel/trigger
+ * Manually trigger a multi-user flywheel cycle (admin only)
+ */
+router.post('/flywheel/trigger', verifyAdminAuth, async (req: Request, res: Response) => {
+  try {
+    const { maxTrades } = req.body
+
+    console.log('🔄 Admin triggered manual flywheel cycle')
+
+    // Run async - don't wait for completion
+    triggerFlywheelCycle(maxTrades).catch(err => {
+      console.error('Flywheel cycle error:', err)
+    })
+
+    return res.json({
+      success: true,
+      message: 'Flywheel cycle triggered. Check logs for results.',
+      maxTrades: maxTrades || 'default',
+    })
+  } catch (error) {
+    console.error('Error triggering flywheel:', error)
+    return res.status(500).json({ error: 'Internal server error' })
+  }
+})
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MIGRATE ORPHANED LAUNCHES
+// Recover completed launches that weren't properly registered in user_tokens
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * POST /api/admin/migrate-orphaned-launches
+ * Find and migrate completed launches without user_tokens records (admin only)
+ */
+router.post('/migrate-orphaned-launches', verifyAdminAuth, async (req: Request, res: Response) => {
+  try {
+    if (!supabase) {
+      return res.status(500).json({ error: 'Database not configured' })
+    }
+
+    console.log('🔍 Admin triggered orphaned launches migration')
+
+    // Find completed launches that don't have a user_token_id set
+    const { data: completedLaunches, error: fetchError } = await supabase
+      .from('pending_token_launches')
+      .select('*')
+      .eq('status', 'completed')
+      .is('user_token_id', null)
+      .not('token_mint_address', 'is', null)
+
+    if (fetchError) {
+      console.error('Error fetching completed launches:', fetchError)
+      return res.status(500).json({ error: 'Failed to fetch orphaned launches' })
+    }
+
+    if (!completedLaunches || completedLaunches.length === 0) {
+      return res.json({
+        success: true,
+        message: 'No orphaned launches found',
+        migrated: 0,
+        failed: 0,
+      })
+    }
+
+    console.log(`📋 Found ${completedLaunches.length} orphaned launch(es) to migrate`)
+
+    const results: Array<{
+      id: string
+      tokenSymbol: string
+      success: boolean
+      error?: string
+      userTokenId?: string
+    }> = []
+
+    for (const launch of completedLaunches) {
+      try {
+        // Check if user_token already exists for this mint
+        const { data: existingToken } = await supabase
+          .from('user_tokens')
+          .select('id')
+          .eq('token_mint_address', launch.token_mint_address)
+          .single()
+
+        if (existingToken) {
+          // Update the pending_token_launches to reference it
+          await supabase
+            .from('pending_token_launches')
+            .update({ user_token_id: existingToken.id })
+            .eq('id', launch.id)
+
+          results.push({
+            id: launch.id,
+            tokenSymbol: launch.token_symbol,
+            success: true,
+            userTokenId: existingToken.id,
+          })
+          continue
+        }
+
+        // Get or create main user
+        let { data: mainUser } = await supabase
+          .from('users')
+          .select('id')
+          .eq('wallet_address', launch.dev_wallet_address)
+          .single()
+
+        if (!mainUser) {
+          const { data: newUser, error: createUserError } = await supabase
+            .from('users')
+            .insert({ wallet_address: launch.dev_wallet_address })
+            .select('id')
+            .single()
+
+          if (createUserError) {
+            results.push({
+              id: launch.id,
+              tokenSymbol: launch.token_symbol,
+              success: false,
+              error: `Failed to create user: ${createUserError.message}`,
+            })
+            continue
+          }
+          mainUser = newUser
+        }
+
+        // Create user_token record
+        const { data: userToken, error: tokenError } = await supabase
+          .from('user_tokens')
+          .insert({
+            user_id: mainUser?.id,
+            telegram_user_id: launch.telegram_user_id,
+            token_mint_address: launch.token_mint_address,
+            token_symbol: launch.token_symbol,
+            token_name: launch.token_name,
+            token_image: launch.token_image_url,
+            dev_wallet_address: launch.dev_wallet_address,
+            dev_wallet_private_key_encrypted: launch.dev_wallet_private_key_encrypted,
+            encryption_iv: launch.dev_encryption_iv,
+            encryption_auth_tag: launch.dev_encryption_auth_tag || '',
+            ops_wallet_address: launch.ops_wallet_address,
+            ops_wallet_private_key_encrypted: launch.ops_wallet_private_key_encrypted,
+            ops_encryption_iv: launch.ops_encryption_iv,
+            ops_encryption_auth_tag: launch.ops_encryption_auth_tag || '',
+            launched_via_telegram: true,
+            is_active: true,
+          })
+          .select('id')
+          .single()
+
+        if (tokenError) {
+          results.push({
+            id: launch.id,
+            tokenSymbol: launch.token_symbol,
+            success: false,
+            error: `Failed to create user_token: ${tokenError.message}`,
+          })
+          continue
+        }
+
+        // Create config with flywheel enabled
+        await supabase.from('user_token_config').insert({
+          user_token_id: userToken?.id,
+          flywheel_active: true,
+          algorithm_mode: 'simple',
+          min_buy_amount_sol: 0.01,
+          max_buy_amount_sol: 0.05,
+          slippage_bps: 300,
+          auto_claim_enabled: true,
+        })
+
+        // Create flywheel state
+        await supabase.from('user_flywheel_state').insert({
+          user_token_id: userToken?.id,
+          cycle_phase: 'buy',
+          buy_count: 0,
+          sell_count: 0,
+        })
+
+        // Update pending launch with user_token_id
+        await supabase
+          .from('pending_token_launches')
+          .update({ user_token_id: userToken?.id })
+          .eq('id', launch.id)
+
+        results.push({
+          id: launch.id,
+          tokenSymbol: launch.token_symbol,
+          success: true,
+          userTokenId: userToken?.id,
+        })
+
+        console.log(`✅ Migrated ${launch.token_symbol}: ${userToken?.id}`)
+      } catch (error: any) {
+        results.push({
+          id: launch.id,
+          tokenSymbol: launch.token_symbol,
+          success: false,
+          error: error.message || 'Unexpected error',
+        })
+      }
+    }
+
+    const successCount = results.filter(r => r.success).length
+    const failCount = results.filter(r => !r.success).length
+
+    console.log(`✅ Migration complete: ${successCount} succeeded, ${failCount} failed`)
+
+    return res.json({
+      success: true,
+      message: `Migrated ${successCount} launches`,
+      migrated: successCount,
+      failed: failCount,
+      results,
+    })
+  } catch (error) {
+    console.error('Error migrating orphaned launches:', error)
+    return res.status(500).json({ error: 'Internal server error' })
+  }
+})
+
+/**
+ * GET /api/admin/orphaned-launches
+ * Get list of orphaned launches that need migration (admin only)
+ */
+router.get('/orphaned-launches', verifyAdminAuth, async (req: Request, res: Response) => {
+  try {
+    if (!supabase) {
+      return res.status(500).json({ error: 'Database not configured' })
+    }
+
+    const { data: orphanedLaunches, error } = await supabase
+      .from('pending_token_launches')
+      .select(`
+        id,
+        token_name,
+        token_symbol,
+        token_mint_address,
+        dev_wallet_address,
+        status,
+        created_at,
+        telegram_users (telegram_id, telegram_username)
+      `)
+      .eq('status', 'completed')
+      .is('user_token_id', null)
+      .not('token_mint_address', 'is', null)
+      .order('created_at', { ascending: false })
+
+    if (error) {
+      console.error('Error fetching orphaned launches:', error)
+      return res.status(500).json({ error: 'Failed to fetch orphaned launches' })
+    }
+
+    return res.json({
+      success: true,
+      data: {
+        launches: orphanedLaunches || [],
+        total: (orphanedLaunches || []).length,
+      },
+    })
+  } catch (error) {
+    console.error('Error fetching orphaned launches:', error)
+    return res.status(500).json({ error: 'Internal server error' })
+  }
+})
+
+// ═══════════════════════════════════════════════════════════════════════════
+// STOP FLYWHEEL AND REFUND
+// Stop flywheel and refund remaining SOL from dev/ops wallets for test launches
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Minimum SOL to keep for rent exemption
+const RENT_RESERVE_SOL = 0.001
+
+/**
+ * POST /api/admin/tokens/:id/stop-and-refund
+ * Stop flywheel for a token and refund remaining SOL to original funder (admin only)
+ */
+router.post('/tokens/:id/stop-and-refund', verifyAdminAuth, async (req: Request, res: Response) => {
+  try {
+    if (!supabase) {
+      return res.status(500).json({ error: 'Database not configured' })
+    }
+
+    const { id } = req.params
+    const { refundAddress: providedRefundAddress } = req.body
+
+    console.log(`🛑 Admin initiated stop-and-refund for token: ${id}`)
+
+    // Get the user_token with encrypted keys
+    const { data: token, error: tokenError } = await supabase
+      .from('user_tokens')
+      .select(`
+        *,
+        users (wallet_address),
+        user_token_config (flywheel_active)
+      `)
+      .eq('id', id)
+      .single()
+
+    if (tokenError || !token) {
+      return res.status(404).json({ error: 'Token not found' })
+    }
+
+    // Step 1: Stop the flywheel
+    const { error: configUpdateError } = await supabase
+      .from('user_token_config')
+      .update({
+        flywheel_active: false,
+        market_making_enabled: false,
+        auto_claim_enabled: false,
+      })
+      .eq('user_token_id', id)
+
+    if (configUpdateError) {
+      console.error('Error stopping flywheel:', configUpdateError)
+      return res.status(500).json({ error: 'Failed to stop flywheel' })
+    }
+
+    console.log(`⏹️ Flywheel stopped for ${token.token_symbol}`)
+
+    // Step 2: Determine refund address
+    let refundAddress = providedRefundAddress
+
+    // If no refund address provided, try to find original funder
+    if (!refundAddress) {
+      const { findOriginalFunder } = await import('../services/refund.service')
+      refundAddress = await findOriginalFunder(token.dev_wallet_address)
+    }
+
+    if (!refundAddress) {
+      return res.json({
+        success: true,
+        message: 'Flywheel stopped. Could not determine refund address - please provide one.',
+        flywheelStopped: true,
+        refundExecuted: false,
+        needsRefundAddress: true,
+      })
+    }
+
+    // Validate refund address
+    let refundPubkey: PublicKey
+    try {
+      refundPubkey = new PublicKey(refundAddress)
+    } catch {
+      return res.status(400).json({ error: 'Invalid refund address' })
+    }
+
+    // Step 3: Get balances and prepare refunds
+    const refundResults: Array<{
+      wallet: string
+      walletType: 'dev' | 'ops'
+      balance: number
+      refundAmount: number
+      signature?: string
+      error?: string
+    }> = []
+
+    // Refund from dev wallet
+    try {
+      const devKeypair = getKeypairFromEncrypted(
+        token.dev_wallet_private_key_encrypted,
+        token.encryption_iv,
+        token.encryption_auth_tag || ''
+      )
+
+      const devBalance = await getBalance(devKeypair.publicKey)
+      console.log(`💰 Dev wallet balance: ${devBalance} SOL`)
+
+      if (devBalance > RENT_RESERVE_SOL) {
+        const refundAmount = devBalance - RENT_RESERVE_SOL
+        const refundLamports = Math.floor(refundAmount * LAMPORTS_PER_SOL)
+
+        const transaction = new Transaction().add(
+          SystemProgram.transfer({
+            fromPubkey: devKeypair.publicKey,
+            toPubkey: refundPubkey,
+            lamports: refundLamports,
+          })
+        )
+
+        const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed')
+        transaction.recentBlockhash = blockhash
+        transaction.feePayer = devKeypair.publicKey
+
+        transaction.sign(devKeypair)
+        const signature = await connection.sendRawTransaction(transaction.serialize(), {
+          skipPreflight: false,
+          maxRetries: 3,
+        })
+
+        await connection.confirmTransaction({
+          signature,
+          blockhash,
+          lastValidBlockHeight,
+        }, 'confirmed')
+
+        refundResults.push({
+          wallet: token.dev_wallet_address,
+          walletType: 'dev',
+          balance: devBalance,
+          refundAmount,
+          signature,
+        })
+
+        console.log(`✅ Dev wallet refund: ${refundAmount} SOL - ${signature}`)
+      } else {
+        refundResults.push({
+          wallet: token.dev_wallet_address,
+          walletType: 'dev',
+          balance: devBalance,
+          refundAmount: 0,
+        })
+      }
+    } catch (error: any) {
+      console.error('Dev wallet refund error:', error)
+      refundResults.push({
+        wallet: token.dev_wallet_address,
+        walletType: 'dev',
+        balance: 0,
+        refundAmount: 0,
+        error: error.message,
+      })
+    }
+
+    // Refund from ops wallet
+    try {
+      const opsKeypair = getKeypairFromEncrypted(
+        token.ops_wallet_private_key_encrypted,
+        token.ops_encryption_iv,
+        token.ops_encryption_auth_tag || ''
+      )
+
+      const opsBalance = await getBalance(opsKeypair.publicKey)
+      console.log(`💰 Ops wallet balance: ${opsBalance} SOL`)
+
+      if (opsBalance > RENT_RESERVE_SOL) {
+        const refundAmount = opsBalance - RENT_RESERVE_SOL
+        const refundLamports = Math.floor(refundAmount * LAMPORTS_PER_SOL)
+
+        const transaction = new Transaction().add(
+          SystemProgram.transfer({
+            fromPubkey: opsKeypair.publicKey,
+            toPubkey: refundPubkey,
+            lamports: refundLamports,
+          })
+        )
+
+        const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed')
+        transaction.recentBlockhash = blockhash
+        transaction.feePayer = opsKeypair.publicKey
+
+        transaction.sign(opsKeypair)
+        const signature = await connection.sendRawTransaction(transaction.serialize(), {
+          skipPreflight: false,
+          maxRetries: 3,
+        })
+
+        await connection.confirmTransaction({
+          signature,
+          blockhash,
+          lastValidBlockHeight,
+        }, 'confirmed')
+
+        refundResults.push({
+          wallet: token.ops_wallet_address,
+          walletType: 'ops',
+          balance: opsBalance,
+          refundAmount,
+          signature,
+        })
+
+        console.log(`✅ Ops wallet refund: ${refundAmount} SOL - ${signature}`)
+      } else {
+        refundResults.push({
+          wallet: token.ops_wallet_address,
+          walletType: 'ops',
+          balance: opsBalance,
+          refundAmount: 0,
+        })
+      }
+    } catch (error: any) {
+      console.error('Ops wallet refund error:', error)
+      refundResults.push({
+        wallet: token.ops_wallet_address,
+        walletType: 'ops',
+        balance: 0,
+        refundAmount: 0,
+        error: error.message,
+      })
+    }
+
+    // Step 4: Mark token as inactive
+    await supabase
+      .from('user_tokens')
+      .update({
+        is_active: false,
+        is_suspended: true,
+        suspend_reason: 'Stopped and refunded by admin',
+      })
+      .eq('id', id)
+
+    // Step 5: Log audit event
+    const totalRefunded = refundResults.reduce((sum, r) => sum + r.refundAmount, 0)
+    await supabase.from('audit_log').insert({
+      event_type: 'stop_and_refund',
+      user_token_id: id,
+      details: {
+        token_symbol: token.token_symbol,
+        refund_address: refundAddress,
+        total_refunded_sol: totalRefunded,
+        results: refundResults,
+      },
+    })
+
+    // Step 6: Notify user via Telegram if launched via Telegram
+    if (token.telegram_user_id) {
+      try {
+        // Get telegram_id from telegram_users table
+        const { data: telegramUser } = await supabase
+          .from('telegram_users')
+          .select('telegram_id')
+          .eq('id', token.telegram_user_id)
+          .single()
+
+        if (telegramUser?.telegram_id) {
+          const { getBot } = await import('../telegram/bot')
+          const bot = getBot()
+          if (bot) {
+            const message = `🛑 *Flywheel Stopped & Refunded*
+
+Your ${token.token_symbol} token has been stopped and funds refunded.
+
+├ Dev Wallet: ${refundResults.find(r => r.walletType === 'dev')?.refundAmount?.toFixed(6) || '0'} SOL
+└ Ops Wallet: ${refundResults.find(r => r.walletType === 'ops')?.refundAmount?.toFixed(6) || '0'} SOL
+
+*Total Refunded:* ${totalRefunded.toFixed(6)} SOL
+*To:* \`${refundAddress.slice(0, 8)}...${refundAddress.slice(-6)}\`
+
+Use /launch to start a new token!`
+
+            await bot.telegram.sendMessage(telegramUser.telegram_id, message, {
+              parse_mode: 'Markdown',
+            })
+          }
+        }
+      } catch (e) {
+        console.error('Error notifying user:', e)
+      }
+    }
+
+    console.log(`✅ Stop-and-refund complete for ${token.token_symbol}: ${totalRefunded} SOL`)
+
+    return res.json({
+      success: true,
+      message: `Flywheel stopped and ${totalRefunded.toFixed(6)} SOL refunded`,
+      flywheelStopped: true,
+      refundExecuted: true,
+      refundAddress,
+      totalRefunded,
+      results: refundResults,
+    })
+  } catch (error: any) {
+    console.error('Error in stop-and-refund:', error)
+    return res.status(500).json({ error: error.message || 'Internal server error' })
+  }
+})
+
+/**
+ * GET /api/admin/tokens/:id/refund-preview
+ * Preview what would be refunded for a token (admin only)
+ */
+router.get('/tokens/:id/refund-preview', verifyAdminAuth, async (req: Request, res: Response) => {
+  try {
+    if (!supabase) {
+      return res.status(500).json({ error: 'Database not configured' })
+    }
+
+    const { id } = req.params
+
+    // Get the user_token
+    const { data: token, error: tokenError } = await supabase
+      .from('user_tokens')
+      .select(`
+        *,
+        user_token_config (flywheel_active, auto_claim_enabled)
+      `)
+      .eq('id', id)
+      .single()
+
+    if (tokenError || !token) {
+      return res.status(404).json({ error: 'Token not found' })
+    }
+
+    // Get balances
+    let devBalance = 0
+    let opsBalance = 0
+    let originalFunder: string | null = null
+
+    try {
+      const devKeypair = getKeypairFromEncrypted(
+        token.dev_wallet_private_key_encrypted,
+        token.encryption_iv,
+        token.encryption_auth_tag || ''
+      )
+      devBalance = await getBalance(devKeypair.publicKey)
+
+      // Find original funder
+      const { findOriginalFunder } = await import('../services/refund.service')
+      originalFunder = await findOriginalFunder(token.dev_wallet_address)
+    } catch (e) {
+      console.error('Error getting dev wallet balance:', e)
+    }
+
+    try {
+      const opsKeypair = getKeypairFromEncrypted(
+        token.ops_wallet_private_key_encrypted,
+        token.ops_encryption_iv,
+        token.ops_encryption_auth_tag || ''
+      )
+      opsBalance = await getBalance(opsKeypair.publicKey)
+    } catch (e) {
+      console.error('Error getting ops wallet balance:', e)
+    }
+
+    const devRefundable = Math.max(0, devBalance - RENT_RESERVE_SOL)
+    const opsRefundable = Math.max(0, opsBalance - RENT_RESERVE_SOL)
+
+    return res.json({
+      success: true,
+      data: {
+        tokenId: id,
+        tokenSymbol: token.token_symbol,
+        tokenName: token.token_name,
+        isActive: token.is_active,
+        flywheelActive: token.user_token_config?.[0]?.flywheel_active || false,
+        wallets: {
+          dev: {
+            address: token.dev_wallet_address,
+            balance: devBalance,
+            refundable: devRefundable,
+          },
+          ops: {
+            address: token.ops_wallet_address,
+            balance: opsBalance,
+            refundable: opsRefundable,
+          },
+        },
+        totalRefundable: devRefundable + opsRefundable,
+        suggestedRefundAddress: originalFunder,
+      },
+    })
+  } catch (error) {
+    console.error('Error previewing refund:', error)
     return res.status(500).json({ error: 'Internal server error' })
   }
 })

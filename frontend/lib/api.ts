@@ -1894,3 +1894,278 @@ export async function previewBroadcast(
     return null
   }
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// JOB CONTROLS API
+// Manually trigger background jobs
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Trigger flywheel cycle manually (admin only)
+export async function triggerFlywheelCycle(
+  publicKey: string,
+  signature: string,
+  message: string,
+  maxTrades?: number
+): Promise<{ success: boolean; message?: string; error?: string }> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/admin/flywheel/trigger`, {
+      method: 'POST',
+      headers: createAdminHeaders(publicKey, signature, message),
+      body: JSON.stringify({ maxTrades }),
+    })
+
+    const json = await response.json()
+
+    if (!response.ok || !json.success) {
+      return { success: false, error: json.error || 'Failed to trigger flywheel' }
+    }
+
+    return { success: true, message: json.message }
+  } catch (error) {
+    console.error('Failed to trigger flywheel:', error)
+    return { success: false, error: 'Network error' }
+  }
+}
+
+// Trigger fast claim cycle manually (admin only)
+export async function triggerFastClaim(
+  publicKey: string,
+  signature: string,
+  message: string
+): Promise<{ success: boolean; message?: string; error?: string }> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/admin/fast-claim/trigger`, {
+      method: 'POST',
+      headers: createAdminHeaders(publicKey, signature, message),
+    })
+
+    const json = await response.json()
+
+    if (!response.ok || !json.success) {
+      return { success: false, error: json.error || 'Failed to trigger fast claim' }
+    }
+
+    return { success: true, message: json.message }
+  } catch (error) {
+    console.error('Failed to trigger fast claim:', error)
+    return { success: false, error: 'Network error' }
+  }
+}
+
+// Trigger balance update cycle manually (admin only)
+export async function triggerBalanceUpdate(
+  publicKey: string,
+  signature: string,
+  message: string
+): Promise<{ success: boolean; message?: string; error?: string }> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/admin/balance-update/trigger`, {
+      method: 'POST',
+      headers: createAdminHeaders(publicKey, signature, message),
+    })
+
+    const json = await response.json()
+
+    if (!response.ok || !json.success) {
+      return { success: false, error: json.error || 'Failed to trigger balance update' }
+    }
+
+    return { success: true, message: json.message }
+  } catch (error) {
+    console.error('Failed to trigger balance update:', error)
+    return { success: false, error: 'Network error' }
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ORPHANED LAUNCHES MIGRATION API
+// Recover completed launches that weren't properly registered
+// ═══════════════════════════════════════════════════════════════════════════
+
+export interface OrphanedLaunch {
+  id: string
+  token_name: string
+  token_symbol: string
+  token_mint_address: string
+  dev_wallet_address: string
+  status: string
+  created_at: string
+  telegram_users: {
+    telegram_id: number
+    telegram_username: string | null
+  } | null
+}
+
+export interface MigrationResult {
+  id: string
+  tokenSymbol: string
+  success: boolean
+  error?: string
+  userTokenId?: string
+}
+
+// Get list of orphaned launches (admin only)
+export async function fetchOrphanedLaunches(
+  publicKey: string,
+  signature: string,
+  message: string
+): Promise<{ launches: OrphanedLaunch[]; total: number } | null> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/admin/orphaned-launches`, {
+      headers: createAdminHeaders(publicKey, signature, message),
+    })
+
+    if (!response.ok) return null
+
+    const json = await response.json()
+    return json.success ? json.data : null
+  } catch (error) {
+    console.error('Failed to fetch orphaned launches:', error)
+    return null
+  }
+}
+
+// Migrate orphaned launches (admin only)
+export async function migrateOrphanedLaunches(
+  publicKey: string,
+  signature: string,
+  message: string
+): Promise<{
+  success: boolean
+  message?: string
+  migrated?: number
+  failed?: number
+  results?: MigrationResult[]
+  error?: string
+}> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/admin/migrate-orphaned-launches`, {
+      method: 'POST',
+      headers: createAdminHeaders(publicKey, signature, message),
+    })
+
+    const json = await response.json()
+
+    if (!response.ok || !json.success) {
+      return { success: false, error: json.error || 'Migration failed' }
+    }
+
+    return {
+      success: true,
+      message: json.message,
+      migrated: json.migrated,
+      failed: json.failed,
+      results: json.results,
+    }
+  } catch (error) {
+    console.error('Failed to migrate orphaned launches:', error)
+    return { success: false, error: 'Network error' }
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// STOP FLYWHEEL AND REFUND API
+// Stop flywheel and refund remaining SOL for test launches
+// ═══════════════════════════════════════════════════════════════════════════
+
+export interface RefundPreview {
+  tokenId: string
+  tokenSymbol: string
+  tokenName: string | null
+  isActive: boolean
+  flywheelActive: boolean
+  wallets: {
+    dev: {
+      address: string
+      balance: number
+      refundable: number
+    }
+    ops: {
+      address: string
+      balance: number
+      refundable: number
+    }
+  }
+  totalRefundable: number
+  suggestedRefundAddress: string | null
+}
+
+export interface RefundWalletResult {
+  wallet: string
+  walletType: 'dev' | 'ops'
+  balance: number
+  refundAmount: number
+  signature?: string
+  error?: string
+}
+
+export interface StopAndRefundResult {
+  success: boolean
+  message?: string
+  flywheelStopped?: boolean
+  refundExecuted?: boolean
+  needsRefundAddress?: boolean
+  refundAddress?: string
+  totalRefunded?: number
+  results?: RefundWalletResult[]
+  error?: string
+}
+
+// Preview refund for a token (admin only)
+export async function previewTokenRefund(
+  publicKey: string,
+  signature: string,
+  message: string,
+  tokenId: string
+): Promise<RefundPreview | null> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/admin/tokens/${tokenId}/refund-preview`, {
+      headers: createAdminHeaders(publicKey, signature, message),
+    })
+
+    if (!response.ok) return null
+
+    const json = await response.json()
+    return json.success ? json.data : null
+  } catch (error) {
+    console.error('Failed to preview refund:', error)
+    return null
+  }
+}
+
+// Stop flywheel and refund remaining SOL (admin only)
+export async function stopFlywheelAndRefund(
+  publicKey: string,
+  signature: string,
+  message: string,
+  tokenId: string,
+  refundAddress?: string
+): Promise<StopAndRefundResult> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/admin/tokens/${tokenId}/stop-and-refund`, {
+      method: 'POST',
+      headers: createAdminHeaders(publicKey, signature, message),
+      body: JSON.stringify({ refundAddress }),
+    })
+
+    const json = await response.json()
+
+    if (!response.ok) {
+      return { success: false, error: json.error || 'Stop and refund failed' }
+    }
+
+    return {
+      success: json.success,
+      message: json.message,
+      flywheelStopped: json.flywheelStopped,
+      refundExecuted: json.refundExecuted,
+      needsRefundAddress: json.needsRefundAddress,
+      refundAddress: json.refundAddress,
+      totalRefunded: json.totalRefunded,
+      results: json.results,
+    }
+  } catch (error) {
+    console.error('Failed to stop and refund:', error)
+    return { success: false, error: 'Network error' }
+  }
+}

@@ -49,6 +49,7 @@ const envSchema = z.object({
   // Telegram Bot
   TELEGRAM_BOT_TOKEN: z.string().optional(),
   TELEGRAM_WEBHOOK_URL: z.string().url().optional(),
+  TELEGRAM_ADMIN_ID: z.string().optional(), // Admin's Telegram user ID for admin commands
 })
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -107,6 +108,7 @@ export const env = {
   // Telegram Bot
   telegramBotToken: parsed.data.TELEGRAM_BOT_TOKEN,
   telegramWebhookUrl: parsed.data.TELEGRAM_WEBHOOK_URL,
+  telegramAdminId: parsed.data.TELEGRAM_ADMIN_ID ? parseInt(parsed.data.TELEGRAM_ADMIN_ID, 10) : undefined,
 }
 
 export type Env = typeof env

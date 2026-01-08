@@ -272,62 +272,97 @@ async function handleSuccessfulLaunch(launch: PendingLaunch, tokenMint: string):
   console.log(`✅ Successfully launched ${launch.token_symbol}: ${tokenMint}`)
   const db = requireSupabase()
 
-  // Update pending launch
-  await db
-    .from('pending_token_launches')
-    .update({
-      status: 'completed',
-      token_mint_address: tokenMint,
-      updated_at: new Date().toISOString(),
-    })
-    .eq('id', launch.id)
+  try {
+    // Update pending launch status first
+    const { error: updateError } = await db
+      .from('pending_token_launches')
+      .update({
+        status: 'completed',
+        token_mint_address: tokenMint,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', launch.id)
 
-  // Get or create main user
-  let { data: mainUser } = await db
-    .from('users')
-    .select('id')
-    .eq('wallet_address', launch.dev_wallet_address)
-    .single()
+    if (updateError) {
+      console.error('Error updating pending launch status:', updateError)
+    }
 
-  if (!mainUser) {
-    const { data: newUser } = await db
+    // Get or create main user
+    let { data: mainUser, error: userFetchError } = await db
       .from('users')
-      .insert({ wallet_address: launch.dev_wallet_address })
+      .select('id')
+      .eq('wallet_address', launch.dev_wallet_address)
+      .single()
+
+    if (userFetchError && userFetchError.code !== 'PGRST116') {
+      // PGRST116 = no rows returned, which is expected for new users
+      console.error('Error fetching user:', userFetchError)
+    }
+
+    if (!mainUser) {
+      const { data: newUser, error: createUserError } = await db
+        .from('users')
+        .insert({ wallet_address: launch.dev_wallet_address })
+        .select('id')
+        .single()
+
+      if (createUserError) {
+        console.error('Error creating user:', createUserError)
+        throw new Error(`Failed to create user: ${createUserError.message}`)
+      }
+      mainUser = newUser
+    }
+
+    if (!mainUser?.id) {
+      throw new Error('Failed to get or create user - mainUser.id is null')
+    }
+
+    // Create user_token record
+    // Note: encryption_auth_tag must not be null for DB constraint
+    const { data: userToken, error: tokenError } = await db
+      .from('user_tokens')
+      .insert({
+        user_id: mainUser.id,
+        telegram_user_id: launch.telegram_user_id,
+        token_mint_address: tokenMint,
+        token_symbol: launch.token_symbol,
+        token_name: launch.token_name,
+        dev_wallet_address: launch.dev_wallet_address,
+        dev_wallet_private_key_encrypted: launch.dev_wallet_private_key_encrypted,
+        encryption_iv: launch.dev_encryption_iv,
+        encryption_auth_tag: launch.dev_encryption_auth_tag || '', // Fallback to empty string if null
+        ops_wallet_address: launch.ops_wallet_address,
+        ops_wallet_private_key_encrypted: launch.ops_wallet_private_key_encrypted,
+        ops_encryption_iv: launch.ops_encryption_iv,
+        ops_encryption_auth_tag: launch.ops_encryption_auth_tag || '', // Fallback to empty string if null
+        launched_via_telegram: true,
+        is_active: true,
+      })
       .select('id')
       .single()
-    mainUser = newUser
-  }
 
-  // Create user_token record
-  const { data: userToken, error: tokenError } = await db
-    .from('user_tokens')
-    .insert({
-      user_id: mainUser?.id,
-      telegram_user_id: launch.telegram_user_id,
-      token_mint_address: tokenMint,
-      token_symbol: launch.token_symbol,
-      token_name: launch.token_name,
-      dev_wallet_address: launch.dev_wallet_address,
-      dev_wallet_private_key_encrypted: launch.dev_wallet_private_key_encrypted,
-      encryption_iv: launch.dev_encryption_iv,
-      encryption_auth_tag: launch.dev_encryption_auth_tag,
-      ops_wallet_address: launch.ops_wallet_address,
-      ops_wallet_private_key_encrypted: launch.ops_wallet_private_key_encrypted,
-      ops_encryption_iv: launch.ops_encryption_iv,
-      ops_encryption_auth_tag: launch.ops_encryption_auth_tag,
-      launched_via_telegram: true,
-      is_active: true,
-    })
-    .select('id')
-    .single()
+    if (tokenError) {
+      console.error('❌ Error creating user_token:', tokenError)
+      console.error('   Insert data:', {
+        user_id: mainUser.id,
+        telegram_user_id: launch.telegram_user_id,
+        token_mint_address: tokenMint,
+        token_symbol: launch.token_symbol,
+        dev_wallet_address: launch.dev_wallet_address?.slice(0, 8) + '...',
+        has_encryption_iv: !!launch.dev_encryption_iv,
+        has_encryption_auth_tag: !!launch.dev_encryption_auth_tag,
+      })
+      throw new Error(`Failed to create user_token: ${tokenError.message}`)
+    }
 
-  if (tokenError) {
-    console.error('Error creating user_token:', tokenError)
-  }
+    if (!userToken?.id) {
+      throw new Error('Failed to create user_token - userToken.id is null')
+    }
 
-  // Create config with flywheel enabled
-  if (userToken) {
-    await db.from('user_token_config').insert({
+    console.log(`📝 Created user_token: ${userToken.id}`)
+
+    // Create config with flywheel enabled
+    const { error: configError } = await db.from('user_token_config').insert({
       user_token_id: userToken.id,
       flywheel_active: true, // Auto-enable flywheel
       algorithm_mode: 'simple',
@@ -337,27 +372,46 @@ async function handleSuccessfulLaunch(launch: PendingLaunch, tokenMint: string):
       auto_claim_enabled: true,
     })
 
-    await db.from('user_flywheel_state').insert({
+    if (configError) {
+      console.error('❌ Error creating user_token_config:', configError)
+      // Don't throw - the token record exists, config can be created later
+    } else {
+      console.log(`⚙️ Created user_token_config for ${userToken.id}`)
+    }
+
+    const { error: stateError } = await db.from('user_flywheel_state').insert({
       user_token_id: userToken.id,
       cycle_phase: 'buy',
       buy_count: 0,
       sell_count: 0,
     })
-  }
 
-  // Log audit event
-  await db.from('audit_log').insert({
-    event_type: 'launch_completed',
-    pending_launch_id: launch.id,
-    user_token_id: userToken?.id,
-    telegram_id: launch.telegram_users?.telegram_id,
-    details: { token_mint: tokenMint, token_symbol: launch.token_symbol },
-  })
+    if (stateError) {
+      console.error('❌ Error creating user_flywheel_state:', stateError)
+      // Don't throw - the token record exists, state can be created later
+    } else {
+      console.log(`🔄 Created user_flywheel_state for ${userToken.id}`)
+    }
 
-  // Notify user
-  await notifyUser(
-    launch.telegram_users?.telegram_id,
-    `🎉 *TOKEN LAUNCHED SUCCESSFULLY!*
+    // Update pending launch with user_token_id reference
+    await db
+      .from('pending_token_launches')
+      .update({ user_token_id: userToken.id })
+      .eq('id', launch.id)
+
+    // Log audit event
+    await db.from('audit_log').insert({
+      event_type: 'launch_completed',
+      pending_launch_id: launch.id,
+      user_token_id: userToken.id,
+      telegram_id: launch.telegram_users?.telegram_id,
+      details: { token_mint: tokenMint, token_symbol: launch.token_symbol },
+    })
+
+    // Notify user
+    await notifyUser(
+      launch.telegram_users?.telegram_id,
+      `🎉 *TOKEN LAUNCHED SUCCESSFULLY!*
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 *${launch.token_name} (${launch.token_symbol})*
@@ -390,7 +444,45 @@ Your token is now live and the flywheel is running!
 • /fund ${launch.token_symbol} - Add more SOL
 
 🌐 *Dashboard:* claudewheel.com/dashboard`
-  )
+    )
+  } catch (dbError: any) {
+    // Database operations failed after successful launch
+    console.error('❌ Database error after successful token launch:', dbError)
+    console.error('   Token mint:', tokenMint)
+    console.error('   Launch ID:', launch.id)
+
+    // Notify user about the issue
+    await notifyUser(
+      launch.telegram_users?.telegram_id,
+      `🎉 *TOKEN LAUNCHED ON BAGS.FM!*
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+*${launch.token_name} (${launch.token_symbol})*
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Mint: \`${tokenMint}\`
+
+🔗 *View on Bags.fm:*
+bags.fm/token/${tokenMint}
+
+⚠️ *Note:* There was an issue registering your token in our system. Please use /register to manually add it so you can use /status and flywheel features.
+
+🌐 *Dashboard:* claudewheel.com/dashboard`
+    )
+
+    // Log the error in audit
+    const db = requireSupabase()
+    await db.from('audit_log').insert({
+      event_type: 'launch_db_error',
+      pending_launch_id: launch.id,
+      telegram_id: launch.telegram_users?.telegram_id,
+      details: {
+        token_mint: tokenMint,
+        token_symbol: launch.token_symbol,
+        error: dbError.message,
+      },
+    })
+  }
 }
 
 /**

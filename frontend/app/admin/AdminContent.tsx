@@ -25,12 +25,22 @@ import {
   bulkUnsuspendAllTokens,
   fetchPlatformSettings,
   updatePlatformSettings,
+  triggerFlywheelCycle,
+  triggerFastClaim,
+  triggerBalanceUpdate,
+  fetchOrphanedLaunches,
+  migrateOrphanedLaunches,
+  previewTokenRefund,
+  stopFlywheelAndRefund,
   type SystemStatus,
   type LogEntry,
   type BagsDashboardData,
   type AdminToken,
   type PlatformStats,
   type PlatformSettings,
+  type OrphanedLaunch,
+  type RefundPreview,
+  type StopAndRefundResult,
 } from '@/lib/api'
 import bs58 from 'bs58'
 
@@ -123,6 +133,23 @@ export default function AdminContent() {
   const [bulkSuspendReason, setBulkSuspendReason] = useState('')
   const [isBulkSuspending, setIsBulkSuspending] = useState(false)
   const [isBulkUnsuspending, setIsBulkUnsuspending] = useState(false)
+
+  // Job triggers state
+  const [isTriggering, setIsTriggering] = useState<string | null>(null)
+  const [jobMessage, setJobMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null)
+
+  // Orphaned launches state
+  const [orphanedLaunches, setOrphanedLaunches] = useState<OrphanedLaunch[]>([])
+  const [isMigrating, setIsMigrating] = useState(false)
+  const [showOrphanedLaunches, setShowOrphanedLaunches] = useState(false)
+
+  // Stop and refund state
+  const [refundModal, setRefundModal] = useState<{ tokenId: string; symbol: string } | null>(null)
+  const [refundPreview, setRefundPreview] = useState<RefundPreview | null>(null)
+  const [isLoadingRefundPreview, setIsLoadingRefundPreview] = useState(false)
+  const [refundAddress, setRefundAddress] = useState('')
+  const [isRefunding, setIsRefunding] = useState(false)
+  const [refundResult, setRefundResult] = useState<StopAndRefundResult | null>(null)
 
   // Load system status when authorized
   const loadSystemStatus = useCallback(async () => {
@@ -383,6 +410,110 @@ export default function AdminContent() {
     }
 
     setIsBulkUnsuspending(false)
+  }
+
+  // Job trigger handlers
+  const handleTriggerJob = async (jobType: 'flywheel' | 'fast-claim' | 'balance-update') => {
+    if (!publicKey || !adminAuthSignature || !adminAuthMessage) {
+      setJobMessage({ type: 'error', text: 'Please authenticate first' })
+      return
+    }
+
+    setIsTriggering(jobType)
+    setJobMessage(null)
+
+    let result: { success: boolean; message?: string; error?: string }
+
+    switch (jobType) {
+      case 'flywheel':
+        result = await triggerFlywheelCycle(publicKey.toString(), adminAuthSignature, adminAuthMessage)
+        break
+      case 'fast-claim':
+        result = await triggerFastClaim(publicKey.toString(), adminAuthSignature, adminAuthMessage)
+        break
+      case 'balance-update':
+        result = await triggerBalanceUpdate(publicKey.toString(), adminAuthSignature, adminAuthMessage)
+        break
+    }
+
+    if (result.success) {
+      setJobMessage({ type: 'success', text: result.message || `${jobType} triggered successfully` })
+    } else {
+      setJobMessage({ type: 'error', text: result.error || 'Failed to trigger job' })
+    }
+
+    setIsTriggering(null)
+  }
+
+  // Orphaned launches handlers
+  const loadOrphanedLaunches = async () => {
+    if (!publicKey || !adminAuthSignature || !adminAuthMessage) return
+
+    const result = await fetchOrphanedLaunches(publicKey.toString(), adminAuthSignature, adminAuthMessage)
+    if (result) {
+      setOrphanedLaunches(result.launches)
+    }
+  }
+
+  const handleMigrateOrphaned = async () => {
+    if (!publicKey || !adminAuthSignature || !adminAuthMessage) return
+
+    setIsMigrating(true)
+    const result = await migrateOrphanedLaunches(publicKey.toString(), adminAuthSignature, adminAuthMessage)
+
+    if (result.success) {
+      setJobMessage({ type: 'success', text: result.message || `Migrated ${result.migrated} launches` })
+      loadOrphanedLaunches()
+      reloadTokens()
+    } else {
+      setJobMessage({ type: 'error', text: result.error || 'Migration failed' })
+    }
+
+    setIsMigrating(false)
+  }
+
+  // Stop and refund handlers
+  const openRefundModal = async (tokenId: string, symbol: string) => {
+    if (!publicKey || !adminAuthSignature || !adminAuthMessage) return
+
+    setRefundModal({ tokenId, symbol })
+    setRefundPreview(null)
+    setRefundAddress('')
+    setRefundResult(null)
+    setIsLoadingRefundPreview(true)
+
+    const preview = await previewTokenRefund(publicKey.toString(), adminAuthSignature, adminAuthMessage, tokenId)
+    if (preview) {
+      setRefundPreview(preview)
+      if (preview.suggestedRefundAddress) {
+        setRefundAddress(preview.suggestedRefundAddress)
+      }
+    }
+
+    setIsLoadingRefundPreview(false)
+  }
+
+  const handleStopAndRefund = async () => {
+    if (!publicKey || !adminAuthSignature || !adminAuthMessage || !refundModal) return
+
+    setIsRefunding(true)
+    setRefundResult(null)
+
+    const result = await stopFlywheelAndRefund(
+      publicKey.toString(),
+      adminAuthSignature,
+      adminAuthMessage,
+      refundModal.tokenId,
+      refundAddress || undefined
+    )
+
+    setRefundResult(result)
+
+    if (result.success && result.refundExecuted) {
+      reloadTokens()
+    }
+
+    setIsRefunding(false)
   }
 
   // Check authorization
@@ -1202,6 +1333,15 @@ export default function AdminContent() {
                             Unsuspend
                           </button>
                         )}
+
+                        {/* Stop & Refund - For test launches */}
+                        <button
+                          onClick={() => openRefundModal(token.id, token.tokenSymbol)}
+                          className="px-2 py-1 text-xs bg-warning/20 text-warning border border-warning/30 rounded hover:bg-warning/30 transition-colors"
+                          title="Stop flywheel and refund remaining SOL to original funder"
+                        >
+                          Stop & Refund
+                        </button>
                       </div>
                     </div>
 
@@ -1308,6 +1448,134 @@ export default function AdminContent() {
                 >
                   {isBulkSuspending ? 'Suspending...' : 'Suspend All Tokens'}
                 </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Stop & Refund Modal */}
+        {refundModal && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+            <div className="bg-bg-card border border-border-subtle rounded-xl p-6 max-w-lg w-full mx-4">
+              <h3 className="text-lg font-semibold text-warning mb-4">
+                Stop & Refund: {refundModal.symbol}
+              </h3>
+
+              {isLoadingRefundPreview ? (
+                <div className="text-center py-8">
+                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-accent-primary mx-auto"></div>
+                  <p className="text-text-muted mt-4 font-mono text-sm">Loading wallet balances...</p>
+                </div>
+              ) : refundPreview ? (
+                <div className="space-y-4">
+                  <p className="text-text-muted text-sm">
+                    This will stop the flywheel and refund remaining SOL from both wallets to the original funder.
+                  </p>
+
+                  {/* Wallet Balances */}
+                  <div className="bg-bg-secondary rounded-lg p-4 space-y-3">
+                    <div className="flex justify-between items-center">
+                      <div>
+                        <span className="text-text-muted text-sm">Dev Wallet</span>
+                        <p className="font-mono text-xs text-text-muted truncate max-w-[200px]">
+                          {refundPreview.wallets.dev.address}
+                        </p>
+                      </div>
+                      <div className="text-right">
+                        <span className="text-text-primary font-mono">
+                          {refundPreview.wallets.dev.balance.toFixed(6)} SOL
+                        </span>
+                        <p className="text-success text-xs font-mono">
+                          Refundable: {refundPreview.wallets.dev.refundable.toFixed(6)} SOL
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex justify-between items-center">
+                      <div>
+                        <span className="text-text-muted text-sm">Ops Wallet</span>
+                        <p className="font-mono text-xs text-text-muted truncate max-w-[200px]">
+                          {refundPreview.wallets.ops.address}
+                        </p>
+                      </div>
+                      <div className="text-right">
+                        <span className="text-text-primary font-mono">
+                          {refundPreview.wallets.ops.balance.toFixed(6)} SOL
+                        </span>
+                        <p className="text-success text-xs font-mono">
+                          Refundable: {refundPreview.wallets.ops.refundable.toFixed(6)} SOL
+                        </p>
+                      </div>
+                    </div>
+                    <div className="pt-2 border-t border-border-subtle flex justify-between items-center">
+                      <span className="text-text-primary font-semibold">Total Refundable</span>
+                      <span className="text-success font-mono font-semibold">
+                        {refundPreview.totalRefundable.toFixed(6)} SOL
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Refund Address Input */}
+                  <div>
+                    <label className="block text-text-secondary font-mono text-sm mb-2">
+                      Refund Address {refundPreview.suggestedRefundAddress && '(auto-detected from original funder)'}
+                    </label>
+                    <input
+                      type="text"
+                      value={refundAddress}
+                      onChange={(e) => setRefundAddress(e.target.value)}
+                      placeholder="Solana wallet address to receive refund"
+                      className="w-full bg-bg-secondary border border-border-subtle rounded-lg px-4 py-3 font-mono text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:border-warning"
+                    />
+                  </div>
+
+                  {/* Result Message */}
+                  {refundResult && (
+                    <div className={`p-3 rounded-lg text-sm font-mono ${
+                      refundResult.success
+                        ? 'bg-success/10 text-success border border-success/30'
+                        : 'bg-error/10 text-error border border-error/30'
+                    }`}>
+                      {refundResult.success ? (
+                        <>
+                          <p>{refundResult.message}</p>
+                          {refundResult.results?.map((r, i) => (
+                            <p key={i} className="mt-1 text-xs">
+                              {r.walletType.toUpperCase()}: {r.refundAmount.toFixed(6)} SOL
+                              {r.signature && ` - ${r.signature.slice(0, 8)}...`}
+                            </p>
+                          ))}
+                        </>
+                      ) : (
+                        <p>{refundResult.error}</p>
+                      )}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <p className="text-error text-sm">Failed to load wallet information.</p>
+              )}
+
+              <div className="flex gap-3 justify-end mt-6">
+                <button
+                  onClick={() => {
+                    setRefundModal(null)
+                    setRefundPreview(null)
+                    setRefundAddress('')
+                    setRefundResult(null)
+                  }}
+                  className="px-4 py-2 text-sm font-mono bg-bg-secondary text-text-muted border border-border-subtle rounded-lg hover:bg-bg-card-hover transition-colors"
+                >
+                  {refundResult?.success ? 'Close' : 'Cancel'}
+                </button>
+                {!refundResult?.success && (
+                  <button
+                    onClick={handleStopAndRefund}
+                    disabled={isRefunding || !refundPreview || refundPreview.totalRefundable <= 0}
+                    className="px-4 py-2 text-sm font-mono bg-warning/20 text-warning border border-warning/30 rounded-lg hover:bg-warning/30 transition-colors disabled:opacity-50"
+                  >
+                    {isRefunding ? 'Processing...' : 'Stop Flywheel & Refund'}
+                  </button>
+                )}
               </div>
             </div>
           </div>
@@ -1443,6 +1711,147 @@ export default function AdminContent() {
             )}
           </motion.div>
         )}
+
+        {/* Job Controls Panel */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.25 }}
+          className="card-glow bg-bg-card p-6"
+        >
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="font-display text-lg font-semibold text-text-primary flex items-center gap-2">
+              <span className="text-accent-primary">▶</span>
+              Job Controls
+            </h2>
+          </div>
+
+          <p className="text-text-muted font-mono text-sm mb-4">
+            Manually trigger background jobs for testing or debugging.
+          </p>
+
+          <div className="flex flex-wrap gap-3 mb-4">
+            <button
+              onClick={() => handleTriggerJob('flywheel')}
+              disabled={isTriggering !== null || !adminAuthSignature}
+              className="px-4 py-2 text-sm font-mono bg-accent-primary/20 text-accent-primary border border-accent-primary/30 rounded-lg hover:bg-accent-primary/30 transition-colors disabled:opacity-50"
+            >
+              {isTriggering === 'flywheel' ? 'Triggering...' : 'Trigger Flywheel'}
+            </button>
+            <button
+              onClick={() => handleTriggerJob('fast-claim')}
+              disabled={isTriggering !== null || !adminAuthSignature}
+              className="px-4 py-2 text-sm font-mono bg-success/20 text-success border border-success/30 rounded-lg hover:bg-success/30 transition-colors disabled:opacity-50"
+            >
+              {isTriggering === 'fast-claim' ? 'Triggering...' : 'Trigger Fast Claim'}
+            </button>
+            <button
+              onClick={() => handleTriggerJob('balance-update')}
+              disabled={isTriggering !== null || !adminAuthSignature}
+              className="px-4 py-2 text-sm font-mono bg-warning/20 text-warning border border-warning/30 rounded-lg hover:bg-warning/30 transition-colors disabled:opacity-50"
+            >
+              {isTriggering === 'balance-update' ? 'Triggering...' : 'Trigger Balance Update'}
+            </button>
+          </div>
+
+          {jobMessage && (
+            <div className={`text-sm font-mono p-3 rounded-lg ${
+              jobMessage.type === 'success'
+                ? 'bg-success/10 text-success border border-success/30'
+                : 'bg-error/10 text-error border border-error/30'
+            }`}>
+              {jobMessage.text}
+            </div>
+          )}
+        </motion.div>
+
+        {/* Orphaned Launches Panel */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.3 }}
+          className="card-glow bg-bg-card p-6"
+        >
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="font-display text-lg font-semibold text-text-primary flex items-center gap-2">
+              <span className="text-warning">⚠</span>
+              Orphaned Launches Recovery
+            </h2>
+            <button
+              onClick={() => {
+                setShowOrphanedLaunches(!showOrphanedLaunches)
+                if (!showOrphanedLaunches && adminAuthSignature) {
+                  loadOrphanedLaunches()
+                }
+              }}
+              className="text-text-muted hover:text-text-primary transition-colors"
+            >
+              {showOrphanedLaunches ? '▼' : '▶'}
+            </button>
+          </div>
+
+          <p className="text-text-muted font-mono text-sm mb-4">
+            Recover completed token launches that weren&apos;t properly registered in the database.
+          </p>
+
+          {showOrphanedLaunches && (
+            <div className="space-y-4">
+              <div className="flex gap-3">
+                <button
+                  onClick={loadOrphanedLaunches}
+                  disabled={!adminAuthSignature}
+                  className="px-4 py-2 text-sm font-mono bg-bg-secondary text-text-secondary border border-border-subtle rounded-lg hover:bg-bg-primary transition-colors disabled:opacity-50"
+                >
+                  Refresh List
+                </button>
+                <button
+                  onClick={handleMigrateOrphaned}
+                  disabled={isMigrating || !adminAuthSignature || orphanedLaunches.length === 0}
+                  className="px-4 py-2 text-sm font-mono bg-success/20 text-success border border-success/30 rounded-lg hover:bg-success/30 transition-colors disabled:opacity-50"
+                >
+                  {isMigrating ? 'Migrating...' : `Migrate All (${orphanedLaunches.length})`}
+                </button>
+              </div>
+
+              {orphanedLaunches.length > 0 ? (
+                <div className="bg-bg-secondary rounded-lg border border-border-subtle overflow-hidden">
+                  <table className="w-full text-sm font-mono">
+                    <thead className="bg-bg-primary text-text-muted">
+                      <tr>
+                        <th className="text-left px-4 py-2">Token</th>
+                        <th className="text-left px-4 py-2">Mint Address</th>
+                        <th className="text-left px-4 py-2">User</th>
+                        <th className="text-left px-4 py-2">Created</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {orphanedLaunches.map((launch) => (
+                        <tr key={launch.id} className="border-t border-border-subtle">
+                          <td className="px-4 py-2 text-text-primary">
+                            {launch.token_name} ({launch.token_symbol})
+                          </td>
+                          <td className="px-4 py-2 text-text-muted">
+                            {launch.token_mint_address?.slice(0, 8)}...
+                          </td>
+                          <td className="px-4 py-2 text-text-muted">
+                            @{launch.telegram_users?.telegram_username || 'Unknown'}
+                          </td>
+                          <td className="px-4 py-2 text-text-muted">
+                            {new Date(launch.created_at).toLocaleDateString()}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <p className="text-text-muted font-mono text-sm text-center py-4 bg-bg-secondary rounded-lg">
+                  No orphaned launches found. All launches are properly registered.
+                </p>
+              )}
+            </div>
+          )}
+        </motion.div>
       </div>
 
       {/* Config Forms */}
