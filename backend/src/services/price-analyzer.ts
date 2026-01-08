@@ -52,12 +52,32 @@ export class PriceAnalyzer {
   private priceHistory: PriceHistory[] = []
   private readonly MAX_HISTORY = 1000
   private lastPrice: PriceData | null = null
+  private tokenMintAddress: string | null = null
+
+  /**
+   * Create a PriceAnalyzer instance
+   * @param tokenMint Optional token mint address. If not provided, uses the default from config.
+   */
+  constructor(tokenMint?: string) {
+    this.tokenMintAddress = tokenMint || null
+  }
+
+  /**
+   * Get the token mint address for this analyzer
+   */
+  private getTokenMintAddress(): string | null {
+    if (this.tokenMintAddress) {
+      return this.tokenMintAddress
+    }
+    const defaultMint = getTokenMint()
+    return defaultMint ? defaultMint.toString() : null
+  }
 
   /**
    * Fetch current price from DexScreener
    */
   async fetchCurrentPrice(): Promise<PriceData | null> {
-    const tokenMint = getTokenMint()
+    const tokenMint = this.getTokenMintAddress()
     if (!tokenMint) {
       console.warn('⚠️ Token mint not configured')
       return null
@@ -65,7 +85,7 @@ export class PriceAnalyzer {
 
     try {
       const response = await fetch(
-        `https://api.dexscreener.com/latest/dex/tokens/${tokenMint.toString()}`
+        `https://api.dexscreener.com/latest/dex/tokens/${tokenMint}`
       )
       const data = await response.json() as { pairs?: any[] }
 

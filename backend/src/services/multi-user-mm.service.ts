@@ -9,6 +9,7 @@ import { supabase } from '../config/database'
 import { getConnection, getBalance, getTokenBalance, getOpsWallet } from '../config/solana'
 import { env } from '../config/env'
 import { bagsFmService } from './bags-fm'
+import { PriceAnalyzer } from './price-analyzer'
 import {
   UserToken,
   UserTokenConfig,
@@ -62,6 +63,39 @@ class MultiUserMMService {
   private lastRunAt: Date | null = null
   private tradesThisMinute = 0
   private lastTradeMinute = 0
+
+  // Per-token price analyzer cache (for smart mode)
+  private tokenAnalyzers: Map<string, PriceAnalyzer> = new Map()
+  // Per-token trade cooldown tracking (token ID -> last trade timestamp)
+  private lastTradeTime: Map<string, number> = new Map()
+  // Cooldown period in milliseconds (5 minutes)
+  private readonly SMART_MODE_COOLDOWN_MS = 5 * 60 * 1000
+
+  /**
+   * Get or create a PriceAnalyzer for a specific token
+   */
+  private getTokenPriceAnalyzer(tokenMint: string): PriceAnalyzer {
+    if (!this.tokenAnalyzers.has(tokenMint)) {
+      this.tokenAnalyzers.set(tokenMint, new PriceAnalyzer(tokenMint))
+    }
+    return this.tokenAnalyzers.get(tokenMint)!
+  }
+
+  /**
+   * Check if trade cooldown is active for a token
+   */
+  private isCooldownActive(tokenId: string): boolean {
+    const lastTrade = this.lastTradeTime.get(tokenId)
+    if (!lastTrade) return false
+    return Date.now() - lastTrade < this.SMART_MODE_COOLDOWN_MS
+  }
+
+  /**
+   * Record a trade timestamp for cooldown tracking
+   */
+  private recordTradeTimestamp(tokenId: string): void {
+    this.lastTradeTime.set(tokenId, Date.now())
+  }
 
   /**
    * Run flywheel cycle for all users with active flywheels
@@ -294,8 +328,8 @@ class MultiUserMMService {
     } else if (config.algorithm_mode === 'rebalance') {
       return this.runRebalanceAlgorithm(token, config, state, opsWallet, connection, baseResult)
     } else {
-      // Smart mode - for now, use simple
-      return this.runSimpleAlgorithm(token, config, state, opsWallet, connection, baseResult)
+      // Smart mode - signal-based trading with RSI, Bollinger Bands, and trend analysis
+      return this.runSmartAlgorithm(token, config, state, opsWallet, connection, baseResult)
     }
   }
 
@@ -572,6 +606,169 @@ class MultiUserMMService {
       return { ...baseResult, tradeType: 'sell', success: true, amount: sellTokens, signature }
     }
 
+    return null
+  }
+
+  /**
+   * Smart algorithm: Signal-based trading using RSI, Bollinger Bands, and trend analysis
+   */
+  private async runSmartAlgorithm(
+    token: UserToken,
+    config: UserTokenConfig,
+    state: UserFlywheelState,
+    wallet: Keypair,
+    connection: Connection,
+    baseResult: { userTokenId: string; tokenMint: string; tokenSymbol: string }
+  ): Promise<TradeResult | null> {
+    const tokenMint = new PublicKey(token.token_mint_address)
+
+    // Check trade cooldown
+    if (this.isCooldownActive(token.id)) {
+      const remainingMs = this.SMART_MODE_COOLDOWN_MS - (Date.now() - (this.lastTradeTime.get(token.id) || 0))
+      const remainingMin = Math.ceil(remainingMs / 60000)
+      console.log(`⏳ ${token.token_symbol}: Smart mode cooldown active (${remainingMin} min remaining)`)
+      return null
+    }
+
+    // Get the price analyzer for this token
+    const analyzer = this.getTokenPriceAnalyzer(token.token_mint_address)
+
+    // Fetch current price data
+    const priceData = await analyzer.fetchCurrentPrice()
+    if (!priceData) {
+      console.log(`⚠️ ${token.token_symbol}: No price data available, falling back to simple mode`)
+      return this.runSimpleAlgorithm(token, config, state, wallet, connection, baseResult)
+    }
+
+    // Get trading signals
+    const signals = analyzer.getTradingSignals()
+    const optimalSignal = analyzer.getOptimalSignal()
+
+    // Log smart mode analytics
+    console.log(`\n📈 ${token.token_symbol}: SMART MODE Analysis`)
+    console.log(`   Price: $${priceData.price.toFixed(8)} | 24h: ${priceData.priceChange24h >= 0 ? '+' : ''}${priceData.priceChange24h.toFixed(2)}%`)
+
+    if (signals.trend) {
+      console.log(`   Trend: ${signals.trend.trend.toUpperCase()} (strength: ${signals.trend.strength.toFixed(0)})`)
+      console.log(`   RSI: ${signals.trend.rsi.toFixed(1)}`)
+    }
+
+    if (signals.volatility) {
+      console.log(`   Volatility: ${signals.volatility.volatility.toFixed(2)}% ${signals.volatility.isHighVolatility ? '⚠️ HIGH' : '✓ Normal'}`)
+    }
+
+    console.log(`   Signal: ${optimalSignal.action.toUpperCase()} (confidence: ${optimalSignal.confidence.toFixed(0)}%)`)
+    if (optimalSignal.reasons.length > 0) {
+      console.log(`   Reasons: ${optimalSignal.reasons.join(', ')}`)
+    }
+
+    // Determine if we should trade
+    const shouldBuy = optimalSignal.action === 'buy' || optimalSignal.action === 'strong_buy'
+    const shouldSell = optimalSignal.action === 'sell' || optimalSignal.action === 'strong_sell'
+    const minConfidence = optimalSignal.action.includes('strong') ? 40 : 50
+
+    // Skip if high volatility and not a strong signal
+    if (signals.volatility?.isHighVolatility && !optimalSignal.action.includes('strong')) {
+      console.log(`   ⚠️ High volatility - waiting for stronger signal`)
+      await this.updateFlywheelCheck(token.id, 'high_volatility')
+      return null
+    }
+
+    // Execute BUY
+    if (shouldBuy && optimalSignal.confidence >= minConfidence) {
+      const solBalance = await getBalance(wallet.publicKey)
+      const minRequired = config.min_buy_amount_sol + 0.01
+
+      if (solBalance < minRequired) {
+        const message = `Insufficient SOL for smart buy (have ${solBalance.toFixed(4)}, need ${minRequired.toFixed(4)})`
+        console.log(`   ℹ️ ${message}`)
+        await this.updateFlywheelCheck(token.id, 'insufficient_sol')
+        await this.logInfoMessage(token.id, message)
+        return null
+      }
+
+      // Calculate position size based on confidence and volatility
+      const positionSizePct = signals.suggestedPositionSizePct
+      const baseAmount = solBalance * (positionSizePct / 100)
+      const buyAmount = Math.min(Math.max(baseAmount, config.min_buy_amount_sol), config.max_buy_amount_sol)
+      const lamports = Math.floor(buyAmount * 1e9)
+
+      console.log(`   🟢 SMART BUY: ${buyAmount.toFixed(4)} SOL (${optimalSignal.action}, ${optimalSignal.confidence.toFixed(0)}% confidence)`)
+
+      const quote = await bagsFmService.getTradeQuote(
+        SOL_MINT,
+        token.token_mint_address,
+        lamports,
+        'buy',
+        config.slippage_bps
+      )
+
+      if (!quote?.rawQuoteResponse) {
+        return { ...baseResult, tradeType: 'buy', success: false, amount: buyAmount, error: 'Failed to get quote' }
+      }
+
+      const signature = await this.executeSwap(connection, wallet, quote.rawQuoteResponse)
+
+      if (!signature) {
+        return { ...baseResult, tradeType: 'buy', success: false, amount: buyAmount, error: 'Swap failed' }
+      }
+
+      // Record trade and cooldown
+      this.recordTradeTimestamp(token.id)
+      await this.recordTransaction(token.id, 'buy', buyAmount, signature)
+      await this.updateFlywheelCheck(token.id, 'smart_buy')
+
+      return { ...baseResult, tradeType: 'buy', success: true, amount: buyAmount, signature }
+    }
+
+    // Execute SELL
+    if (shouldSell && optimalSignal.confidence >= minConfidence) {
+      const tokenBalance = await getTokenBalance(wallet.publicKey, tokenMint)
+
+      if (tokenBalance < 1) {
+        const message = 'Insufficient tokens for smart sell'
+        console.log(`   ℹ️ ${message}`)
+        await this.updateFlywheelCheck(token.id, 'insufficient_tokens')
+        await this.logInfoMessage(token.id, message)
+        return null
+      }
+
+      // Calculate sell amount based on confidence and volatility
+      const positionSizePct = signals.suggestedPositionSizePct
+      const sellAmount = Math.min(tokenBalance * (positionSizePct / 100), tokenBalance * 0.4) // Max 40% per trade
+      const tokenUnits = Math.floor(sellAmount * Math.pow(10, token.token_decimals))
+
+      console.log(`   🔴 SMART SELL: ${sellAmount.toFixed(0)} tokens (${optimalSignal.action}, ${optimalSignal.confidence.toFixed(0)}% confidence)`)
+
+      const quote = await bagsFmService.getTradeQuote(
+        token.token_mint_address,
+        SOL_MINT,
+        tokenUnits,
+        'sell',
+        config.slippage_bps
+      )
+
+      if (!quote?.rawQuoteResponse) {
+        return { ...baseResult, tradeType: 'sell', success: false, amount: sellAmount, error: 'Failed to get quote' }
+      }
+
+      const signature = await this.executeSwap(connection, wallet, quote.rawQuoteResponse)
+
+      if (!signature) {
+        return { ...baseResult, tradeType: 'sell', success: false, amount: sellAmount, error: 'Swap failed' }
+      }
+
+      // Record trade and cooldown
+      this.recordTradeTimestamp(token.id)
+      await this.recordTransaction(token.id, 'sell', sellAmount, signature)
+      await this.updateFlywheelCheck(token.id, 'smart_sell')
+
+      return { ...baseResult, tradeType: 'sell', success: true, amount: sellAmount, signature }
+    }
+
+    // Hold position
+    console.log(`   ℹ️ Holding position (${optimalSignal.action}, ${optimalSignal.confidence.toFixed(0)}% confidence)`)
+    await this.updateFlywheelCheck(token.id, 'holding')
     return null
   }
 

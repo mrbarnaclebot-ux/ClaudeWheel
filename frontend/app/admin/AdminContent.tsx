@@ -485,7 +485,11 @@ export default function AdminContent() {
         throw new Error(result.error || 'Failed to save configuration')
       }
 
-      setMessage({ type: 'success', text: 'Configuration saved successfully!' })
+      // Show enhanced feedback with reload status
+      const reloadMsg = result.configReloadTriggered
+        ? ' Changes will apply on the next flywheel cycle.'
+        : ''
+      setMessage({ type: 'success', text: `Configuration saved successfully!${reloadMsg}` })
     } catch (error: any) {
       console.error('Failed to save config:', error)
       // Handle user rejection of signature

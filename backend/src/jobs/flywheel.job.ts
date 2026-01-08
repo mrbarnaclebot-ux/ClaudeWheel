@@ -96,6 +96,74 @@ function recordTrade(type: 'buy' | 'sell') {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// CONFIG CACHING & MODE CHANGE DETECTION
+// Tracks config changes and logs mode switches for visibility
+// ═══════════════════════════════════════════════════════════════════════════
+
+let cachedConfig: FlywheelConfig | null = null
+let lastAlgorithmMode: string | null = null
+let configReloadRequested = false
+
+/**
+ * Request an immediate config reload on next cycle
+ * Called by admin API when config is updated
+ */
+export function requestConfigReload(): void {
+  configReloadRequested = true
+  console.log('🔄 Config reload requested - will apply on next cycle')
+}
+
+/**
+ * Get current cached config (for status endpoints)
+ */
+export function getCachedConfig(): FlywheelConfig | null {
+  return cachedConfig
+}
+
+/**
+ * Get current algorithm mode
+ */
+export function getCurrentAlgorithmMode(): string {
+  return cachedConfig?.algorithm_mode || 'simple'
+}
+
+/**
+ * Check if a config reload was requested and clear the flag
+ */
+function shouldReloadConfig(): boolean {
+  if (configReloadRequested) {
+    configReloadRequested = false
+    return true
+  }
+  return false
+}
+
+/**
+ * Detect and log algorithm mode changes
+ */
+function detectModeChange(newMode: string): void {
+  if (lastAlgorithmMode !== null && lastAlgorithmMode !== newMode) {
+    console.log('\n════════════════════════════════════════════════════════')
+    console.log('🔀 ALGORITHM MODE CHANGED')
+    console.log(`   Previous: ${lastAlgorithmMode.toUpperCase()}`)
+    console.log(`   New: ${newMode.toUpperCase()}`)
+    console.log('════════════════════════════════════════════════════════\n')
+
+    // Log mode-specific info
+    if (newMode === 'simple') {
+      console.log('   ℹ️ Simple mode: 5 buys → 5 sells cycle')
+      console.log(`   Current state: ${simpleCyclePhase} phase, buys: ${simpleBuyCount}, sells: ${simpleSellCount}`)
+    } else if (newMode === 'smart') {
+      console.log('   ℹ️ Smart mode: RSI + Bollinger Bands + Trend analysis')
+      console.log('   Trades based on market signals with 5-min cooldown')
+    } else if (newMode === 'rebalance') {
+      console.log('   ℹ️ Rebalance mode: Maintains target portfolio allocation')
+    }
+  }
+  lastAlgorithmMode = newMode
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // FLYWHEEL JOB
 // Main automation loop that runs the flywheel:
 // 1. Collect fees from dev wallet
@@ -466,8 +534,20 @@ async function runFlywheelCycle() {
   console.log('═══════════════════════════════════════════════════════════\n')
 
   try {
+    // Check if config reload was requested (from admin API)
+    const reloadRequested = shouldReloadConfig()
+    if (reloadRequested) {
+      console.log('📥 Applying config changes from admin panel...')
+    }
+
     // Fetch config from database
     const config = await fetchConfig()
+
+    // Cache the config for status endpoints
+    cachedConfig = config
+
+    // Detect and log algorithm mode changes
+    detectModeChange(config.algorithm_mode || 'simple')
 
     // Step 1: ALWAYS get current balances and persist to Supabase (even when paused)
     const balances = await walletMonitor.getAllBalances()

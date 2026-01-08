@@ -7,6 +7,7 @@ import { marketMaker } from '../services/market-maker'
 import { walletMonitor } from '../services/wallet-monitor'
 import { getClaimJobStatus, restartClaimJob } from '../jobs/claim.job'
 import { getMultiUserFlywheelJobStatus, restartFlywheelJob } from '../jobs/multi-flywheel.job'
+import { requestConfigReload, getCurrentAlgorithmMode, getCachedConfig } from '../jobs/flywheel.job'
 
 // Platform token CA - this token cannot be suspended
 const PLATFORM_TOKEN_MINT = '8JLGQ7RqhsvhsDhvjMuJUeeuaQ53GTJqSHNaBWf4BAGS'
@@ -159,11 +160,23 @@ router.post('/config', async (req: Request, res: Response) => {
       return res.status(500).json({ error: 'Failed to update configuration' })
     }
 
+    // Trigger immediate config reload in flywheel job
+    requestConfigReload()
+
+    // Log algorithm mode change if applicable
+    if (config.algorithm_mode) {
+      const previousMode = getCurrentAlgorithmMode()
+      if (previousMode !== config.algorithm_mode) {
+        console.log(`🔀 Algorithm mode will change: ${previousMode.toUpperCase()} → ${config.algorithm_mode.toUpperCase()}`)
+      }
+    }
+
     console.log(`✅ Config updated by authorized wallet: ${publicKey.slice(0, 8)}...`)
 
     return res.json({
       success: true,
       message: 'Configuration updated successfully',
+      configReloadTriggered: true,
     })
   } catch (error) {
     console.error('Error in config update:', error)
@@ -1003,6 +1016,51 @@ router.get('/platform-settings', verifyAdminAuth, async (req: Request, res: Resp
     })
   } catch (error) {
     console.error('Error fetching platform settings:', error)
+    return res.status(500).json({ error: 'Internal server error' })
+  }
+})
+
+/**
+ * GET /api/admin/flywheel-status
+ * Get current flywheel status including algorithm mode (admin only)
+ */
+router.get('/flywheel-status', verifyAdminAuth, async (req: Request, res: Response) => {
+  try {
+    const cachedConfig = getCachedConfig()
+    const currentMode = getCurrentAlgorithmMode()
+
+    return res.json({
+      success: true,
+      data: {
+        algorithmMode: currentMode,
+        flywheelActive: cachedConfig?.flywheel_active ?? false,
+        marketMakingEnabled: cachedConfig?.market_making_enabled ?? false,
+        feeCollectionEnabled: cachedConfig?.fee_collection_enabled ?? false,
+        configCached: cachedConfig !== null,
+        jobStatus: getMultiUserFlywheelJobStatus(),
+      },
+    })
+  } catch (error) {
+    console.error('Error fetching flywheel status:', error)
+    return res.status(500).json({ error: 'Internal server error' })
+  }
+})
+
+/**
+ * POST /api/admin/config/reload
+ * Manually trigger a config reload (admin only)
+ */
+router.post('/config/reload', verifyAdminAuth, async (req: Request, res: Response) => {
+  try {
+    requestConfigReload()
+
+    return res.json({
+      success: true,
+      message: 'Config reload triggered. Changes will apply on next flywheel cycle.',
+      currentMode: getCurrentAlgorithmMode(),
+    })
+  } catch (error) {
+    console.error('Error triggering config reload:', error)
     return res.status(500).json({ error: 'Internal server error' })
   }
 })
