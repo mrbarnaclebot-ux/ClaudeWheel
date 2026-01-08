@@ -2102,5 +2102,6 @@ export function stopTelegramBot(): void {
 export function getTelegramWebhookMiddleware() {
   const botInstance = getBot()
   if (!botInstance) return null
-  return botInstance.webhookCallback('/telegram/webhook')
+  // Use '/' since Express strips the '/telegram/webhook' prefix when mounting
+  return botInstance.webhookCallback('/')
 }
