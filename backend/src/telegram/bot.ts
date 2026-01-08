@@ -961,8 +961,18 @@ export async function startTelegramBot(): Promise<void> {
   try {
     // Use webhook in production, polling in development
     if (env.isProd && env.telegramWebhookUrl) {
-      await botInstance.telegram.setWebhook(env.telegramWebhookUrl)
-      console.log(`✅ Telegram bot webhook set: ${env.telegramWebhookUrl}`)
+      try {
+        await botInstance.telegram.setWebhook(env.telegramWebhookUrl)
+        console.log(`✅ Telegram bot webhook set: ${env.telegramWebhookUrl}`)
+      } catch (webhookError) {
+        console.warn(`⚠️ Webhook setup failed, falling back to polling mode`)
+        console.warn(`   Webhook URL: ${env.telegramWebhookUrl}`)
+        console.warn(`   Error: ${webhookError instanceof Error ? webhookError.message : webhookError}`)
+        console.warn(`   Tip: Update TELEGRAM_WEBHOOK_URL to your actual backend URL (e.g., https://your-backend.onrender.com/telegram/webhook)`)
+        // Fall back to polling
+        await botInstance.launch()
+        console.log('✅ Telegram bot started (polling mode - fallback)')
+      }
     } else {
       // Use polling for development
       await botInstance.launch()
