@@ -31,6 +31,14 @@ const helpKeyboard = Markup.inlineKeyboard([
   [Markup.button.callback('« Back to Menu', 'action_start')],
 ])
 
+const alertsKeyboard = Markup.inlineKeyboard([
+  [
+    Markup.button.callback('🔔 Subscribe', 'action_subscribe_alerts'),
+    Markup.button.callback('🔕 Unsubscribe', 'action_unsubscribe_alerts'),
+  ],
+  [Markup.button.callback('« Back to Menu', 'action_start')],
+])
+
 const cancelKeyboard = Markup.inlineKeyboard([
   [Markup.button.callback('❌ Cancel', 'action_cancel')],
 ])
@@ -189,6 +197,21 @@ function setupBot(bot: Telegraf<BotContext>) {
     await sendHelpMessage(ctx)
   })
 
+  bot.action('action_alerts', async (ctx) => {
+    await ctx.answerCbQuery()
+    await showAlertsMenu(ctx)
+  })
+
+  bot.action('action_subscribe_alerts', async (ctx) => {
+    await ctx.answerCbQuery('Subscribing...')
+    await handleAlertSubscription(ctx, true)
+  })
+
+  bot.action('action_unsubscribe_alerts', async (ctx) => {
+    await ctx.answerCbQuery('Unsubscribing...')
+    await handleAlertSubscription(ctx, false)
+  })
+
   bot.action('action_cancel', async (ctx) => {
     await ctx.answerCbQuery('Cancelled')
     ctx.session = ctx.session || {}
@@ -274,6 +297,16 @@ function setupBot(bot: Telegraf<BotContext>) {
   // /help - Full command list
   bot.command('help', async (ctx) => {
     await sendHelpMessage(ctx)
+  })
+
+  // /alerts - Manage downtime alert subscription
+  bot.command('alerts', async (ctx) => {
+    await showAlertsMenu(ctx)
+  })
+
+  // /botstatus - Check bot status
+  bot.command('botstatus', async (ctx) => {
+    await showBotStatus(ctx)
   })
 
   // /launch - Start token launch wizard
@@ -767,6 +800,10 @@ async function sendHelpMessage(ctx: BotContext) {
 ├ /status \`SYM\` — Check status
 └ /toggle \`SYM\` — On/off
 
+*Alerts*
+├ /alerts — Downtime alerts
+└ /botstatus — Check status
+
 *Modes*
 ├ simple — 5 buys → 5 sells
 ├ smart — RSI + Bollinger
@@ -776,6 +813,153 @@ async function sendHelpMessage(ctx: BotContext) {
 
 📖 [Docs](https://claudewheel.com/docs) • 🌐 [Dashboard](https://claudewheel.com/dashboard)`
   await ctx.replyWithMarkdown(helpMessage, helpKeyboard)
+}
+
+async function showAlertsMenu(ctx: BotContext) {
+  const telegramId = ctx.from?.id
+  if (!telegramId) {
+    await ctx.reply('Unable to identify your account.')
+    return
+  }
+
+  try {
+    const { isSubscribed: checkSubscribed } = await import('../services/bot-alerts.service')
+    const subscribed = await checkSubscribed(telegramId)
+
+    const statusEmoji = subscribed ? '🔔' : '🔕'
+    const statusText = subscribed ? 'Subscribed' : 'Not subscribed'
+
+    const alertsMessage = `🔔 *Downtime Alerts*
+
+Stay informed when the bot goes offline for maintenance or upgrades.
+
+*Current Status:* ${statusEmoji} ${statusText}
+
+*What you'll receive:*
+├ Maintenance announcements
+├ Downtime notifications
+├ Service restoration alerts
+└ Important updates
+
+─────────────────────────
+
+${subscribed
+    ? '_You will receive alerts when the bot is down._'
+    : '_Subscribe to get notified about downtime._'
+  }`
+
+    await ctx.replyWithMarkdown(alertsMessage, alertsKeyboard)
+  } catch (error) {
+    console.error('Error showing alerts menu:', error)
+    await ctx.reply('Error loading alerts settings. Please try again.')
+  }
+}
+
+async function handleAlertSubscription(ctx: BotContext, subscribe: boolean) {
+  const telegramId = ctx.from?.id
+  const username = ctx.from?.username
+
+  if (!telegramId) {
+    await ctx.reply('Unable to identify your account.')
+    return
+  }
+
+  try {
+    const { subscribeToAlerts, unsubscribeFromAlerts } = await import('../services/bot-alerts.service')
+
+    if (subscribe) {
+      const result = await subscribeToAlerts(telegramId, username)
+
+      if (!result.success) {
+        await ctx.reply(`❌ Failed to subscribe: ${result.error}`)
+        return
+      }
+
+      if (result.alreadySubscribed) {
+        await ctx.reply('✅ You\'re already subscribed to downtime alerts!')
+      } else {
+        await ctx.replyWithMarkdown(`🔔 *Subscribed to Alerts!*
+
+You'll now receive notifications when:
+• Bot goes down for maintenance
+• Services are restored
+• Important announcements
+
+Use /alerts to manage your subscription.`)
+      }
+    } else {
+      const result = await unsubscribeFromAlerts(telegramId)
+
+      if (!result.success) {
+        await ctx.reply(`❌ Failed to unsubscribe: ${result.error}`)
+        return
+      }
+
+      if (!result.wasSubscribed) {
+        await ctx.reply('You weren\'t subscribed to alerts.')
+      } else {
+        await ctx.replyWithMarkdown(`🔕 *Unsubscribed from Alerts*
+
+You will no longer receive downtime notifications.
+
+Use /alerts to re-subscribe anytime.`)
+      }
+    }
+  } catch (error) {
+    console.error('Error handling alert subscription:', error)
+    await ctx.reply('Error updating subscription. Please try again.')
+  }
+}
+
+async function showBotStatus(ctx: BotContext) {
+  try {
+    const { getBotStatus, getSubscriberCount } = await import('../services/bot-alerts.service')
+    const status = await getBotStatus()
+    const subscriberCount = await getSubscriberCount()
+
+    let statusMessage: string
+
+    if (status.isMaintenanceMode) {
+      statusMessage = `🔧 *Bot Status: Maintenance*
+
+The bot is currently undergoing maintenance.
+
+*Reason:* ${status.maintenanceReason || 'Scheduled maintenance'}
+${status.estimatedEndTime ? `*Estimated Return:* ${status.estimatedEndTime}` : ''}
+*Started:* ${status.maintenanceStartedAt ? new Date(status.maintenanceStartedAt).toLocaleString() : 'Recently'}
+
+─────────────────────────
+
+During maintenance:
+• New launches are paused
+• Flywheel operations continue
+• Your tokens are safe
+
+Use /alerts to get notified when we're back.`
+    } else {
+      const uptimeEmoji = '🟢'
+      statusMessage = `${uptimeEmoji} *Bot Status: Online*
+
+All systems operational!
+
+*Services:*
+├ Token Launching: ✅ Active
+├ Registration: ✅ Active
+├ Flywheel: ✅ Running
+└ Fee Claims: ✅ Active
+
+*Alert Subscribers:* ${subscriberCount} users
+
+─────────────────────────
+
+Use /alerts to subscribe to downtime notifications.`
+    }
+
+    await ctx.replyWithMarkdown(statusMessage)
+  } catch (error) {
+    console.error('Error showing bot status:', error)
+    await ctx.reply('Error checking bot status. Please try again.')
+  }
 }
 
 async function startLaunchWizard(ctx: BotContext) {
@@ -1896,7 +2080,7 @@ export async function startTelegramBot(): Promise<void> {
       console.log('✅ Telegram bot started (polling mode)')
     }
 
-    console.log('📝 Registered commands: /start, /help, /launch, /register, /mytokens, /status, /toggle, /cancel')
+    console.log('📝 Registered commands: /start, /help, /launch, /register, /mytokens, /status, /toggle, /cancel, /alerts, /botstatus')
   } catch (error) {
     console.error('Failed to start Telegram bot:', error)
   }

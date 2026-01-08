@@ -38,6 +38,11 @@ import {
   searchTelegramLaunches,
   exportTelegramLaunches,
   fetchChartData,
+  fetchBotAlertStatus,
+  enableMaintenanceMode,
+  disableMaintenanceMode,
+  sendBroadcast,
+  previewBroadcast,
   type TelegramLaunchStats,
   type TelegramLaunch,
   type TelegramAuditLog,
@@ -45,12 +50,13 @@ import {
   type FinancialMetrics,
   type TelegramUser,
   type ChartData,
+  type BotAlertStatus,
 } from '@/lib/api'
 
 const DEV_WALLET_ADDRESS = process.env.NEXT_PUBLIC_DEV_WALLET_ADDRESS || ''
 
 type StatusFilter = 'all' | 'awaiting_deposit' | 'launching' | 'completed' | 'failed' | 'expired' | 'refunded'
-type TabView = 'launches' | 'users' | 'logs' | 'charts'
+type TabView = 'launches' | 'users' | 'logs' | 'charts' | 'broadcast'
 
 export default function TelegramAdminPage() {
   const { publicKey, connected, signMessage } = useWallet()
@@ -103,6 +109,16 @@ export default function TelegramAdminPage() {
   const [isBulkRefunding, setIsBulkRefunding] = useState(false)
   const [bulkRefundResults, setBulkRefundResults] = useState<{ total: number; successful: number; failed: number } | null>(null)
 
+  // Broadcast/Maintenance state
+  const [alertStatus, setAlertStatus] = useState<BotAlertStatus | null>(null)
+  const [broadcastTitle, setBroadcastTitle] = useState('')
+  const [broadcastBody, setBroadcastBody] = useState('')
+  const [maintenanceReason, setMaintenanceReason] = useState('')
+  const [maintenanceEndTime, setMaintenanceEndTime] = useState('')
+  const [isSendingBroadcast, setIsSendingBroadcast] = useState(false)
+  const [isTogglingMaintenance, setIsTogglingMaintenance] = useState(false)
+  const [broadcastResult, setBroadcastResult] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+
   // Check authorization
   useEffect(() => {
     if (connected && publicKey) {
@@ -145,7 +161,7 @@ export default function TelegramAdminPage() {
   const loadAllData = async (pubkey: string, sig: string, msg: string) => {
     setIsLoading(true)
     try {
-      const [statsData, launchesData, refundsData, logsData, healthData, metricsData, usersData, chartsData] = await Promise.all([
+      const [statsData, launchesData, refundsData, logsData, healthData, metricsData, usersData, chartsData, alertsData] = await Promise.all([
         fetchTelegramStats(pubkey, sig, msg),
         searchTelegramLaunches(pubkey, sig, msg, {
           status: statusFilter === 'all' ? undefined : statusFilter,
@@ -159,6 +175,7 @@ export default function TelegramAdminPage() {
         fetchFinancialMetrics(pubkey, sig, msg),
         fetchTelegramUsers(pubkey, sig, msg, { limit: 50 }),
         fetchChartData(pubkey, sig, msg, chartDays),
+        fetchBotAlertStatus(pubkey, sig, msg),
       ])
 
       if (statsData) setStats(statsData)
@@ -175,6 +192,7 @@ export default function TelegramAdminPage() {
         setTotalUsers(usersData.total)
       }
       if (chartsData) setChartData(chartsData)
+      if (alertsData) setAlertStatus(alertsData)
       setLastRefresh(new Date())
     } catch (error) {
       console.error('Failed to load data:', error)
@@ -630,7 +648,7 @@ export default function TelegramAdminPage() {
 
             {/* Tabs */}
             <div className="flex gap-2 border-b border-border-subtle pb-2">
-              {(['launches', 'users', 'logs', 'charts'] as TabView[]).map((tab) => (
+              {(['launches', 'users', 'logs', 'charts', 'broadcast'] as TabView[]).map((tab) => (
                 <button
                   key={tab}
                   onClick={() => setCurrentTab(tab)}
@@ -644,6 +662,7 @@ export default function TelegramAdminPage() {
                   {tab === 'users' && `Users (${totalUsers})`}
                   {tab === 'logs' && `Logs (${logs.length})`}
                   {tab === 'charts' && `Charts`}
+                  {tab === 'broadcast' && `Broadcast (${alertStatus?.subscriberCount || 0})`}
                 </button>
               ))}
             </div>
@@ -1193,6 +1212,241 @@ export default function TelegramAdminPage() {
                     </div>
                   </div>
                 )}
+              </motion.div>
+            )}
+
+            {/* Broadcast Tab */}
+            {currentTab === 'broadcast' && (
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="space-y-6"
+              >
+                {/* Maintenance Mode Control */}
+                <div className="card-glow bg-bg-card p-6">
+                  <div className="flex items-center justify-between mb-4">
+                    <h2 className="font-display text-lg font-semibold text-text-primary">
+                      Maintenance Mode
+                    </h2>
+                    <div className={`px-3 py-1 rounded-full text-xs font-mono ${
+                      alertStatus?.botStatus.isMaintenanceMode
+                        ? 'bg-warning/20 text-warning border border-warning/30'
+                        : 'bg-success/20 text-success border border-success/30'
+                    }`}>
+                      {alertStatus?.botStatus.isMaintenanceMode ? 'MAINTENANCE ACTIVE' : 'OPERATIONAL'}
+                    </div>
+                  </div>
+
+                  {alertStatus?.botStatus.isMaintenanceMode ? (
+                    <div className="space-y-4">
+                      <div className="bg-warning/10 border border-warning/30 rounded-lg p-4">
+                        <p className="text-sm text-text-muted font-mono mb-2">Current reason:</p>
+                        <p className="text-text-primary">{alertStatus.botStatus.maintenanceReason}</p>
+                        {alertStatus.botStatus.estimatedEndTime && (
+                          <p className="text-sm text-text-muted font-mono mt-2">
+                            Estimated end: {alertStatus.botStatus.estimatedEndTime}
+                          </p>
+                        )}
+                      </div>
+                      <button
+                        onClick={async () => {
+                          if (!publicKey || !adminAuthSignature || !adminAuthMessage) return
+                          setIsTogglingMaintenance(true)
+                          try {
+                            const result = await disableMaintenanceMode(
+                              publicKey.toString(),
+                              adminAuthSignature,
+                              adminAuthMessage,
+                              true
+                            )
+                            if (result.success) {
+                              setBroadcastResult({ type: 'success', text: `Maintenance disabled. Notified ${result.notifiedUsers} subscribers.` })
+                              await reloadData()
+                            } else {
+                              setBroadcastResult({ type: 'error', text: result.error || 'Failed to disable maintenance' })
+                            }
+                          } finally {
+                            setIsTogglingMaintenance(false)
+                          }
+                        }}
+                        disabled={isTogglingMaintenance}
+                        className="w-full py-2 px-4 bg-success/20 text-success border border-success/30 rounded-lg font-mono text-sm hover:bg-success/30 transition-colors disabled:opacity-50"
+                      >
+                        {isTogglingMaintenance ? 'Disabling...' : 'Disable Maintenance Mode & Notify Users'}
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="space-y-4">
+                      <div>
+                        <label className="block text-sm font-mono text-text-muted mb-2">Reason *</label>
+                        <input
+                          type="text"
+                          value={maintenanceReason}
+                          onChange={(e) => setMaintenanceReason(e.target.value)}
+                          placeholder="e.g., Scheduled upgrade, Bug fix deployment"
+                          className="w-full bg-bg-secondary border border-border-subtle rounded-lg px-4 py-2 text-sm font-mono text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent-primary"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-mono text-text-muted mb-2">Estimated End Time (optional)</label>
+                        <input
+                          type="text"
+                          value={maintenanceEndTime}
+                          onChange={(e) => setMaintenanceEndTime(e.target.value)}
+                          placeholder="e.g., 30 minutes, 2 hours, 5:00 PM UTC"
+                          className="w-full bg-bg-secondary border border-border-subtle rounded-lg px-4 py-2 text-sm font-mono text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent-primary"
+                        />
+                      </div>
+                      <button
+                        onClick={async () => {
+                          if (!publicKey || !adminAuthSignature || !adminAuthMessage || !maintenanceReason) return
+                          setIsTogglingMaintenance(true)
+                          try {
+                            const result = await enableMaintenanceMode(
+                              publicKey.toString(),
+                              adminAuthSignature,
+                              adminAuthMessage,
+                              maintenanceReason,
+                              maintenanceEndTime || undefined,
+                              true
+                            )
+                            if (result.success) {
+                              setBroadcastResult({ type: 'success', text: `Maintenance enabled. Notified ${result.notifiedUsers} subscribers.` })
+                              setMaintenanceReason('')
+                              setMaintenanceEndTime('')
+                              await reloadData()
+                            } else {
+                              setBroadcastResult({ type: 'error', text: result.error || 'Failed to enable maintenance' })
+                            }
+                          } finally {
+                            setIsTogglingMaintenance(false)
+                          }
+                        }}
+                        disabled={isTogglingMaintenance || !maintenanceReason}
+                        className="w-full py-2 px-4 bg-warning/20 text-warning border border-warning/30 rounded-lg font-mono text-sm hover:bg-warning/30 transition-colors disabled:opacity-50"
+                      >
+                        {isTogglingMaintenance ? 'Enabling...' : 'Enable Maintenance Mode & Notify Users'}
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                {/* Broadcast Message */}
+                <div className="card-glow bg-bg-card p-6">
+                  <h2 className="font-display text-lg font-semibold text-text-primary mb-4">
+                    Send Broadcast Message
+                  </h2>
+                  <p className="text-sm text-text-muted font-mono mb-4">
+                    Send a message to all {alertStatus?.subscriberCount || 0} alert subscribers
+                  </p>
+                  <div className="space-y-4">
+                    <div>
+                      <label className="block text-sm font-mono text-text-muted mb-2">Title *</label>
+                      <input
+                        type="text"
+                        value={broadcastTitle}
+                        onChange={(e) => setBroadcastTitle(e.target.value)}
+                        placeholder="e.g., New Feature Announcement"
+                        maxLength={100}
+                        className="w-full bg-bg-secondary border border-border-subtle rounded-lg px-4 py-2 text-sm font-mono text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent-primary"
+                      />
+                      <span className="text-xs text-text-muted font-mono">{broadcastTitle.length}/100</span>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-mono text-text-muted mb-2">Message *</label>
+                      <textarea
+                        value={broadcastBody}
+                        onChange={(e) => setBroadcastBody(e.target.value)}
+                        placeholder="Write your announcement message..."
+                        maxLength={2000}
+                        rows={5}
+                        className="w-full bg-bg-secondary border border-border-subtle rounded-lg px-4 py-2 text-sm font-mono text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent-primary resize-none"
+                      />
+                      <span className="text-xs text-text-muted font-mono">{broadcastBody.length}/2000</span>
+                    </div>
+                    <button
+                      onClick={async () => {
+                        if (!publicKey || !adminAuthSignature || !adminAuthMessage || !broadcastTitle || !broadcastBody) return
+                        setIsSendingBroadcast(true)
+                        try {
+                          const result = await sendBroadcast(
+                            publicKey.toString(),
+                            adminAuthSignature,
+                            adminAuthMessage,
+                            broadcastTitle,
+                            broadcastBody
+                          )
+                          if (result.success && result.result) {
+                            setBroadcastResult({
+                              type: 'success',
+                              text: `Broadcast sent! ${result.result.successful}/${result.result.total} delivered.`
+                            })
+                            setBroadcastTitle('')
+                            setBroadcastBody('')
+                          } else {
+                            setBroadcastResult({ type: 'error', text: result.error || 'Failed to send broadcast' })
+                          }
+                        } finally {
+                          setIsSendingBroadcast(false)
+                        }
+                      }}
+                      disabled={isSendingBroadcast || !broadcastTitle || !broadcastBody}
+                      className="w-full py-2 px-4 bg-accent-primary/20 text-accent-primary border border-accent-primary/30 rounded-lg font-mono text-sm hover:bg-accent-primary/30 transition-colors disabled:opacity-50"
+                    >
+                      {isSendingBroadcast ? 'Sending...' : `Send Broadcast to ${alertStatus?.subscriberCount || 0} Subscribers`}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Result Message */}
+                {broadcastResult && (
+                  <div className={`p-4 rounded-lg border ${
+                    broadcastResult.type === 'success'
+                      ? 'bg-success/10 border-success/30 text-success'
+                      : 'bg-error/10 border-error/30 text-error'
+                  }`}>
+                    <p className="font-mono text-sm">{broadcastResult.text}</p>
+                    <button
+                      onClick={() => setBroadcastResult(null)}
+                      className="text-xs font-mono underline mt-2"
+                    >
+                      Dismiss
+                    </button>
+                  </div>
+                )}
+
+                {/* Subscribers List */}
+                <div className="card-glow bg-bg-card p-6">
+                  <h2 className="font-display text-lg font-semibold text-text-primary mb-4">
+                    Alert Subscribers ({alertStatus?.subscriberCount || 0})
+                  </h2>
+                  {alertStatus?.subscribers && alertStatus.subscribers.length > 0 ? (
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="border-b border-border-subtle">
+                            <th className="text-left py-2 px-3 text-text-muted font-mono text-xs">Telegram ID</th>
+                            <th className="text-left py-2 px-3 text-text-muted font-mono text-xs">Username</th>
+                            <th className="text-left py-2 px-3 text-text-muted font-mono text-xs">Subscribed At</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {alertStatus.subscribers.map((sub) => (
+                            <tr key={sub.telegramId} className="border-b border-border-subtle/50 hover:bg-bg-secondary/50">
+                              <td className="py-2 px-3 font-mono text-xs text-text-primary">{sub.telegramId}</td>
+                              <td className="py-2 px-3 font-mono text-xs text-text-muted">{sub.username || '-'}</td>
+                              <td className="py-2 px-3 font-mono text-xs text-text-muted">
+                                {new Date(sub.subscribedAt).toLocaleDateString()}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <p className="text-text-muted font-mono text-sm">No subscribers yet.</p>
+                  )}
+                </div>
               </motion.div>
             )}
           </>

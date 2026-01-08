@@ -1736,3 +1736,161 @@ export async function fetchChartData(
     return null
   }
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// BOT ALERTS & MAINTENANCE API
+// Manage downtime alerts and broadcast messages
+// ═══════════════════════════════════════════════════════════════════════════
+
+export interface BotAlertStatus {
+  botStatus: {
+    isMaintenanceMode: boolean
+    maintenanceReason?: string
+    maintenanceStartedAt?: string
+    estimatedEndTime?: string
+    lastUpdated: string
+  }
+  subscriberCount: number
+  subscribers: Array<{
+    telegramId: number
+    username: string | null
+    subscribedAt: string
+  }>
+}
+
+export interface BroadcastResult {
+  total: number
+  successful: number
+  failed: number
+  errors: string[]
+}
+
+// Get bot alert status (admin only)
+export async function fetchBotAlertStatus(
+  publicKey: string,
+  signature: string,
+  message: string
+): Promise<BotAlertStatus | null> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/admin/telegram/alerts/status`, {
+      headers: createAdminHeaders(publicKey, signature, message),
+    })
+
+    if (!response.ok) return null
+
+    const json = await response.json()
+    return json.success ? json.data : null
+  } catch (error) {
+    console.error('Failed to fetch bot alert status:', error)
+    return null
+  }
+}
+
+// Enable maintenance mode (admin only)
+export async function enableMaintenanceMode(
+  publicKey: string,
+  signature: string,
+  message: string,
+  reason: string,
+  estimatedEndTime?: string,
+  notifyUsers: boolean = true
+): Promise<{ success: boolean; notifiedUsers?: number; error?: string }> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/admin/telegram/maintenance/enable`, {
+      method: 'POST',
+      headers: createAdminHeaders(publicKey, signature, message),
+      body: JSON.stringify({ reason, estimatedEndTime, notifyUsers }),
+    })
+
+    const json = await response.json()
+
+    if (!response.ok || !json.success) {
+      return { success: false, error: json.error || 'Failed to enable maintenance mode' }
+    }
+
+    return { success: true, notifiedUsers: json.notifiedUsers }
+  } catch (error) {
+    console.error('Failed to enable maintenance mode:', error)
+    return { success: false, error: 'Network error' }
+  }
+}
+
+// Disable maintenance mode (admin only)
+export async function disableMaintenanceMode(
+  publicKey: string,
+  signature: string,
+  message: string,
+  notifyUsers: boolean = true
+): Promise<{ success: boolean; notifiedUsers?: number; error?: string }> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/admin/telegram/maintenance/disable`, {
+      method: 'POST',
+      headers: createAdminHeaders(publicKey, signature, message),
+      body: JSON.stringify({ notifyUsers }),
+    })
+
+    const json = await response.json()
+
+    if (!response.ok || !json.success) {
+      return { success: false, error: json.error || 'Failed to disable maintenance mode' }
+    }
+
+    return { success: true, notifiedUsers: json.notifiedUsers }
+  } catch (error) {
+    console.error('Failed to disable maintenance mode:', error)
+    return { success: false, error: 'Network error' }
+  }
+}
+
+// Send broadcast message (admin only)
+export async function sendBroadcast(
+  publicKey: string,
+  signature: string,
+  message: string,
+  title: string,
+  body: string
+): Promise<{ success: boolean; result?: BroadcastResult; error?: string }> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/admin/telegram/broadcast`, {
+      method: 'POST',
+      headers: createAdminHeaders(publicKey, signature, message),
+      body: JSON.stringify({ title, body }),
+    })
+
+    const json = await response.json()
+
+    if (!response.ok || !json.success) {
+      return { success: false, error: json.error || 'Failed to send broadcast' }
+    }
+
+    return { success: true, result: json.data }
+  } catch (error) {
+    console.error('Failed to send broadcast:', error)
+    return { success: false, error: 'Network error' }
+  }
+}
+
+// Preview broadcast message (admin only)
+export async function previewBroadcast(
+  publicKey: string,
+  signature: string,
+  message: string,
+  title: string,
+  body: string
+): Promise<{ preview: string; subscriberCount: number; estimatedDeliveryTime: string } | null> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/admin/telegram/broadcast/preview`, {
+      method: 'POST',
+      headers: createAdminHeaders(publicKey, signature, message),
+      body: JSON.stringify({ title, body }),
+    })
+
+    if (!response.ok) return null
+
+    const json = await response.json()
+    return json.success ? json.data : null
+  } catch (error) {
+    console.error('Failed to preview broadcast:', error)
+    return null
+  }
+}

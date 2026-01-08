@@ -2194,4 +2194,196 @@ router.get('/telegram/chart-data', verifyAdminAuth, async (req: Request, res: Re
   }
 })
 
+// ═══════════════════════════════════════════════════════════════════════════
+// BOT ALERTS & MAINTENANCE MODE
+// Manage downtime alerts and broadcast messages to subscribers
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * GET /api/admin/telegram/alerts/status
+ * Get bot status and subscriber count (admin only)
+ */
+router.get('/telegram/alerts/status', verifyAdminAuth, async (req: Request, res: Response) => {
+  try {
+    const {
+      getBotStatus,
+      getSubscriberCount,
+      getActiveSubscribers,
+    } = await import('../services/bot-alerts.service')
+
+    const [status, subscriberCount, subscribers] = await Promise.all([
+      getBotStatus(),
+      getSubscriberCount(),
+      getActiveSubscribers(),
+    ])
+
+    return res.json({
+      success: true,
+      data: {
+        botStatus: status,
+        subscriberCount,
+        subscribers: subscribers.map(s => ({
+          telegramId: s.telegramId,
+          username: s.telegramUsername,
+          subscribedAt: s.subscribedAt,
+        })),
+      },
+    })
+  } catch (error) {
+    console.error('Error fetching alert status:', error)
+    return res.status(500).json({ error: 'Internal server error' })
+  }
+})
+
+/**
+ * POST /api/admin/telegram/maintenance/enable
+ * Enable maintenance mode and notify subscribers (admin only)
+ */
+router.post('/telegram/maintenance/enable', verifyAdminAuth, async (req: Request, res: Response) => {
+  try {
+    const { reason, estimatedEndTime, notifyUsers = true } = req.body
+
+    if (!reason || typeof reason !== 'string') {
+      return res.status(400).json({ error: 'Maintenance reason is required' })
+    }
+
+    if (reason.length > 500) {
+      return res.status(400).json({ error: 'Reason must be 500 characters or less' })
+    }
+
+    const { enableMaintenanceMode } = await import('../services/bot-alerts.service')
+    const result = await enableMaintenanceMode(reason, estimatedEndTime, notifyUsers)
+
+    if (!result.success) {
+      return res.status(500).json({
+        success: false,
+        error: result.error,
+      })
+    }
+
+    console.log(`🔧 Admin enabled maintenance mode: ${reason}`)
+
+    return res.json({
+      success: true,
+      message: 'Maintenance mode enabled',
+      notifiedUsers: result.notifiedCount || 0,
+    })
+  } catch (error) {
+    console.error('Error enabling maintenance mode:', error)
+    return res.status(500).json({ error: 'Internal server error' })
+  }
+})
+
+/**
+ * POST /api/admin/telegram/maintenance/disable
+ * Disable maintenance mode and notify subscribers (admin only)
+ */
+router.post('/telegram/maintenance/disable', verifyAdminAuth, async (req: Request, res: Response) => {
+  try {
+    const { notifyUsers = true } = req.body
+
+    const { disableMaintenanceMode } = await import('../services/bot-alerts.service')
+    const result = await disableMaintenanceMode(notifyUsers)
+
+    if (!result.success) {
+      return res.status(500).json({
+        success: false,
+        error: result.error,
+      })
+    }
+
+    console.log(`✅ Admin disabled maintenance mode`)
+
+    return res.json({
+      success: true,
+      message: 'Maintenance mode disabled',
+      notifiedUsers: result.notifiedCount || 0,
+    })
+  } catch (error) {
+    console.error('Error disabling maintenance mode:', error)
+    return res.status(500).json({ error: 'Internal server error' })
+  }
+})
+
+/**
+ * POST /api/admin/telegram/broadcast
+ * Send a broadcast message to all alert subscribers (admin only)
+ */
+router.post('/telegram/broadcast', verifyAdminAuth, async (req: Request, res: Response) => {
+  try {
+    const { title, body } = req.body
+
+    if (!title || typeof title !== 'string') {
+      return res.status(400).json({ error: 'Title is required' })
+    }
+
+    if (!body || typeof body !== 'string') {
+      return res.status(400).json({ error: 'Body is required' })
+    }
+
+    if (title.length > 100) {
+      return res.status(400).json({ error: 'Title must be 100 characters or less' })
+    }
+
+    if (body.length > 2000) {
+      return res.status(400).json({ error: 'Body must be 2000 characters or less' })
+    }
+
+    const { sendAdminAnnouncement } = await import('../services/bot-alerts.service')
+    const result = await sendAdminAnnouncement(title, body)
+
+    console.log(`📢 Admin broadcast sent: ${title} (${result.successful}/${result.total} delivered)`)
+
+    return res.json({
+      success: true,
+      message: 'Broadcast sent',
+      data: {
+        total: result.total,
+        successful: result.successful,
+        failed: result.failed,
+        errors: result.errors.slice(0, 5), // Only return first 5 errors
+      },
+    })
+  } catch (error) {
+    console.error('Error sending broadcast:', error)
+    return res.status(500).json({ error: 'Internal server error' })
+  }
+})
+
+/**
+ * POST /api/admin/telegram/broadcast/preview
+ * Preview a broadcast message (admin only)
+ */
+router.post('/telegram/broadcast/preview', verifyAdminAuth, async (req: Request, res: Response) => {
+  try {
+    const { title, body } = req.body
+
+    if (!title || !body) {
+      return res.status(400).json({ error: 'Title and body are required' })
+    }
+
+    const { getSubscriberCount } = await import('../services/bot-alerts.service')
+    const subscriberCount = await getSubscriberCount()
+
+    const previewMessage = `📢 *${title}*
+
+${body}
+
+_You're receiving this because you subscribed to alerts._
+_Use /alerts to manage your subscription._`
+
+    return res.json({
+      success: true,
+      data: {
+        preview: previewMessage,
+        subscriberCount,
+        estimatedDeliveryTime: Math.ceil(subscriberCount / 25) + ' seconds', // 25 msgs/sec
+      },
+    })
+  } catch (error) {
+    console.error('Error previewing broadcast:', error)
+    return res.status(500).json({ error: 'Internal server error' })
+  }
+})
+
 export default router
