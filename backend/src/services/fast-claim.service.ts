@@ -6,7 +6,7 @@
 
 import { Connection, Transaction, VersionedTransaction, sendAndConfirmTransaction, Keypair, PublicKey, SystemProgram } from '@solana/web3.js'
 import { supabase } from '../config/database'
-import { getConnection, getOpsWallet } from '../config/solana'
+import { getConnection, getOpsWallet, getSolPrice } from '../config/solana'
 import { env } from '../config/env'
 import { bagsFmService, ClaimablePosition } from './bags-fm'
 import {
@@ -502,10 +502,19 @@ class FastClaimService {
     if (!supabase) return
 
     try {
+      // Fetch current SOL price for USD value tracking
+      let amountUsd = 0
+      try {
+        const solPrice = await getSolPrice()
+        amountUsd = amountSol * solPrice
+      } catch (priceError) {
+        console.warn('Failed to fetch SOL price for USD calculation:', priceError)
+      }
+
       await supabase.from('user_claim_history').insert([{
         user_token_id: userTokenId,
         amount_sol: amountSol,
-        amount_usd: 0,
+        amount_usd: amountUsd,
         platform_fee_sol: platformFeeSol,
         user_received_sol: userReceivedSol,
         transaction_signature: signature,
@@ -513,12 +522,13 @@ class FastClaimService {
       }])
 
       // Also record as transaction for activity feed
+      const usdStr = amountUsd > 0 ? ` ($${amountUsd.toFixed(2)})` : ''
       await supabase.from('user_transactions').insert([{
         user_token_id: userTokenId,
         type: 'transfer',
         amount: amountSol,
         signature,
-        message: `Claimed ${amountSol.toFixed(4)} SOL fees (${platformFeeSol.toFixed(4)} platform fee)`,
+        message: `Claimed ${amountSol.toFixed(4)} SOL${usdStr} fees (${platformFeeSol.toFixed(4)} platform fee)`,
         status: 'confirmed',
       }])
     } catch (error) {

@@ -1203,13 +1203,20 @@ Is this correct?`
         console.warn('Could not fetch token info:', error)
       }
 
-      // Could not fetch token data, ask for symbol manually
-      data.step = 'symbol'
-      await ctx.replyWithMarkdown(`✅ Token mint verified!
+      // Token not found on Bags.fm - reject registration
+      await ctx.replyWithMarkdown(`❌ *Token Not Found on Bags.fm*
 
-⚠️ Could not fetch token data automatically.
+The token address you provided could not be found on Bags.fm.
 
-📝 *TOKEN SYMBOL?* (e.g., BAGS)`)
+*Possible reasons:*
+• Token doesn't exist or hasn't launched yet
+• Token is on a different platform (only Bags.fm tokens supported)
+• Network error - try again later
+
+Please verify the token mint address and try again with /register.
+
+_Only tokens launched on Bags.fm can use the flywheel._`)
+      ctx.session.registerData = undefined
       break
 
     case 'confirm_token':

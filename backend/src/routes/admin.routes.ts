@@ -126,7 +126,7 @@ router.post('/config', async (req: Request, res: Response) => {
     }
 
     // Step 2: Verify the message is recent (prevent replay attacks)
-    if (!isMessageRecent(message, 5 * 60 * 1000)) { // 5 minute window
+    if (!isMessageRecent(message, 2 * 60 * 1000)) { // 2 minute window (reduced for security)
       return res.status(400).json({ error: 'Message expired. Please sign a new message.' })
     }
 
@@ -283,7 +283,7 @@ router.post('/manual-sell', async (req: Request, res: Response) => {
     }
 
     // Step 2: Verify the message is recent (prevent replay attacks)
-    if (!isMessageRecent(message, 5 * 60 * 1000)) { // 5 minute window
+    if (!isMessageRecent(message, 2 * 60 * 1000)) { // 2 minute window (reduced for security)
       return res.status(400).json({ error: 'Message expired. Please sign a new message.' })
     }
 
@@ -398,7 +398,7 @@ async function verifyAdminAuth(req: Request, res: Response, next: Function) {
     }
 
     // Verify the message is recent
-    if (!isMessageRecent(message, 10 * 60 * 1000)) { // 10 minute window for browsing
+    if (!isMessageRecent(message, 5 * 60 * 1000)) { // 5 minute window for browsing (reduced from 10 min)
       return res.status(400).json({ error: 'Session expired. Please re-authenticate.' })
     }
 

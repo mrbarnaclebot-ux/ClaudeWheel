@@ -8,6 +8,7 @@ import { PublicKey } from '@solana/web3.js'
 import { supabase } from '../config/database'
 import { getConnection, getBalance } from '../config/solana'
 import { tokenLauncherService } from '../services/token-launcher'
+import { executeRefund, findOriginalFunder } from '../services/refund.service'
 
 /**
  * Check if supabase is configured and throw error if not
@@ -153,7 +154,7 @@ async function handleExpiredLaunch(launch: PendingLaunch): Promise<void> {
       .update({
         status: 'expired',
         deposit_received_sol: balance,
-        error_message: `Expired with ${balance} SOL - refund pending`,
+        error_message: `Expired with ${balance} SOL - processing refund`,
         updated_at: new Date().toISOString(),
       })
       .eq('id', launch.id)
@@ -166,8 +167,26 @@ async function handleExpiredLaunch(launch: PendingLaunch): Promise<void> {
       details: { balance_sol: balance, needs_refund: true },
     })
 
-    // TODO: Trigger refund process
-    // For now, admin will handle refunds manually
+    // Trigger automatic refund
+    try {
+      // Find the original funder address to refund to
+      const originalFunder = await findOriginalFunder(launch.dev_wallet_address)
+      if (originalFunder) {
+        console.log(`💸 Auto-refunding ${balance.toFixed(4)} SOL to original funder: ${originalFunder}`)
+        const refundResult = await executeRefund(launch.id, originalFunder)
+        if (refundResult.success) {
+          console.log(`✅ Auto-refund successful: ${refundResult.signature}`)
+          // Notification is handled by executeRefund
+          return
+        } else {
+          console.error(`❌ Auto-refund failed: ${refundResult.error}`)
+        }
+      } else {
+        console.log(`⚠️ Could not find original funder for ${launch.token_symbol} - manual refund required`)
+      }
+    } catch (refundError) {
+      console.error('Auto-refund error:', refundError)
+    }
   } else {
     // No balance - just mark as expired
     await db
@@ -400,10 +419,37 @@ async function handleFailedLaunch(launch: PendingLaunch, errorMessage: string): 
       details: { error: errorMessage, retry_count: newRetryCount },
     })
 
-    // Notify user about failure and refund
-    await notifyUser(
-      launch.telegram_users?.telegram_id,
-      `❌ *Launch Failed*
+    // Trigger automatic refund
+    let refundTriggered = false
+    try {
+      const devWalletPubkey = new PublicKey(launch.dev_wallet_address)
+      const balance = await getBalance(devWalletPubkey)
+
+      if (balance > 0.001) {
+        const originalFunder = await findOriginalFunder(launch.dev_wallet_address)
+        if (originalFunder) {
+          console.log(`💸 Auto-refunding ${balance.toFixed(4)} SOL after failed launch to: ${originalFunder}`)
+          const refundResult = await executeRefund(launch.id, originalFunder)
+          if (refundResult.success) {
+            console.log(`✅ Auto-refund successful: ${refundResult.signature}`)
+            refundTriggered = true
+            // Notification is handled by executeRefund
+          } else {
+            console.error(`❌ Auto-refund failed: ${refundResult.error}`)
+          }
+        } else {
+          console.log(`⚠️ Could not find original funder for ${launch.token_symbol} - manual refund required`)
+        }
+      }
+    } catch (refundError) {
+      console.error('Auto-refund error:', refundError)
+    }
+
+    // Notify user about failure (only if refund wasn't triggered - refund service sends its own notification)
+    if (!refundTriggered) {
+      await notifyUser(
+        launch.telegram_users?.telegram_id,
+        `❌ *Launch Failed*
 
 Your ${launch.token_symbol} launch could not be completed after ${maxRetries} attempts.
 
@@ -412,27 +458,51 @@ Error: ${errorMessage}
 Your SOL will be refunded to your wallet. Please contact support if you need assistance.
 
 Use /launch to try again with a new token.`
-    )
-
-    // TODO: Trigger automatic refund
+      )
+    }
   }
 }
 
 /**
- * Send notification to Telegram user
+ * Send notification to Telegram user with retry mechanism
  */
-async function notifyUser(telegramId: number | undefined, message: string): Promise<void> {
-  if (!telegramId) return
+async function notifyUser(
+  telegramId: number | undefined,
+  message: string,
+  maxRetries: number = 3
+): Promise<boolean> {
+  if (!telegramId) return false
 
-  try {
-    const { getBot } = await import('../telegram/bot')
-    const bot = getBot()
-    if (bot) {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const { getBot } = await import('../telegram/bot')
+      const bot = getBot()
+      if (!bot) {
+        console.warn('⚠️ Telegram bot not initialized - notification not sent')
+        return false
+      }
+
       await bot.telegram.sendMessage(telegramId, message, { parse_mode: 'Markdown' })
+      return true
+    } catch (error: any) {
+      const isLastAttempt = attempt === maxRetries
+      const errorMessage = error?.message || 'Unknown error'
+
+      if (isLastAttempt) {
+        console.error(`❌ Failed to send Telegram notification after ${maxRetries} attempts: ${errorMessage}`)
+        console.error(`   Telegram ID: ${telegramId}`)
+        console.error(`   Message preview: ${message.substring(0, 100)}...`)
+        return false
+      }
+
+      // Exponential backoff: 1s, 2s, 4s
+      const delay = Math.pow(2, attempt - 1) * 1000
+      console.warn(`⚠️ Telegram notification attempt ${attempt}/${maxRetries} failed, retrying in ${delay}ms: ${errorMessage}`)
+      await new Promise(resolve => setTimeout(resolve, delay))
     }
-  } catch (error) {
-    console.error('Error sending Telegram notification:', error)
   }
+
+  return false
 }
 
 /**
