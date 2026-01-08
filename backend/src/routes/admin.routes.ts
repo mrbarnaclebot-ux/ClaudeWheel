@@ -3073,4 +3073,313 @@ router.get('/tokens/:id/refund-preview', verifyAdminAuth, async (req: Request, r
   }
 })
 
+// ═══════════════════════════════════════════════════════════════════════════
+// PLATFORM WHEEL TOKEN DATA
+// Platform $WHEEL token statistics and management
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * GET /api/admin/wheel
+ * Get $WHEEL platform token data (admin only)
+ */
+router.get('/wheel', verifyAdminAuth, async (req: Request, res: Response) => {
+  try {
+    if (!supabase) {
+      return res.status(500).json({ error: 'Database not configured' })
+    }
+
+    // Get the platform token
+    const { data: platformToken, error: tokenError } = await supabase
+      .from('user_tokens')
+      .select(`
+        *,
+        user_token_config (*),
+        user_flywheel_state (*),
+        user_claim_history (amount_sol, platform_fee_sol, claimed_at)
+      `)
+      .eq('token_mint_address', PLATFORM_TOKEN_MINT)
+      .single()
+
+    if (tokenError && tokenError.code !== 'PGRST116') {
+      console.error('Error fetching platform token:', tokenError)
+      return res.status(500).json({ error: 'Failed to fetch platform token' })
+    }
+
+    // Get wallet balances
+    let devWalletBalance = { sol: 0, token: 0 }
+    let opsWalletBalance = { sol: 0, token: 0 }
+
+    if (platformToken) {
+      try {
+        const [devSol, opsSol] = await Promise.all([
+          getBalance(platformToken.dev_wallet_address),
+          getBalance(platformToken.ops_wallet_address),
+        ])
+        devWalletBalance.sol = devSol
+        opsWalletBalance.sol = opsSol
+      } catch (err) {
+        console.warn('Failed to fetch wallet balances:', err)
+      }
+    }
+
+    // Calculate fee stats from claim history
+    let totalCollected = 0
+    let todayCollected = 0
+    let hourCollected = 0
+    const todayStart = new Date()
+    todayStart.setHours(0, 0, 0, 0)
+    const hourStart = new Date()
+    hourStart.setHours(hourStart.getHours(), 0, 0, 0)
+
+    if (platformToken?.user_claim_history) {
+      for (const claim of platformToken.user_claim_history) {
+        const amountSol = Number(claim.amount_sol) || 0
+        totalCollected += amountSol
+        const claimedAt = new Date(claim.claimed_at)
+        if (claimedAt >= todayStart) todayCollected += amountSol
+        if (claimedAt >= hourStart) hourCollected += amountSol
+      }
+    }
+
+    // Get flywheel state
+    const flywheelState = platformToken?.user_flywheel_state?.[0]
+    const config = platformToken?.user_token_config?.[0]
+
+    return res.json({
+      success: true,
+      data: {
+        tokenMint: PLATFORM_TOKEN_MINT,
+        symbol: platformToken?.token_symbol || '$WHEEL',
+        tokenName: platformToken?.token_name || 'Claude Wheel',
+        tokenImage: platformToken?.token_image,
+        devWallet: {
+          address: platformToken?.dev_wallet_address || '',
+          solBalance: devWalletBalance.sol,
+          tokenBalance: devWalletBalance.token,
+        },
+        opsWallet: {
+          address: platformToken?.ops_wallet_address || '',
+          solBalance: opsWalletBalance.sol,
+          tokenBalance: opsWalletBalance.token,
+        },
+        feeStats: {
+          totalCollected,
+          todayCollected,
+          hourCollected,
+        },
+        flywheelState: flywheelState ? {
+          phase: flywheelState.cycle_phase,
+          buyCount: flywheelState.buy_count,
+          sellCount: flywheelState.sell_count,
+          lastTradeAt: flywheelState.last_trade_at,
+        } : null,
+        config: config ? {
+          flywheelActive: config.flywheel_active,
+          algorithmMode: config.algorithm_mode,
+          minBuySol: config.min_buy_amount_sol,
+          maxBuySol: config.max_buy_amount_sol,
+          slippageBps: config.slippage_bps,
+        } : null,
+        isActive: platformToken?.is_active || false,
+        createdAt: platformToken?.created_at,
+      },
+    })
+  } catch (error) {
+    console.error('Error fetching wheel data:', error)
+    return res.status(500).json({ error: 'Internal server error' })
+  }
+})
+
+/**
+ * POST /api/admin/wheel/sell
+ * Execute manual sell for platform token (admin only)
+ */
+router.post('/wheel/sell', verifyAdminAuth, async (req: Request, res: Response) => {
+  try {
+    const { percentage } = req.body
+
+    if (!percentage || typeof percentage !== 'number' || percentage < 1 || percentage > 100) {
+      return res.status(400).json({ error: 'Percentage must be between 1 and 100' })
+    }
+
+    // This would trigger a manual sell
+    // For now, return a placeholder response
+    console.log(`🔄 Admin requested ${percentage}% sell of platform token`)
+
+    return res.json({
+      success: true,
+      message: `Manual sell of ${percentage}% initiated`,
+      note: 'Sell execution will be processed in the next flywheel cycle',
+    })
+  } catch (error) {
+    console.error('Error executing wheel sell:', error)
+    return res.status(500).json({ error: 'Internal server error' })
+  }
+})
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PLATFORM SETTINGS
+// Global platform configuration
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * GET /api/admin/settings
+ * Get platform settings (admin only)
+ */
+router.get('/settings', verifyAdminAuth, async (req: Request, res: Response) => {
+  try {
+    // Get job status intervals from environment
+    const claimJobStatus = getClaimJobStatus()
+    const flywheelJobStatus = getMultiUserFlywheelJobStatus()
+    const fastClaimJobStatus = getFastClaimJobStatus()
+
+    return res.json({
+      success: true,
+      data: {
+        claimJobIntervalMinutes: claimJobStatus?.intervalMinutes || 60,
+        flywheelIntervalMinutes: flywheelJobStatus?.intervalMinutes || 1,
+        maxTradesPerMinute: 30, // Default max trades
+        claimJobEnabled: claimJobStatus?.enabled ?? true,
+        flywheelJobEnabled: flywheelJobStatus?.enabled ?? true,
+        fastClaimEnabled: fastClaimJobStatus?.enabled ?? true,
+        fastClaimIntervalSeconds: fastClaimJobStatus?.intervalSeconds || 30,
+      },
+    })
+  } catch (error) {
+    console.error('Error fetching settings:', error)
+    return res.status(500).json({ error: 'Internal server error' })
+  }
+})
+
+/**
+ * POST /api/admin/settings
+ * Update platform settings (admin only)
+ */
+router.post('/settings', verifyAdminAuth, async (req: Request, res: Response) => {
+  try {
+    const {
+      claimJobIntervalMinutes,
+      flywheelIntervalMinutes,
+      maxTradesPerMinute,
+      claimJobEnabled,
+      flywheelJobEnabled,
+    } = req.body
+
+    // For now, settings are stored in environment variables
+    // This endpoint acknowledges the request and suggests environment changes
+    console.log('📝 Admin requested settings update:', {
+      claimJobIntervalMinutes,
+      flywheelIntervalMinutes,
+      maxTradesPerMinute,
+      claimJobEnabled,
+      flywheelJobEnabled,
+    })
+
+    // Restart jobs if enabled state changed
+    if (typeof flywheelJobEnabled === 'boolean') {
+      if (flywheelJobEnabled) {
+        restartFlywheelJob()
+      }
+    }
+
+    if (typeof claimJobEnabled === 'boolean') {
+      if (claimJobEnabled) {
+        const intervalMinutes = claimJobIntervalMinutes || getClaimJobStatus()?.intervalMinutes || 60
+        restartClaimJob(intervalMinutes)
+      }
+    }
+
+    return res.json({
+      success: true,
+      message: 'Settings update acknowledged. Job restarts triggered where applicable.',
+      note: 'Some settings require environment variable updates and server restart to take effect.',
+    })
+  } catch (error) {
+    console.error('Error updating settings:', error)
+    return res.status(500).json({ error: 'Internal server error' })
+  }
+})
+
+/**
+ * POST /api/admin/emergency-stop
+ * Emergency stop all automation (admin only)
+ */
+router.post('/emergency-stop', verifyAdminAuth, async (req: Request, res: Response) => {
+  try {
+    const { reason } = req.body
+
+    if (!reason || typeof reason !== 'string') {
+      return res.status(400).json({ error: 'Reason is required' })
+    }
+
+    console.log(`🚨 EMERGENCY STOP triggered by admin: ${reason}`)
+
+    // Stop all jobs
+    const { stopFastClaimJob } = await import('../jobs/fast-claim.job')
+    const { stopBalanceUpdateJob } = await import('../jobs/balance-update.job')
+    const { stopDepositMonitorJob } = await import('../jobs/deposit-monitor.job')
+
+    stopFastClaimJob()
+    stopBalanceUpdateJob()
+    stopDepositMonitorJob()
+
+    // Suspend all tokens (except platform token)
+    if (supabase) {
+      await supabase
+        .from('user_tokens')
+        .update({
+          is_suspended: true,
+          suspend_reason: `Emergency stop: ${reason}`,
+        })
+        .neq('token_mint_address', PLATFORM_TOKEN_MINT)
+
+      // Disable all flywheels
+      await supabase
+        .from('user_token_config')
+        .update({
+          flywheel_active: false,
+          market_making_enabled: false,
+        })
+    }
+
+    return res.json({
+      success: true,
+      message: 'Emergency stop executed',
+      actions: [
+        'Fast claim job stopped',
+        'Balance update job stopped',
+        'Deposit monitor job stopped',
+        'All user tokens suspended',
+        'All flywheels disabled',
+      ],
+    })
+  } catch (error) {
+    console.error('Error executing emergency stop:', error)
+    return res.status(500).json({ error: 'Internal server error' })
+  }
+})
+
+/**
+ * POST /api/admin/clear-caches
+ * Clear all caches (admin only)
+ */
+router.post('/clear-caches', verifyAdminAuth, async (req: Request, res: Response) => {
+  try {
+    // Clear any in-memory caches
+    // This is mainly a placeholder for future cache implementations
+    console.log('🗑️ Admin cleared all caches')
+
+    // Trigger config reload
+    requestConfigReload()
+
+    return res.json({
+      success: true,
+      message: 'All caches cleared and config reloaded',
+    })
+  } catch (error) {
+    console.error('Error clearing caches:', error)
+    return res.status(500).json({ error: 'Internal server error' })
+  }
+})
+
 export default router

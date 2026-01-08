@@ -19,6 +19,7 @@ import { bagsFmService } from './services/bags-fm'
 import { isEncryptionConfigured } from './services/encryption.service'
 import { startTelegramBot, stopTelegramBot, getTelegramWebhookMiddleware } from './telegram/bot'
 import { startDepositMonitorJob, stopDepositMonitorJob } from './jobs/deposit-monitor.job'
+import { adminWs } from './websocket/admin-ws'
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CLAUDE FLYWHEEL BACKEND
@@ -203,12 +204,17 @@ async function initializeServices() {
 // Start server
 const server = app.listen(env.port, async () => {
   console.log(`\n🌐 Server running on http://localhost:${env.port}`)
+
+  // Initialize WebSocket server
+  adminWs.init(server)
+
   await initializeServices()
 })
 
 // Graceful shutdown
 process.on('SIGTERM', () => {
   console.log('\n👋 Shutting down gracefully...')
+  adminWs.shutdown()
   stopTelegramBot()
   stopDepositMonitorJob()
   stopFastClaimJob()
@@ -221,6 +227,7 @@ process.on('SIGTERM', () => {
 
 process.on('SIGINT', () => {
   console.log('\n👋 Shutting down gracefully...')
+  adminWs.shutdown()
   stopTelegramBot()
   stopDepositMonitorJob()
   stopFastClaimJob()
