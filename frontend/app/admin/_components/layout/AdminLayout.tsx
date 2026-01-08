@@ -7,7 +7,7 @@ import { QueryClientProvider } from '@tanstack/react-query'
 import bs58 from 'bs58'
 
 import { queryClient } from '../../_lib/queryClient'
-import { useAdminStore, useAdminAuth } from '../../_stores/adminStore'
+import { useAdminStore, useAdminAuth, useHydrateStore } from '../../_stores/adminStore'
 import { fetchAdminAuthNonce } from '../../_lib/adminApi'
 import { AdminSidebar } from './AdminSidebar'
 import { AdminHeader } from './AdminHeader'
@@ -20,9 +20,19 @@ interface AdminLayoutProps {
 }
 
 function AdminLayoutContent({ children }: AdminLayoutProps) {
+  const hydrated = useHydrateStore()
   const { publicKey, connected, signMessage } = useWallet()
   const { isAuthenticated, setAuth, clearAuth } = useAdminAuth()
   const setWsConnected = useAdminStore((s) => s.setWsConnected)
+
+  // Wait for hydration before rendering to avoid mismatch
+  if (!hydrated) {
+    return (
+      <div className="min-h-screen bg-void flex items-center justify-center p-4">
+        <PageSkeleton />
+      </div>
+    )
+  }
 
   // Check if wallet is authorized
   const isAuthorized = connected && publicKey?.toString() === DEV_WALLET_ADDRESS

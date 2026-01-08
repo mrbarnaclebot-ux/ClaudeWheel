@@ -4,7 +4,8 @@
  */
 
 import { create } from 'zustand'
-import { persist } from 'zustand/middleware'
+import { persist, createJSONStorage } from 'zustand/middleware'
+import { useEffect, useState } from 'react'
 import type { AdminTab, TokenFilters, LogFilters } from '../_types/admin.types'
 
 interface AdminState {
@@ -129,9 +130,36 @@ export const useAdminStore = create<AdminState>()(
         autoRefresh: state.autoRefresh,
         refreshInterval: state.refreshInterval,
       }),
+      // Use custom storage that handles SSR gracefully
+      storage: createJSONStorage(() => {
+        // Return a no-op storage during SSR
+        if (typeof window === 'undefined') {
+          return {
+            getItem: () => null,
+            setItem: () => {},
+            removeItem: () => {},
+          }
+        }
+        return localStorage
+      }),
+      // Skip hydration to prevent mismatch, we'll manually trigger it
+      skipHydration: true,
     }
   )
 )
+
+// Hook to handle hydration on the client
+export function useHydrateStore() {
+  const [hydrated, setHydrated] = useState(false)
+
+  useEffect(() => {
+    // Rehydrate the store on the client
+    useAdminStore.persist.rehydrate()
+    setHydrated(true)
+  }, [])
+
+  return hydrated
+}
 
 // Selector hooks for common patterns
 export const useAdminAuth = () =>
