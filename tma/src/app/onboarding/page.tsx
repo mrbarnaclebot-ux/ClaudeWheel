@@ -92,10 +92,12 @@ export default function OnboardingPage() {
         }
     }
 
+    const [isDelegating, setIsDelegating] = useState(false);
+
     async function handleDelegateDev() {
         hapticFeedback('medium');
         setError(null);
-        setDebugInfo(null);
+        setIsDelegating(true);
 
         try {
             const devWallet = solanaWallets[0];
@@ -120,8 +122,8 @@ export default function OnboardingPage() {
                 return;
             }
 
+            setDebugInfo(`${walletInfo}\n\nDelegating...`);
             console.log('[Onboarding] Delegating dev wallet:', devWallet.address);
-            console.log('[Onboarding] Wallet object:', JSON.stringify(devWallet, null, 2));
 
             const result = await delegateWallet({
                 address: devWallet.address,
@@ -129,7 +131,7 @@ export default function OnboardingPage() {
             });
 
             console.log('[Onboarding] Delegation result:', result);
-            console.log('[Onboarding] Dev wallet delegated successfully');
+            setDebugInfo(`${walletInfo}\n\nDelegation result: ${JSON.stringify(result)}`);
 
             setStep('delegate_ops');
         } catch (err: any) {
@@ -146,6 +148,8 @@ export default function OnboardingPage() {
 
             setDebugInfo(`Error: ${JSON.stringify(errorDetails)}`);
             setError(`Dev wallet delegation failed: ${err?.message || 'Unknown error'}`);
+        } finally {
+            setIsDelegating(false);
         }
     }
 
@@ -331,9 +335,17 @@ export default function OnboardingPage() {
 
                         <button
                             onClick={handleDelegateDev}
-                            className="w-full bg-green-600 hover:bg-green-500 text-white py-4 rounded-xl font-medium text-lg"
+                            disabled={isDelegating}
+                            className="w-full bg-green-600 hover:bg-green-500 disabled:bg-gray-600 text-white py-4 rounded-xl font-medium text-lg flex items-center justify-center gap-2"
                         >
-                            Authorize Dev Wallet
+                            {isDelegating ? (
+                                <>
+                                    <div className="animate-spin w-5 h-5 border-2 border-white border-t-transparent rounded-full" />
+                                    Delegating...
+                                </>
+                            ) : (
+                                'Authorize Dev Wallet'
+                            )}
                         </button>
 
                         {error && (
