@@ -1,6 +1,7 @@
 import { Connection, Keypair, PublicKey, LAMPORTS_PER_SOL } from '@solana/web3.js'
 import bs58 from 'bs58'
 import { env } from './env'
+import { loggers } from '../utils/logger'
 
 // ═══════════════════════════════════════════════════════════════════════════
 // SOLANA CONNECTION
@@ -25,7 +26,7 @@ export function getConnection(): Connection {
 
 export function getDevWallet(): Keypair | null {
   if (!env.devWalletPrivateKey) {
-    console.warn('⚠️ Dev wallet private key not configured')
+    loggers.solana.warn('Dev wallet private key not configured')
     return null
   }
 
@@ -33,14 +34,14 @@ export function getDevWallet(): Keypair | null {
     const secretKey = bs58.decode(env.devWalletPrivateKey)
     return Keypair.fromSecretKey(secretKey)
   } catch (error) {
-    console.error('❌ Failed to load dev wallet:', error)
+    loggers.solana.error({ error: String(error) }, 'Failed to load dev wallet')
     return null
   }
 }
 
 export function getOpsWallet(): Keypair | null {
   if (!env.opsWalletPrivateKey) {
-    console.warn('⚠️ Ops wallet private key not configured')
+    loggers.solana.warn('Ops wallet private key not configured')
     return null
   }
 
@@ -48,7 +49,7 @@ export function getOpsWallet(): Keypair | null {
     const secretKey = bs58.decode(env.opsWalletPrivateKey)
     return Keypair.fromSecretKey(secretKey)
   } catch (error) {
-    console.error('❌ Failed to load ops wallet:', error)
+    loggers.solana.error({ error: String(error) }, 'Failed to load ops wallet')
     return null
   }
 }
@@ -67,7 +68,7 @@ export function getTokenMint(): PublicKey | null {
   try {
     return new PublicKey(env.tokenMintAddress)
   } catch (error) {
-    console.warn('⚠️ Invalid token mint address:', env.tokenMintAddress)
+    loggers.solana.warn({ tokenMintAddress: env.tokenMintAddress }, 'Invalid token mint address')
     return null
   }
 }
@@ -129,7 +130,7 @@ export async function getTokenBalance(
     const balance = tokenAccounts.value[0].account.data.parsed.info.tokenAmount.uiAmount
     return balance || 0
   } catch (error) {
-    console.error('Failed to get token balance:', error)
+    loggers.solana.error({ error: String(error) }, 'Failed to get token balance')
     return 0
   }
 }
@@ -203,6 +204,6 @@ export async function getSolPrice(): Promise<number> {
 
   // All sources failed - use cached price but don't update timestamp
   // so we retry on next call
-  console.warn('⚠️ All SOL price sources failed, using cached:', cachedSolPrice)
+  loggers.solana.warn({ cachedPrice: cachedSolPrice }, 'All SOL price sources failed, using cached')
   return cachedSolPrice
 }

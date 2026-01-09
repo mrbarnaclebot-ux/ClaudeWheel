@@ -3,13 +3,15 @@
 // Orchestrates market making across all users with active flywheels
 // ═══════════════════════════════════════════════════════════════════════════
 
-import { Keypair, PublicKey, VersionedTransaction, Connection, Transaction, SystemProgram, sendAndConfirmTransaction, LAMPORTS_PER_SOL } from '@solana/web3.js'
+import { Keypair, PublicKey, VersionedTransaction, Connection, Transaction, SystemProgram, LAMPORTS_PER_SOL } from '@solana/web3.js'
+import { sendAndConfirmTransactionWithRetry, sendVersionedTransactionWithRetry } from '../utils/transaction'
 import bs58 from 'bs58'
 import { supabase } from '../config/database'
 import { getConnection, getBalance, getTokenBalance, getOpsWallet } from '../config/solana'
 import { env } from '../config/env'
 import { bagsFmService } from './bags-fm'
 import { PriceAnalyzer } from './price-analyzer'
+import { loggers } from '../utils/logger'
 import {
   UserToken,
   UserTokenConfig,
@@ -83,18 +85,72 @@ class MultiUserMMService {
 
   /**
    * Check if trade cooldown is active for a token
+   * Uses in-memory cache but falls back to DB if not cached
    */
-  private isCooldownActive(tokenId: string): boolean {
+  private async isCooldownActive(tokenId: string): Promise<boolean> {
+    // Check in-memory cache first
     const lastTrade = this.lastTradeTime.get(tokenId)
-    if (!lastTrade) return false
-    return Date.now() - lastTrade < this.SMART_MODE_COOLDOWN_MS
+    if (lastTrade) {
+      return Date.now() - lastTrade < this.SMART_MODE_COOLDOWN_MS
+    }
+
+    // Fall back to DB if not cached (e.g., after restart)
+    const dbLastTrade = await this.getLastTradeTimeFromDB(tokenId)
+    if (dbLastTrade) {
+      // Cache for future checks
+      this.lastTradeTime.set(tokenId, dbLastTrade)
+      return Date.now() - dbLastTrade < this.SMART_MODE_COOLDOWN_MS
+    }
+
+    return false
+  }
+
+  /**
+   * Get last trade time from database
+   */
+  private async getLastTradeTimeFromDB(tokenId: string): Promise<number | null> {
+    if (!supabase) return null
+
+    try {
+      const { data } = await supabase
+        .from('user_flywheel_state')
+        .select('last_trade_at')
+        .eq('user_token_id', tokenId)
+        .single()
+
+      if (data?.last_trade_at) {
+        return new Date(data.last_trade_at).getTime()
+      }
+    } catch (error) {
+      loggers.flywheel.warn({ tokenId, error: String(error) }, 'Failed to fetch last trade time from DB')
+    }
+
+    return null
   }
 
   /**
    * Record a trade timestamp for cooldown tracking
+   * Persists to both in-memory cache and database
    */
-  private recordTradeTimestamp(tokenId: string): void {
-    this.lastTradeTime.set(tokenId, Date.now())
+  private async recordTradeTimestamp(tokenId: string): Promise<void> {
+    const now = Date.now()
+    // Update in-memory cache
+    this.lastTradeTime.set(tokenId, now)
+
+    // Persist to database
+    if (supabase) {
+      try {
+        await supabase
+          .from('user_flywheel_state')
+          .update({
+            last_trade_at: new Date(now).toISOString(),
+            updated_at: new Date().toISOString(),
+          })
+          .eq('user_token_id', tokenId)
+      } catch (error) {
+        loggers.flywheel.warn({ tokenId, error: String(error) }, 'Failed to persist trade timestamp to DB')
+      }
+    }
   }
 
   /**
@@ -102,7 +158,7 @@ class MultiUserMMService {
    */
   async runFlywheelCycle(maxTradesPerMinute: number = 30): Promise<FlywheelCycleResult> {
     if (this.isRunning) {
-      console.log('⚠️ Flywheel cycle already in progress, skipping')
+      loggers.flywheel.warn('Flywheel cycle already in progress, skipping')
       return {
         totalTokensProcessed: 0,
         tradesExecuted: 0,
@@ -117,9 +173,7 @@ class MultiUserMMService {
     const startedAt = new Date().toISOString()
     const results: TradeResult[] = []
 
-    console.log('\n═══════════════════════════════════════════════════════════')
-    console.log('   MULTI-USER FLYWHEEL CYCLE')
-    console.log('═══════════════════════════════════════════════════════════\n')
+    loggers.flywheel.info('Starting multi-user flywheel cycle')
 
     try {
       // Reset rate limit counter if new minute
@@ -131,12 +185,12 @@ class MultiUserMMService {
 
       // Get all active flywheel tokens
       const tokens = await getTokensForFlywheel()
-      console.log(`📋 Found ${tokens.length} tokens with active flywheels\n`)
+      loggers.flywheel.info({ tokenCount: tokens.length }, 'Found tokens with active flywheels')
 
       for (const tokenWithConfig of tokens) {
         // Check rate limit
         if (this.tradesThisMinute >= maxTradesPerMinute) {
-          console.log(`⏸️ Rate limit reached (${maxTradesPerMinute}/min), pausing until next cycle`)
+          loggers.flywheel.warn({ maxTradesPerMinute }, 'Rate limit reached, pausing until next cycle')
           break
         }
 
@@ -152,7 +206,7 @@ class MultiUserMMService {
           // Small delay between tokens
           await this.sleep(500)
         } catch (error: any) {
-          console.error(`❌ ${tokenWithConfig.token_symbol}: Unexpected error - ${error.message}`)
+          loggers.flywheel.error({ tokenSymbol: tokenWithConfig.token_symbol, tokenMint: tokenWithConfig.token_mint_address, error: String(error) }, 'Unexpected error processing token')
           results.push({
             userTokenId: tokenWithConfig.id,
             tokenMint: tokenWithConfig.token_mint_address,
@@ -172,9 +226,7 @@ class MultiUserMMService {
     const completedAt = new Date().toISOString()
     const tradesExecuted = results.filter(r => r.success).length
 
-    console.log('\n───────────────────────────────────────────────────────────')
-    console.log(`   Flywheel cycle completed: ${tradesExecuted}/${results.length} trades`)
-    console.log('───────────────────────────────────────────────────────────\n')
+    loggers.flywheel.info({ tradesExecuted, totalTrades: results.length }, 'Flywheel cycle completed')
 
     return {
       totalTokensProcessed: results.length,
@@ -198,19 +250,19 @@ class MultiUserMMService {
       // Get dev wallet (source of fees)
       const devWallet = await getDecryptedDevWallet(token.id)
       if (!devWallet) {
-        console.log(`   ⚠️ ${token.token_symbol}: Could not decrypt dev wallet for fee collection`)
+        loggers.flywheel.warn({ tokenSymbol: token.token_symbol, tokenId: token.id }, 'Could not decrypt dev wallet for fee collection')
         return { collected: false, amount: 0, platformFeeSol: 0, userAmountSol: 0 }
       }
 
       // Get dev wallet SOL balance
       const devBalance = await getBalance(devWallet.publicKey)
-      console.log(`   📊 ${token.token_symbol}: Dev wallet balance: ${devBalance.toFixed(4)} SOL`)
+      loggers.flywheel.debug({ tokenSymbol: token.token_symbol, devBalance, devWallet: devWallet.publicKey.toString() }, 'Dev wallet balance')
 
       // Calculate transfer amount (keep minimum reserve)
       const transferAmount = devBalance - DEV_WALLET_MIN_RESERVE_SOL
 
       if (transferAmount < MIN_FEE_THRESHOLD_SOL) {
-        console.log(`   ℹ️ ${token.token_symbol}: Dev wallet balance too low for fee collection (need ${(MIN_FEE_THRESHOLD_SOL + DEV_WALLET_MIN_RESERVE_SOL).toFixed(4)} SOL)`)
+        loggers.flywheel.debug({ tokenSymbol: token.token_symbol, devBalance, minRequired: MIN_FEE_THRESHOLD_SOL + DEV_WALLET_MIN_RESERVE_SOL }, 'Dev wallet balance too low for fee collection')
         return { collected: false, amount: 0, platformFeeSol: 0, userAmountSol: 0 }
       }
 
@@ -219,7 +271,7 @@ class MultiUserMMService {
       const platformFeeSol = transferAmount * (platformFeePercent / 100)
       const userAmountSol = transferAmount - platformFeeSol
 
-      console.log(`   💸 ${token.token_symbol}: Collecting ${transferAmount.toFixed(4)} SOL (${platformFeePercent}% platform fee)`)
+      loggers.flywheel.info({ tokenSymbol: token.token_symbol, transferAmount, platformFeePercent }, 'Collecting fees from dev wallet')
 
       // Get platform ops wallet (WHEEL)
       const platformOpsWallet = getOpsWallet()
@@ -234,15 +286,20 @@ class MultiUserMMService {
             lamports: Math.floor(platformFeeSol * LAMPORTS_PER_SOL),
           })
         )
-        platformSig = await sendAndConfirmTransaction(
+        const platformResult = await sendAndConfirmTransactionWithRetry(
           connection,
           platformTx,
           [devWallet],
-          { commitment: 'confirmed' }
+          { commitment: 'confirmed', logContext: { service: 'flywheel', type: 'platform-fee', tokenSymbol: token.token_symbol } }
         )
-        console.log(`   💰 ${token.token_symbol}: Platform fee (${platformFeePercent}%): ${platformFeeSol.toFixed(4)} SOL → WHEEL ops wallet: ${platformSig.slice(0, 8)}...`)
+        if (platformResult.success) {
+          platformSig = platformResult.signature
+          loggers.flywheel.info({ tokenSymbol: token.token_symbol, platformFeePercent, platformFeeSol, signature: platformSig }, 'Platform fee transferred to WHEEL ops wallet')
+        } else {
+          loggers.flywheel.error({ tokenSymbol: token.token_symbol, error: platformResult.error }, 'Platform fee transfer failed')
+        }
       } else if (!platformOpsWallet) {
-        console.log(`   ⚠️ ${token.token_symbol}: Platform ops wallet not configured, skipping platform fee`)
+        loggers.flywheel.warn({ tokenSymbol: token.token_symbol }, 'Platform ops wallet not configured, skipping platform fee')
       }
 
       // Transfer 2: Remaining to user's ops wallet (90%)
@@ -256,17 +313,22 @@ class MultiUserMMService {
             lamports: Math.floor(userAmountSol * LAMPORTS_PER_SOL),
           })
         )
-        userSig = await sendAndConfirmTransaction(
+        const userResult = await sendAndConfirmTransactionWithRetry(
           connection,
           userTx,
           [devWallet],
-          { commitment: 'confirmed' }
+          { commitment: 'confirmed', logContext: { service: 'flywheel', type: 'user-portion', tokenSymbol: token.token_symbol } }
         )
-        console.log(`   → ${token.token_symbol}: User portion (${100 - platformFeePercent}%): ${userAmountSol.toFixed(4)} SOL → user ops wallet: ${userSig.slice(0, 8)}...`)
+        if (userResult.success) {
+          userSig = userResult.signature
+          loggers.flywheel.info({ tokenSymbol: token.token_symbol, userPercent: 100 - platformFeePercent, userAmountSol, signature: userSig }, 'User portion transferred to ops wallet')
+        } else {
+          loggers.flywheel.error({ tokenSymbol: token.token_symbol, error: userResult.error }, 'User portion transfer failed')
+        }
       }
 
       const signature = userSig || platformSig || ''
-      console.log(`   ✅ ${token.token_symbol}: Fee collection successful!`)
+      loggers.flywheel.info({ tokenSymbol: token.token_symbol, totalAmount: transferAmount, platformFeeSol, userAmountSol }, 'Fee collection successful')
 
       // Record the transfer (user portion)
       if (userSig) {
@@ -275,7 +337,7 @@ class MultiUserMMService {
 
       return { collected: true, amount: transferAmount, platformFeeSol, userAmountSol, signature }
     } catch (error: any) {
-      console.error(`   ❌ ${token.token_symbol}: Fee collection failed: ${error.message}`)
+      loggers.flywheel.error({ tokenSymbol: token.token_symbol, error: String(error) }, 'Fee collection failed')
       return { collected: false, amount: 0, platformFeeSol: 0, userAmountSol: 0 }
     }
   }
@@ -353,7 +415,7 @@ class MultiUserMMService {
 
       if (solBalance < minRequired) {
         const message = `Insufficient SOL for buy (have ${solBalance.toFixed(4)}, need ${minRequired.toFixed(4)})`
-        console.log(`ℹ️ ${token.token_symbol}: ${message}`)
+        loggers.flywheel.info({ tokenSymbol: token.token_symbol, solBalance, minRequired }, 'Insufficient SOL for buy')
         await this.updateFlywheelCheck(token.id, 'insufficient_sol')
         await this.logInfoMessage(token.id, message)
         return null
@@ -363,7 +425,7 @@ class MultiUserMMService {
       const buyAmount = this.randomBetween(config.min_buy_amount_sol, config.max_buy_amount_sol)
       const lamports = Math.floor(buyAmount * 1e9)
 
-      console.log(`🟢 ${token.token_symbol}: BUY ${buyAmount.toFixed(4)} SOL (${state.buy_count}/${BUYS_PER_CYCLE})`)
+      loggers.flywheel.info({ tokenSymbol: token.token_symbol, buyAmount, buyCount: state.buy_count, maxBuys: BUYS_PER_CYCLE }, 'Executing BUY')
 
       // Get quote and execute
       const quote = await bagsFmService.getTradeQuote(
@@ -419,7 +481,7 @@ class MultiUserMMService {
 
       if (sellAmount <= 0) {
         const message = 'No tokens to sell, switching to buy phase'
-        console.log(`ℹ️ ${token.token_symbol}: ${message}`)
+        loggers.flywheel.info({ tokenSymbol: token.token_symbol }, 'No tokens to sell, switching to buy phase')
         await this.updateFlywheelCheck(token.id, 'no_tokens')
         await this.logInfoMessage(token.id, message)
         // Reset to buy phase
@@ -433,7 +495,7 @@ class MultiUserMMService {
 
       if (actualSellAmount < 1) {
         const message = 'Insufficient tokens for sell, switching to buy phase'
-        console.log(`ℹ️ ${token.token_symbol}: ${message}`)
+        loggers.flywheel.info({ tokenSymbol: token.token_symbol, tokenBalance }, 'Insufficient tokens for sell, switching to buy phase')
         await this.updateFlywheelCheck(token.id, 'insufficient_tokens')
         await this.logInfoMessage(token.id, message)
         await updateFlywheelState(token.id, { cycle_phase: 'buy', sell_count: 0 })
@@ -442,7 +504,7 @@ class MultiUserMMService {
 
       const tokenUnits = Math.floor(actualSellAmount * Math.pow(10, token.token_decimals))
 
-      console.log(`🔴 ${token.token_symbol}: SELL ${actualSellAmount.toFixed(0)} tokens (${state.sell_count}/${SELLS_PER_CYCLE})`)
+      loggers.flywheel.info({ tokenSymbol: token.token_symbol, sellAmount: actualSellAmount, sellCount: state.sell_count, maxSells: SELLS_PER_CYCLE }, 'Executing SELL')
 
       // Get quote and execute
       const quote = await bagsFmService.getTradeQuote(
@@ -524,12 +586,12 @@ class MultiUserMMService {
     const targetTokenPct = config.target_token_allocation
     const threshold = config.rebalance_threshold
 
-    console.log(`📊 ${token.token_symbol}: SOL ${currentSolPct.toFixed(1)}% (target ${targetSolPct}%) | Token ${currentTokenPct.toFixed(1)}% (target ${targetTokenPct}%)`)
+    loggers.flywheel.debug({ tokenSymbol: token.token_symbol, currentSolPct, targetSolPct, currentTokenPct, targetTokenPct }, 'Portfolio allocation')
 
     // Check if rebalance needed
     if (Math.abs(currentSolPct - targetSolPct) < threshold) {
       const message = `Portfolio balanced (SOL: ${currentSolPct.toFixed(1)}%, target: ${targetSolPct}%)`
-      console.log(`ℹ️ ${token.token_symbol}: ${message}`)
+      loggers.flywheel.info({ tokenSymbol: token.token_symbol, currentSolPct, targetSolPct }, 'Portfolio balanced')
       await this.updateFlywheelCheck(token.id, 'balanced')
       await this.logInfoMessage(token.id, message)
       return null
@@ -546,7 +608,7 @@ class MultiUserMMService {
 
       const lamports = Math.floor(buyAmount * 1e9)
 
-      console.log(`🟢 ${token.token_symbol}: Rebalance BUY ${buyAmount.toFixed(4)} SOL`)
+      loggers.flywheel.info({ tokenSymbol: token.token_symbol, buyAmount, action: 'rebalance' }, 'Executing rebalance BUY')
 
       const quote = await bagsFmService.getTradeQuote(
         SOL_MINT,
@@ -581,7 +643,7 @@ class MultiUserMMService {
 
       const tokenUnits = Math.floor(sellTokens * Math.pow(10, token.token_decimals))
 
-      console.log(`🔴 ${token.token_symbol}: Rebalance SELL ${sellTokens.toFixed(0)} tokens`)
+      loggers.flywheel.info({ tokenSymbol: token.token_symbol, sellAmount: sellTokens, action: 'rebalance' }, 'Executing rebalance SELL')
 
       const quote = await bagsFmService.getTradeQuote(
         token.token_mint_address,
@@ -623,10 +685,10 @@ class MultiUserMMService {
     const tokenMint = new PublicKey(token.token_mint_address)
 
     // Check trade cooldown
-    if (this.isCooldownActive(token.id)) {
+    if (await this.isCooldownActive(token.id)) {
       const remainingMs = this.SMART_MODE_COOLDOWN_MS - (Date.now() - (this.lastTradeTime.get(token.id) || 0))
       const remainingMin = Math.ceil(remainingMs / 60000)
-      console.log(`⏳ ${token.token_symbol}: Smart mode cooldown active (${remainingMin} min remaining)`)
+      loggers.flywheel.debug({ tokenSymbol: token.token_symbol, remainingMin }, 'Smart mode cooldown active')
       return null
     }
 
@@ -636,7 +698,7 @@ class MultiUserMMService {
     // Fetch current price data
     const priceData = await analyzer.fetchCurrentPrice()
     if (!priceData) {
-      console.log(`⚠️ ${token.token_symbol}: No price data available, falling back to simple mode`)
+      loggers.flywheel.warn({ tokenSymbol: token.token_symbol }, 'No price data available, falling back to simple mode')
       return this.runSimpleAlgorithm(token, config, state, wallet, connection, baseResult)
     }
 
@@ -645,22 +707,19 @@ class MultiUserMMService {
     const optimalSignal = analyzer.getOptimalSignal()
 
     // Log smart mode analytics
-    console.log(`\n📈 ${token.token_symbol}: SMART MODE Analysis`)
-    console.log(`   Price: $${priceData.price.toFixed(8)} | 24h: ${priceData.priceChange24h >= 0 ? '+' : ''}${priceData.priceChange24h.toFixed(2)}%`)
-
-    if (signals.trend) {
-      console.log(`   Trend: ${signals.trend.trend.toUpperCase()} (strength: ${signals.trend.strength.toFixed(0)})`)
-      console.log(`   RSI: ${signals.trend.rsi.toFixed(1)}`)
-    }
-
-    if (signals.volatility) {
-      console.log(`   Volatility: ${signals.volatility.volatility.toFixed(2)}% ${signals.volatility.isHighVolatility ? '⚠️ HIGH' : '✓ Normal'}`)
-    }
-
-    console.log(`   Signal: ${optimalSignal.action.toUpperCase()} (confidence: ${optimalSignal.confidence.toFixed(0)}%)`)
-    if (optimalSignal.reasons.length > 0) {
-      console.log(`   Reasons: ${optimalSignal.reasons.join(', ')}`)
-    }
+    loggers.flywheel.info({
+      tokenSymbol: token.token_symbol,
+      price: priceData.price,
+      priceChange24h: priceData.priceChange24h,
+      trend: signals.trend?.trend,
+      trendStrength: signals.trend?.strength,
+      rsi: signals.trend?.rsi,
+      volatility: signals.volatility?.volatility,
+      isHighVolatility: signals.volatility?.isHighVolatility,
+      signal: optimalSignal.action,
+      confidence: optimalSignal.confidence,
+      reasons: optimalSignal.reasons,
+    }, 'Smart mode analysis')
 
     // Determine if we should trade
     const shouldBuy = optimalSignal.action === 'buy' || optimalSignal.action === 'strong_buy'
@@ -669,7 +728,7 @@ class MultiUserMMService {
 
     // Skip if high volatility and not a strong signal
     if (signals.volatility?.isHighVolatility && !optimalSignal.action.includes('strong')) {
-      console.log(`   ⚠️ High volatility - waiting for stronger signal`)
+      loggers.flywheel.info({ tokenSymbol: token.token_symbol, volatility: signals.volatility.volatility }, 'High volatility - waiting for stronger signal')
       await this.updateFlywheelCheck(token.id, 'high_volatility')
       return null
     }
@@ -681,7 +740,7 @@ class MultiUserMMService {
 
       if (solBalance < minRequired) {
         const message = `Insufficient SOL for smart buy (have ${solBalance.toFixed(4)}, need ${minRequired.toFixed(4)})`
-        console.log(`   ℹ️ ${message}`)
+        loggers.flywheel.info({ tokenSymbol: token.token_symbol, solBalance, minRequired }, 'Insufficient SOL for smart buy')
         await this.updateFlywheelCheck(token.id, 'insufficient_sol')
         await this.logInfoMessage(token.id, message)
         return null
@@ -693,7 +752,7 @@ class MultiUserMMService {
       const buyAmount = Math.min(Math.max(baseAmount, config.min_buy_amount_sol), config.max_buy_amount_sol)
       const lamports = Math.floor(buyAmount * 1e9)
 
-      console.log(`   🟢 SMART BUY: ${buyAmount.toFixed(4)} SOL (${optimalSignal.action}, ${optimalSignal.confidence.toFixed(0)}% confidence)`)
+      loggers.flywheel.info({ tokenSymbol: token.token_symbol, buyAmount, action: optimalSignal.action, confidence: optimalSignal.confidence }, 'Executing SMART BUY')
 
       const quote = await bagsFmService.getTradeQuote(
         SOL_MINT,
@@ -714,7 +773,7 @@ class MultiUserMMService {
       }
 
       // Record trade and cooldown
-      this.recordTradeTimestamp(token.id)
+      await this.recordTradeTimestamp(token.id)
       await this.recordTransaction(token.id, 'buy', buyAmount, signature)
       await this.updateFlywheelCheck(token.id, 'smart_buy')
 
@@ -727,7 +786,7 @@ class MultiUserMMService {
 
       if (tokenBalance < 1) {
         const message = 'Insufficient tokens for smart sell'
-        console.log(`   ℹ️ ${message}`)
+        loggers.flywheel.info({ tokenSymbol: token.token_symbol, tokenBalance }, 'Insufficient tokens for smart sell')
         await this.updateFlywheelCheck(token.id, 'insufficient_tokens')
         await this.logInfoMessage(token.id, message)
         return null
@@ -738,7 +797,7 @@ class MultiUserMMService {
       const sellAmount = Math.min(tokenBalance * (positionSizePct / 100), tokenBalance * 0.4) // Max 40% per trade
       const tokenUnits = Math.floor(sellAmount * Math.pow(10, token.token_decimals))
 
-      console.log(`   🔴 SMART SELL: ${sellAmount.toFixed(0)} tokens (${optimalSignal.action}, ${optimalSignal.confidence.toFixed(0)}% confidence)`)
+      loggers.flywheel.info({ tokenSymbol: token.token_symbol, sellAmount, action: optimalSignal.action, confidence: optimalSignal.confidence }, 'Executing SMART SELL')
 
       const quote = await bagsFmService.getTradeQuote(
         token.token_mint_address,
@@ -759,7 +818,7 @@ class MultiUserMMService {
       }
 
       // Record trade and cooldown
-      this.recordTradeTimestamp(token.id)
+      await this.recordTradeTimestamp(token.id)
       await this.recordTransaction(token.id, 'sell', sellAmount, signature)
       await this.updateFlywheelCheck(token.id, 'smart_sell')
 
@@ -767,7 +826,7 @@ class MultiUserMMService {
     }
 
     // Hold position
-    console.log(`   ℹ️ Holding position (${optimalSignal.action}, ${optimalSignal.confidence.toFixed(0)}% confidence)`)
+    loggers.flywheel.debug({ tokenSymbol: token.token_symbol, action: optimalSignal.action, confidence: optimalSignal.confidence }, 'Holding position')
     await this.updateFlywheelCheck(token.id, 'holding')
     return null
   }
@@ -787,29 +846,34 @@ class MultiUserMMService {
       )
 
       if (!swapData) {
-        console.error('Failed to get swap transaction')
+        loggers.flywheel.error('Failed to get swap transaction')
         return null
       }
 
-      // Deserialize and sign
+      // Deserialize the transaction
       const txBuffer = bs58.decode(swapData.transaction)
       const transaction = VersionedTransaction.deserialize(txBuffer)
-      transaction.sign([wallet])
 
-      // Send transaction
-      const signature = await connection.sendTransaction(transaction, {
-        maxRetries: 5,
-        skipPreflight: true,
-      })
+      // Use unified transaction utility for better retry handling
+      const result = await sendVersionedTransactionWithRetry(
+        connection,
+        transaction,
+        [wallet],
+        {
+          skipPreflight: true,
+          maxRetries: 3,
+          logContext: { service: 'flywheel', type: 'swap' },
+        }
+      )
 
-      console.log(`   📤 TX sent: ${signature.slice(0, 8)}...`)
+      if (!result.success) {
+        loggers.flywheel.error({ error: result.error }, 'Swap transaction failed')
+        return null
+      }
 
-      // Wait for confirmation
-      await connection.confirmTransaction(signature, 'confirmed')
-
-      return signature
+      return result.signature || null
     } catch (error: any) {
-      console.error(`   ❌ Swap failed: ${error.message}`)
+      loggers.flywheel.error({ error: String(error) }, 'Swap failed')
       return null
     }
   }
@@ -824,11 +888,11 @@ class MultiUserMMService {
     signature: string
   ): Promise<void> {
     if (!supabase) {
-      console.error('   ❌ Cannot record transaction: supabase not configured')
+      loggers.flywheel.error('Cannot record transaction: supabase not configured')
       return
     }
 
-    console.log(`   📝 Recording ${type} transaction for token ${userTokenId.slice(0, 8)}...`)
+    loggers.flywheel.debug({ type, userTokenId, amount, signature }, 'Recording transaction')
 
     try {
       const insertData = {
@@ -839,18 +903,17 @@ class MultiUserMMService {
         status: 'confirmed',
         created_at: new Date().toISOString(),
       }
-      console.log(`   📝 Insert data:`, JSON.stringify(insertData))
+      loggers.flywheel.debug({ insertData }, 'Insert data')
 
       const { data, error } = await supabase.from('user_transactions').insert([insertData]).select()
 
       if (error) {
-        console.error(`   ❌ Failed to record ${type} transaction:`, error.message)
-        console.error(`   ❌ Error details:`, JSON.stringify(error))
+        loggers.flywheel.error({ type, error: error.message, errorDetails: error }, 'Failed to record transaction')
       } else {
-        console.log(`   ✅ Recorded ${type} transaction: ${signature.slice(0, 8)}... (id: ${data?.[0]?.id || 'unknown'})`)
+        loggers.flywheel.info({ type, signature, recordId: data?.[0]?.id }, 'Recorded transaction')
       }
     } catch (error: any) {
-      console.error('   ❌ Failed to record transaction:', error.message)
+      loggers.flywheel.error({ error: String(error) }, 'Failed to record transaction')
     }
   }
 
@@ -862,7 +925,7 @@ class MultiUserMMService {
     message: string
   ): Promise<void> {
     if (!supabase) {
-      console.log(`   ⚠️ Cannot log info message: supabase not configured`)
+      loggers.flywheel.warn('Cannot log info message: supabase not configured')
       return
     }
 
@@ -877,11 +940,10 @@ class MultiUserMMService {
       }])
 
       if (error) {
-        console.log(`   ⚠️ Failed to log info message: ${error.message}`)
-        console.log(`   💡 Run the SQL migration to add 'info' type to user_transactions`)
+        loggers.flywheel.warn({ error: error.message }, 'Failed to log info message - run SQL migration to add info type to user_transactions')
       }
     } catch (error: any) {
-      console.log(`   ⚠️ Failed to log info message: ${error.message}`)
+      loggers.flywheel.warn({ error: String(error) }, 'Failed to log info message')
     }
   }
 

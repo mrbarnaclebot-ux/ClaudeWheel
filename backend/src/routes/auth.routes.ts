@@ -7,6 +7,7 @@ import {
   createOrGetUser,
   getUserByWallet,
 } from '../services/user.service'
+import { loggers } from '../utils/logger'
 
 const router = Router()
 
@@ -51,7 +52,7 @@ router.post('/nonce', async (req: Request, res: Response) => {
       },
     })
   } catch (error) {
-    console.error('Error generating nonce:', error)
+    loggers.auth.error({ error: String(error) }, 'Error generating nonce')
     res.status(500).json({
       success: false,
       error: 'Failed to generate authentication nonce',
@@ -134,7 +135,7 @@ router.post('/verify', async (req: Request, res: Response) => {
       },
     })
   } catch (error) {
-    console.error('Error verifying signature:', error)
+    loggers.auth.error({ error: String(error) }, 'Error verifying signature')
     res.status(500).json({
       success: false,
       error: 'Failed to verify authentication',
@@ -176,7 +177,7 @@ router.get('/user', async (req: Request, res: Response) => {
       },
     })
   } catch (error) {
-    console.error('Error getting user:', error)
+    loggers.auth.error({ error: String(error) }, 'Error getting user')
     res.status(500).json({
       success: false,
       error: 'Failed to get user',
@@ -242,7 +243,7 @@ router.post('/verify-ownership', async (req: Request, res: Response) => {
       },
     })
   } catch (error) {
-    console.error('Error verifying ownership:', error)
+    loggers.auth.error({ error: String(error) }, 'Error verifying ownership')
     res.status(500).json({
       success: false,
       error: 'Failed to verify wallet ownership',

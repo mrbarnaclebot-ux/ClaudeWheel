@@ -2,17 +2,18 @@
 
 import { useState } from 'react'
 import { motion } from 'framer-motion'
-import { PLACEHOLDER_CA, shortenAddress } from '@/lib/utils'
+import { shortenAddress } from '@/lib/utils'
 
 interface TokenInfoProps {
   contractAddress?: string
   tokenSymbol?: string
 }
 
-export default function TokenInfo({ contractAddress = PLACEHOLDER_CA, tokenSymbol = 'TOKEN' }: TokenInfoProps) {
+export default function TokenInfo({ contractAddress = '', tokenSymbol = 'TOKEN' }: TokenInfoProps) {
   const [copied, setCopied] = useState(false)
 
   const handleCopy = async () => {
+    if (!contractAddress) return
     await navigator.clipboard.writeText(contractAddress)
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)

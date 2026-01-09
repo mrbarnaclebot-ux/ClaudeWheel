@@ -9,6 +9,7 @@ import { supabase } from '../config/database'
 import { getConnection, getOpsWallet } from '../config/solana'
 import { env } from '../config/env'
 import { bagsFmService, ClaimablePosition } from './bags-fm'
+import { loggers } from '../utils/logger'
 import {
   UserToken,
   getTokensForAutoClaim,
@@ -54,7 +55,7 @@ class MultiUserClaimService {
    */
   async runBatchClaim(maxTokensPerCycle: number = 100): Promise<BatchClaimResult> {
     if (this.isRunning) {
-      console.log('⚠️ Batch claim already in progress, skipping')
+      loggers.claim.warn('Batch claim already in progress, skipping')
       return {
         totalTokensProcessed: 0,
         successfulClaims: 0,
@@ -70,17 +71,14 @@ class MultiUserClaimService {
     const startedAt = new Date().toISOString()
     const results: ClaimResult[] = []
 
-    console.log('\n═══════════════════════════════════════════════════════════')
-    console.log('   MULTI-USER CLAIM JOB')
-    console.log('═══════════════════════════════════════════════════════════\n')
+    loggers.claim.info('Starting multi-user claim job')
 
     try {
       // Get all tokens with auto-claim enabled
       const tokens = await getTokensForAutoClaim()
       const tokensToProcess = tokens.slice(0, maxTokensPerCycle)
 
-      console.log(`📋 Found ${tokens.length} tokens with auto-claim enabled`)
-      console.log(`   Processing up to ${maxTokensPerCycle} tokens this cycle\n`)
+      loggers.claim.info({ totalTokens: tokens.length, processingCount: tokensToProcess.length, maxTokensPerCycle }, 'Found tokens with auto-claim enabled')
 
       for (const token of tokensToProcess) {
         try {
@@ -88,17 +86,17 @@ class MultiUserClaimService {
           results.push(result)
 
           if (result.success) {
-            console.log(`✅ ${token.token_symbol}: Claimed ${result.amountClaimedSol.toFixed(4)} SOL`)
+            loggers.claim.info({ tokenSymbol: token.token_symbol, amountClaimedSol: result.amountClaimedSol, signature: result.signature }, 'Claimed fees successfully')
           } else if (result.error?.includes('Nothing to claim')) {
-            console.log(`ℹ️ ${token.token_symbol}: Nothing to claim`)
+            loggers.claim.debug({ tokenSymbol: token.token_symbol }, 'Nothing to claim')
           } else {
-            console.log(`❌ ${token.token_symbol}: ${result.error}`)
+            loggers.claim.warn({ tokenSymbol: token.token_symbol, error: result.error }, 'Claim failed')
           }
 
           // Small delay between claims to avoid rate limiting
           await this.sleep(1000)
         } catch (error: any) {
-          console.error(`❌ ${token.token_symbol}: Unexpected error - ${error.message}`)
+          loggers.claim.error({ tokenSymbol: token.token_symbol, tokenMint: token.token_mint_address, error: String(error) }, 'Unexpected error claiming fees')
           results.push({
             userTokenId: token.id,
             tokenMint: token.token_mint_address,
@@ -118,10 +116,7 @@ class MultiUserClaimService {
     const successfulClaims = results.filter(r => r.success).length
     const totalClaimedSol = results.reduce((sum, r) => sum + r.amountClaimedSol, 0)
 
-    console.log('\n───────────────────────────────────────────────────────────')
-    console.log(`   Claim job completed: ${successfulClaims}/${results.length} successful`)
-    console.log(`   Total claimed: ${totalClaimedSol.toFixed(4)} SOL`)
-    console.log('───────────────────────────────────────────────────────────\n')
+    loggers.claim.info({ successfulClaims, totalResults: results.length, totalClaimedSol }, 'Claim job completed')
 
     return {
       totalTokensProcessed: results.length,
@@ -286,7 +281,7 @@ class MultiUserClaimService {
 
       return signature
     } catch (error: any) {
-      console.error('Transaction failed:', error.message)
+      loggers.claim.error({ error: String(error) }, 'Transaction failed')
       return null
     }
   }
@@ -308,7 +303,7 @@ class MultiUserClaimService {
       const transferAmount = Math.max(0, amountSol - reserveSol)
 
       if (transferAmount <= 0) {
-        console.log(`   ℹ️ Amount too small to transfer (${amountSol} SOL)`)
+        loggers.claim.debug({ amountSol }, 'Amount too small to transfer')
         return { success: true, platformFeeSol: 0, userAmountSol: 0 }
       }
 
@@ -330,9 +325,9 @@ class MultiUserClaimService {
           })
         )
         const platformSig = await sendAndConfirmTransaction(connection, platformTx, [fromWallet])
-        console.log(`   💰 Platform fee (${platformFeePercent}%): ${platformFeeSol.toFixed(4)} SOL → WHEEL ops wallet: ${platformSig.slice(0, 8)}...`)
+        loggers.claim.info({ platformFeePercent, platformFeeSol, signature: platformSig }, 'Platform fee transferred to WHEEL ops wallet')
       } else if (!platformOpsWallet) {
-        console.log(`   ⚠️ Platform ops wallet not configured, skipping platform fee`)
+        loggers.claim.warn('Platform ops wallet not configured, skipping platform fee')
       }
 
       // Transfer 2: Remaining to user's ops wallet (90%)
@@ -345,12 +340,12 @@ class MultiUserClaimService {
           })
         )
         const userSig = await sendAndConfirmTransaction(connection, userTx, [fromWallet])
-        console.log(`   → User portion (${100 - platformFeePercent}%): ${userAmountSol.toFixed(4)} SOL → user ops wallet: ${userSig.slice(0, 8)}...`)
+        loggers.claim.info({ userPercent: 100 - platformFeePercent, userAmountSol, signature: userSig }, 'User portion transferred to ops wallet')
       }
 
       return { success: true, platformFeeSol, userAmountSol }
     } catch (error: any) {
-      console.error(`   ⚠️ Transfer to ops wallet failed: ${error.message}`)
+      loggers.claim.error({ error: String(error) }, 'Transfer to ops wallet failed')
       return { success: false, platformFeeSol: 0, userAmountSol: 0 }
     }
   }
@@ -385,7 +380,7 @@ class MultiUserClaimService {
         p_amount_sol: amountSol,
       })
     } catch (error) {
-      console.error('Failed to record claim:', error)
+      loggers.claim.error({ error: String(error) }, 'Failed to record claim')
     }
   }
 

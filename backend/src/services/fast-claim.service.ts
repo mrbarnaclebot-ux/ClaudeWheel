@@ -4,11 +4,13 @@
 // Optimized for speed with batch position checking and parallel execution
 // ═══════════════════════════════════════════════════════════════════════════
 
-import { Connection, Transaction, VersionedTransaction, sendAndConfirmTransaction, Keypair, PublicKey, SystemProgram } from '@solana/web3.js'
+import { Connection, Transaction, Keypair, PublicKey, SystemProgram } from '@solana/web3.js'
 import { supabase } from '../config/database'
 import { getConnection, getOpsWallet, getSolPrice } from '../config/solana'
 import { env } from '../config/env'
 import { bagsFmService, ClaimablePosition } from './bags-fm'
+import { loggers } from '../utils/logger'
+import { sendSerializedTransactionWithRetry, sendAndConfirmTransactionWithRetry } from '../utils/transaction'
 import {
   UserToken,
   getTokensForAutoClaim,
@@ -79,7 +81,7 @@ class FastClaimService {
    */
   async runFastClaimCycle(): Promise<FastClaimCycleResult> {
     if (this.isRunning) {
-      console.log('⚡ Fast claim cycle already in progress, skipping')
+      loggers.claim.warn('Fast claim cycle already in progress, skipping')
       return this.emptyResult()
     }
 
@@ -87,8 +89,7 @@ class FastClaimService {
     this.cycleCount++
     const cycleStartedAt = new Date().toISOString()
 
-    console.log(`\n⚡ FAST CLAIM CYCLE #${this.cycleCount} ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`)
-    console.log(`   Threshold: ${MIN_CLAIM_THRESHOLD_SOL} SOL | Concurrency: ${MAX_CONCURRENT_CLAIMS}`)
+    loggers.claim.info({ cycleCount: this.cycleCount, threshold: MIN_CLAIM_THRESHOLD_SOL, maxConcurrent: MAX_CONCURRENT_CLAIMS }, 'Starting fast claim cycle')
 
     const results: FastClaimResult[] = []
     let tokensChecked = 0
@@ -100,22 +101,22 @@ class FastClaimService {
       tokensChecked = tokens.length
 
       if (tokens.length === 0) {
-        console.log('   No tokens with auto-claim enabled')
+        loggers.claim.debug('No tokens with auto-claim enabled')
         return this.emptyResult()
       }
 
-      console.log(`   Checking ${tokens.length} tokens for claimable fees...`)
+      loggers.claim.info({ tokenCount: tokens.length }, 'Checking tokens for claimable fees')
 
       // Step 2: Group tokens by dev wallet to minimize API calls
       const walletToTokens = this.groupTokensByDevWallet(tokens)
-      console.log(`   ${Object.keys(walletToTokens).length} unique dev wallets to check`)
+      loggers.claim.debug({ walletCount: Object.keys(walletToTokens).length }, 'Grouped tokens by dev wallet')
 
       // Step 3: Batch check claimable positions for all wallets
       const claimableTokens = await this.batchCheckClaimablePositions(walletToTokens)
       tokensClaimable = claimableTokens.length
 
       if (claimableTokens.length === 0) {
-        console.log(`   No tokens with >= ${MIN_CLAIM_THRESHOLD_SOL} SOL claimable`)
+        loggers.claim.debug({ threshold: MIN_CLAIM_THRESHOLD_SOL }, 'No tokens with claimable amount above threshold')
         this.lastCycleAt = new Date()
         this.isRunning = false
         return {
@@ -126,17 +127,17 @@ class FastClaimService {
         }
       }
 
-      console.log(`\n   💰 Found ${claimableTokens.length} tokens ready to claim:`)
-      claimableTokens.forEach(ct => {
-        console.log(`      • ${ct.token.token_symbol}: ${ct.position.claimableAmount.toFixed(4)} SOL`)
-      })
+      loggers.claim.info({
+        claimableCount: claimableTokens.length,
+        tokens: claimableTokens.map(ct => ({ symbol: ct.token.token_symbol, amount: ct.position.claimableAmount }))
+      }, 'Found tokens ready to claim')
 
       // Step 4: Execute claims in parallel batches
       const claimResults = await this.executeClaimsInBatches(claimableTokens)
       results.push(...claimResults)
 
     } catch (error: any) {
-      console.error(`   ❌ Fast claim cycle error: ${error.message}`)
+      loggers.claim.error({ error: String(error) }, 'Fast claim cycle error')
     } finally {
       this.isRunning = false
       this.lastCycleAt = new Date()
@@ -150,12 +151,13 @@ class FastClaimService {
     const totalUserReceived = successful.reduce((sum, r) => sum + r.userReceivedSol, 0)
 
     // Summary
-    console.log(`\n   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`)
-    console.log(`   ✅ Successful: ${successful.length} | ❌ Failed: ${failed.length}`)
-    console.log(`   💰 Total Claimed: ${totalClaimed.toFixed(4)} SOL`)
-    console.log(`   🎡 Platform Fee (10%): ${totalPlatformFee.toFixed(4)} SOL → WHEEL`)
-    console.log(`   👤 User Received (90%): ${totalUserReceived.toFixed(4)} SOL`)
-    console.log(`   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`)
+    loggers.claim.info({
+      successfulCount: successful.length,
+      failedCount: failed.length,
+      totalClaimedSol: totalClaimed,
+      platformFeeSol: totalPlatformFee,
+      userReceivedSol: totalUserReceived,
+    }, 'Fast claim cycle completed')
 
     return {
       cycleStartedAt,
@@ -244,7 +246,7 @@ class FastClaimService {
     for (let i = 0; i < claimableTokens.length; i += MAX_CONCURRENT_CLAIMS) {
       const batch = claimableTokens.slice(i, i + MAX_CONCURRENT_CLAIMS)
 
-      console.log(`\n   Processing batch ${Math.floor(i / MAX_CONCURRENT_CLAIMS) + 1}/${Math.ceil(claimableTokens.length / MAX_CONCURRENT_CLAIMS)}...`)
+      loggers.claim.debug({ batchNumber: Math.floor(i / MAX_CONCURRENT_CLAIMS) + 1, totalBatches: Math.ceil(claimableTokens.length / MAX_CONCURRENT_CLAIMS) }, 'Processing claim batch')
 
       const batchResults = await Promise.allSettled(
         batch.map(ct => this.executeSingleClaim(ct))
@@ -288,7 +290,7 @@ class FastClaimService {
     const claimedAt = new Date().toISOString()
 
     try {
-      console.log(`      ⚡ Claiming ${position.claimableAmount.toFixed(4)} SOL for ${token.token_symbol}...`)
+      loggers.claim.info({ tokenSymbol: token.token_symbol, claimableAmount: position.claimableAmount }, 'Claiming fees')
 
       // Get decrypted dev wallet
       const devWallet = await getDecryptedDevWallet(token.id)
@@ -340,7 +342,7 @@ class FastClaimService {
       // Record the claim
       await this.recordClaim(token.id, position.claimableAmount, lastSignature, platformFeeSol, userReceivedSol)
 
-      console.log(`      ✅ ${token.token_symbol}: Claimed ${position.claimableAmount.toFixed(4)} SOL (tx: ${lastSignature.slice(0, 8)}...)`)
+      loggers.claim.info({ tokenSymbol: token.token_symbol, claimedAmount: position.claimableAmount, signature: lastSignature }, 'Claim successful')
 
       return {
         userTokenId: token.id,
@@ -354,7 +356,7 @@ class FastClaimService {
         claimedAt,
       }
     } catch (error: any) {
-      console.log(`      ❌ ${token.token_symbol}: ${error.message}`)
+      loggers.claim.error({ tokenSymbol: token.token_symbol, error: String(error) }, 'Claim failed')
       return {
         userTokenId: token.id,
         tokenSymbol: token.token_symbol,
@@ -370,48 +372,25 @@ class FastClaimService {
   }
 
   /**
-   * Sign and send a transaction
+   * Sign and send a transaction using unified transaction utility
    */
   private async signAndSendTransaction(
     connection: Connection,
     txBase64: string,
     signer: Keypair
   ): Promise<string | null> {
-    try {
-      const txBuffer = Buffer.from(txBase64, 'base64')
-
-      let signature: string
-      try {
-        // Try VersionedTransaction first
-        const versionedTx = VersionedTransaction.deserialize(txBuffer)
-        versionedTx.sign([signer])
-        signature = await connection.sendTransaction(versionedTx, {
-          skipPreflight: false,
-          maxRetries: 3,
-        })
-      } catch {
-        // Fall back to legacy transaction
-        const legacyTx = Transaction.from(txBuffer)
-        legacyTx.sign(signer)
-        signature = await connection.sendRawTransaction(legacyTx.serialize(), {
-          skipPreflight: false,
-          maxRetries: 3,
-        })
+    const result = await sendSerializedTransactionWithRetry(
+      connection,
+      txBase64,
+      signer,
+      {
+        skipPreflight: false,
+        maxRetries: 3,
+        logContext: { service: 'fast-claim' },
       }
+    )
 
-      // Wait for confirmation with timeout
-      const latestBlockhash = await connection.getLatestBlockhash()
-      await connection.confirmTransaction({
-        signature,
-        blockhash: latestBlockhash.blockhash,
-        lastValidBlockHeight: latestBlockhash.lastValidBlockHeight,
-      }, 'confirmed')
-
-      return signature
-    } catch (error: any) {
-      console.error(`      Transaction failed: ${error.message}`)
-      return null
-    }
+    return result.success ? result.signature || null : null
   }
 
   /**
@@ -444,47 +423,55 @@ class FastClaimService {
 
       // Transfer 1: Platform fee to WHEEL ops wallet (10%)
       if (platformOpsWallet && platformFeeSol >= 0.001) {
-        try {
-          const platformTx = new Transaction().add(
-            SystemProgram.transfer({
-              fromPubkey: fromWallet.publicKey,
-              toPubkey: platformOpsWallet.publicKey,
-              lamports: Math.floor(platformFeeSol * 1e9),
-            })
-          )
-
-          const platformSig = await sendAndConfirmTransaction(connection, platformTx, [fromWallet], {
-            commitment: 'confirmed',
+        const platformTx = new Transaction().add(
+          SystemProgram.transfer({
+            fromPubkey: fromWallet.publicKey,
+            toPubkey: platformOpsWallet.publicKey,
+            lamports: Math.floor(platformFeeSol * 1e9),
           })
-          console.log(`      🎡 ${tokenSymbol}: Platform fee ${platformFeeSol.toFixed(4)} SOL → WHEEL (${platformSig.slice(0, 8)}...)`)
-        } catch (err: any) {
-          console.error(`      ⚠️ ${tokenSymbol}: Platform fee transfer failed: ${err.message}`)
+        )
+
+        const platformResult = await sendAndConfirmTransactionWithRetry(
+          connection,
+          platformTx,
+          [fromWallet],
+          { commitment: 'confirmed', logContext: { service: 'fast-claim', type: 'platform-fee', tokenSymbol } }
+        )
+
+        if (platformResult.success) {
+          loggers.claim.info({ tokenSymbol, platformFeeSol, signature: platformResult.signature }, 'Platform fee transferred')
+        } else {
+          loggers.claim.error({ tokenSymbol, error: platformResult.error }, 'Platform fee transfer failed')
         }
       }
 
       // Transfer 2: User's portion to their ops wallet (90%)
       if (userAmountSol >= 0.001) {
-        try {
-          const userTx = new Transaction().add(
-            SystemProgram.transfer({
-              fromPubkey: fromWallet.publicKey,
-              toPubkey: new PublicKey(userOpsWalletAddress),
-              lamports: Math.floor(userAmountSol * 1e9),
-            })
-          )
-
-          const userSig = await sendAndConfirmTransaction(connection, userTx, [fromWallet], {
-            commitment: 'confirmed',
+        const userTx = new Transaction().add(
+          SystemProgram.transfer({
+            fromPubkey: fromWallet.publicKey,
+            toPubkey: new PublicKey(userOpsWalletAddress),
+            lamports: Math.floor(userAmountSol * 1e9),
           })
-          console.log(`      👤 ${tokenSymbol}: User portion ${userAmountSol.toFixed(4)} SOL → ops wallet (${userSig.slice(0, 8)}...)`)
-        } catch (err: any) {
-          console.error(`      ⚠️ ${tokenSymbol}: User transfer failed: ${err.message}`)
+        )
+
+        const userResult = await sendAndConfirmTransactionWithRetry(
+          connection,
+          userTx,
+          [fromWallet],
+          { commitment: 'confirmed', logContext: { service: 'fast-claim', type: 'user-portion', tokenSymbol } }
+        )
+
+        if (userResult.success) {
+          loggers.claim.info({ tokenSymbol, userAmountSol, signature: userResult.signature }, 'User portion transferred')
+        } else {
+          loggers.claim.error({ tokenSymbol, error: userResult.error }, 'User transfer failed')
         }
       }
 
       return { success: true, platformFeeSol, userAmountSol }
     } catch (error: any) {
-      console.error(`      ⚠️ Transfer failed: ${error.message}`)
+      loggers.claim.error({ tokenSymbol, error: String(error) }, 'Transfer with platform fee failed')
       return { success: false, platformFeeSol: 0, userAmountSol: 0 }
     }
   }
@@ -508,7 +495,7 @@ class FastClaimService {
         const solPrice = await getSolPrice()
         amountUsd = amountSol * solPrice
       } catch (priceError) {
-        console.warn('Failed to fetch SOL price for USD calculation:', priceError)
+        loggers.claim.warn({ error: String(priceError) }, 'Failed to fetch SOL price for USD calculation')
       }
 
       const { error: historyError } = await supabase.from('user_claim_history').insert([{
@@ -540,7 +527,7 @@ class FastClaimService {
         console.error('Failed to insert transaction record:', txError)
       }
     } catch (error) {
-      console.error('Failed to record claim:', error)
+      loggers.claim.error({ error: String(error) }, 'Failed to record claim')
     }
   }
 

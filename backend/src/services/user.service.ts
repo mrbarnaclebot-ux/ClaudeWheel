@@ -1,5 +1,6 @@
 import { supabase } from '../config/database'
 import crypto from 'crypto'
+import { loggers } from '../utils/logger'
 
 // ═══════════════════════════════════════════════════════════════════════════
 // USER SERVICE
@@ -105,7 +106,7 @@ function cleanupExpiredNonces(): void {
  */
 export async function createOrGetUser(walletAddress: string): Promise<User | null> {
   if (!supabase) {
-    console.warn('⚠️ Supabase not configured - cannot create user')
+    loggers.user.warn('Supabase not configured - cannot create user')
     return null
   }
 
@@ -126,11 +127,11 @@ export async function createOrGetUser(walletAddress: string): Promise<User | nul
     .single()
 
   if (error) {
-    console.error('❌ Failed to create user:', error)
+    loggers.user.error({ error: String(error), walletAddress }, 'Failed to create user')
     return null
   }
 
-  console.log(`✅ Created new user: ${walletAddress}`)
+  loggers.user.info({ walletAddress }, 'Created new user')
   return data as User
 }
 
@@ -139,7 +140,7 @@ export async function createOrGetUser(walletAddress: string): Promise<User | nul
  */
 export async function getUserByWallet(walletAddress: string): Promise<User | null> {
   if (!supabase) {
-    console.warn('⚠️ Supabase not configured')
+    loggers.user.warn('Supabase not configured')
     return null
   }
 
@@ -151,7 +152,7 @@ export async function getUserByWallet(walletAddress: string): Promise<User | nul
 
   if (error) {
     if (error.code !== 'PGRST116') { // Not found error
-      console.error('❌ Failed to get user:', error)
+      loggers.user.error({ error: String(error), walletAddress }, 'Failed to get user')
     }
     return null
   }
@@ -164,7 +165,7 @@ export async function getUserByWallet(walletAddress: string): Promise<User | nul
  */
 export async function getUserById(userId: string): Promise<User | null> {
   if (!supabase) {
-    console.warn('⚠️ Supabase not configured')
+    loggers.user.warn('Supabase not configured')
     return null
   }
 
@@ -176,7 +177,7 @@ export async function getUserById(userId: string): Promise<User | null> {
 
   if (error) {
     if (error.code !== 'PGRST116') {
-      console.error('❌ Failed to get user by ID:', error)
+      loggers.user.error({ error: String(error), userId }, 'Failed to get user by ID')
     }
     return null
   }
@@ -192,7 +193,7 @@ export async function updateUser(
   updates: Partial<Pick<User, 'display_name' | 'email' | 'is_active'>>
 ): Promise<User | null> {
   if (!supabase) {
-    console.warn('⚠️ Supabase not configured')
+    loggers.user.warn('Supabase not configured')
     return null
   }
 
@@ -204,7 +205,7 @@ export async function updateUser(
     .single()
 
   if (error) {
-    console.error('❌ Failed to update user:', error)
+    loggers.user.error({ error: String(error), userId }, 'Failed to update user')
     return null
   }
 
@@ -216,7 +217,7 @@ export async function updateUser(
  */
 export async function deactivateUser(userId: string): Promise<boolean> {
   if (!supabase) {
-    console.warn('⚠️ Supabase not configured')
+    loggers.user.warn('Supabase not configured')
     return false
   }
 
@@ -226,7 +227,7 @@ export async function deactivateUser(userId: string): Promise<boolean> {
     .eq('id', userId)
 
   if (error) {
-    console.error('❌ Failed to deactivate user:', error)
+    loggers.user.error({ error: String(error), userId }, 'Failed to deactivate user')
     return false
   }
 
@@ -238,7 +239,7 @@ export async function deactivateUser(userId: string): Promise<boolean> {
  */
 export async function getAllActiveUsers(): Promise<User[]> {
   if (!supabase) {
-    console.warn('⚠️ Supabase not configured')
+    loggers.user.warn('Supabase not configured')
     return []
   }
 
@@ -248,7 +249,7 @@ export async function getAllActiveUsers(): Promise<User[]> {
     .eq('is_active', true)
 
   if (error) {
-    console.error('❌ Failed to get active users:', error)
+    loggers.user.error({ error: String(error) }, 'Failed to get active users')
     return []
   }
 
@@ -269,7 +270,7 @@ export async function getUserCount(): Promise<number> {
     .eq('is_active', true)
 
   if (error) {
-    console.error('❌ Failed to count users:', error)
+    loggers.user.error({ error: String(error) }, 'Failed to count users')
     return 0
   }
 

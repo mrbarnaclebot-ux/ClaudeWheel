@@ -1,32 +1,54 @@
 import { Router, Request, Response } from 'express'
 import { z } from 'zod'
+import { PublicKey, Transaction, SystemProgram, LAMPORTS_PER_SOL } from '@solana/web3.js'
 import { verifySignature, isMessageRecent, hashConfig, extractConfigHash, generateSecureNonceMessage } from '../utils/signature-verify'
 import { supabase } from '../config/database'
 import { env } from '../config/env'
-import { marketMaker } from '../services/market-maker'
-import { walletMonitor } from '../services/wallet-monitor'
+import { connection, getBalance } from '../config/solana'
+import { getKeypairFromEncrypted } from '../services/wallet-generator'
 import { bagsFmService } from '../services/bags-fm'
-import { getClaimJobStatus, restartClaimJob } from '../jobs/claim.job'
 import { getMultiUserFlywheelJobStatus, restartFlywheelJob } from '../jobs/multi-flywheel.job'
 import { getFastClaimJobStatus, triggerFastClaimCycle, restartFastClaimJob } from '../jobs/fast-claim.job'
 import { getBalanceUpdateJobStatus, triggerBalanceUpdate, restartBalanceUpdateJob } from '../jobs/balance-update.job'
-import { requestConfigReload, getCurrentAlgorithmMode, getCachedConfig } from '../jobs/flywheel.job'
 import {
   getPendingRefunds,
   executeRefund,
-  getTelegramAuditLogs,
   getLaunchStats,
 } from '../services/refund.service'
 import { getDepositMonitorStatus } from '../jobs/deposit-monitor.job'
 import { triggerFlywheelCycle } from '../jobs/multi-flywheel.job'
-import { getKeypairFromEncrypted } from '../services/wallet-generator'
-import { connection, getBalance } from '../config/solana'
-import {
-  PublicKey,
-  Transaction,
-  SystemProgram,
-  LAMPORTS_PER_SOL,
-} from '@solana/web3.js'
+import { loggers } from '../utils/logger'
+
+// Legacy function stubs for backwards compatibility - these jobs have been removed
+// Returns deprecated status to inform API consumers these are no longer active
+const getClaimJobStatus = () => ({ running: false, enabled: false, intervalMinutes: 0, lastRunAt: null as Date | null, deprecated: true, message: 'Legacy claim job removed - use fast-claim instead' })
+const restartClaimJob = (interval?: number) => { loggers.server.info({ interval }, 'Claim job restart requested (legacy - no-op)') }
+const requestConfigReload = () => { loggers.server.info('Config reload requested (legacy - no-op)') }
+const getCurrentAlgorithmMode = () => 'multi-user'
+const getCachedConfig = () => ({ flywheel_active: true, market_making_enabled: true, fee_collection_enabled: true })
+
+// Legacy service stubs - manual sell is deprecated in multi-user mode
+interface WalletBalance {
+  sol_balance: number
+  token_balance: number
+}
+
+interface SellResult {
+  signature: string
+  amount: number
+  token: string
+}
+
+const walletMonitor = {
+  getOpsWalletBalance: async (): Promise<WalletBalance | null> => null
+}
+
+const marketMaker = {
+  getStats: () => ({ isEnabled: false }),
+  enable: () => {},
+  disable: () => {},
+  executeSell: async (_amount: number, _options?: { bypassCap?: boolean }): Promise<SellResult | null> => null
+}
 
 // Platform token CA - this token cannot be suspended
 const PLATFORM_TOKEN_MINT = '8JLGQ7RqhsvhsDhvjMuJUeeuaQ53GTJqSHNaBWf4BAGS'
@@ -127,12 +149,12 @@ router.post('/config', async (req: Request, res: Response) => {
     // Step 1: Verify the public key matches the authorized dev wallet
     const authorizedWallet = env.devWalletAddress
     if (!authorizedWallet) {
-      console.error('DEV_WALLET_ADDRESS not configured')
+      loggers.server.error('DEV_WALLET_ADDRESS not configured')
       return res.status(500).json({ error: 'Server configuration error' })
     }
 
     if (publicKey !== authorizedWallet) {
-      console.warn(`Unauthorized config update attempt from: ${publicKey}`)
+      loggers.server.warn({ publicKey }, 'Unauthorized config update attempt')
       return res.status(403).json({ error: 'Unauthorized: wallet not authorized for admin actions' })
     }
 
@@ -144,7 +166,7 @@ router.post('/config', async (req: Request, res: Response) => {
     // Step 3: Verify the signature
     const verificationResult = verifySignature(message, signature, publicKey)
     if (!verificationResult.valid) {
-      console.warn(`Invalid signature from ${publicKey}: ${verificationResult.error}`)
+      loggers.server.warn({ publicKey, error: verificationResult.error }, 'Invalid signature')
       return res.status(401).json({ error: `Signature verification failed: ${verificationResult.error}` })
     }
 
@@ -157,7 +179,7 @@ router.post('/config', async (req: Request, res: Response) => {
 
     const submittedConfigHash = hashConfig(config)
     if (signedConfigHash !== submittedConfigHash) {
-      console.warn(`Config hash mismatch: signed=${signedConfigHash.slice(0, 16)}... vs submitted=${submittedConfigHash.slice(0, 16)}...`)
+      loggers.server.warn({ signedHash: signedConfigHash.slice(0, 16), submittedHash: submittedConfigHash.slice(0, 16) }, 'Config hash mismatch')
       return res.status(400).json({ error: 'Config data does not match signed message. Please sign the current config.' })
     }
 
@@ -175,7 +197,7 @@ router.post('/config', async (req: Request, res: Response) => {
       })
 
     if (dbError) {
-      console.error('Database error updating config:', dbError)
+      loggers.server.error({ error: String(dbError) }, 'Database error updating config')
       return res.status(500).json({ error: 'Failed to update configuration' })
     }
 
@@ -186,11 +208,11 @@ router.post('/config', async (req: Request, res: Response) => {
     if (config.algorithm_mode) {
       const previousMode = getCurrentAlgorithmMode()
       if (previousMode !== config.algorithm_mode) {
-        console.log(`🔀 Algorithm mode will change: ${previousMode.toUpperCase()} → ${config.algorithm_mode.toUpperCase()}`)
+        loggers.server.info({ previousMode, newMode: config.algorithm_mode }, 'Algorithm mode will change')
       }
     }
 
-    console.log(`✅ Config updated by authorized wallet: ${publicKey.slice(0, 8)}...`)
+    loggers.server.info({ publicKey: publicKey.slice(0, 8) }, 'Config updated by authorized wallet')
 
     return res.json({
       success: true,
@@ -198,7 +220,7 @@ router.post('/config', async (req: Request, res: Response) => {
       configReloadTriggered: true,
     })
   } catch (error) {
-    console.error('Error in config update:', error)
+    loggers.server.error({ error: String(error) }, 'Error in config update')
     return res.status(500).json({ error: 'Internal server error' })
   }
 })
@@ -284,12 +306,12 @@ router.post('/manual-sell', async (req: Request, res: Response) => {
     // Step 1: Verify the public key matches the authorized dev wallet
     const authorizedWallet = env.devWalletAddress
     if (!authorizedWallet) {
-      console.error('DEV_WALLET_ADDRESS not configured')
+      loggers.server.error('DEV_WALLET_ADDRESS not configured')
       return res.status(500).json({ error: 'Server configuration error' })
     }
 
     if (publicKey !== authorizedWallet) {
-      console.warn(`Unauthorized manual sell attempt from: ${publicKey}`)
+      loggers.server.warn({ publicKey }, 'Unauthorized manual sell attempt')
       return res.status(403).json({ error: 'Unauthorized: wallet not authorized for admin actions' })
     }
 
@@ -301,7 +323,7 @@ router.post('/manual-sell', async (req: Request, res: Response) => {
     // Step 3: Verify the signature
     const verificationResult = verifySignature(message, signature, publicKey)
     if (!verificationResult.valid) {
-      console.warn(`Invalid signature from ${publicKey}: ${verificationResult.error}`)
+      loggers.server.warn({ publicKey, error: verificationResult.error }, 'Invalid signature')
       return res.status(401).json({ error: `Signature verification failed: ${verificationResult.error}` })
     }
 
@@ -319,7 +341,7 @@ router.post('/manual-sell', async (req: Request, res: Response) => {
     // Step 6: Calculate amount to sell
     const tokenAmount = balances.token_balance * (percentage / 100)
 
-    console.log(`🔴 Manual sell initiated: ${percentage}% (${tokenAmount.toFixed(0)} tokens)`)
+    loggers.server.info({ percentage, tokenAmount }, 'Manual sell initiated')
 
     // Step 7: Temporarily enable market making for this operation
     const wasEnabled = marketMaker.getStats().isEnabled
@@ -339,7 +361,7 @@ router.post('/manual-sell', async (req: Request, res: Response) => {
       return res.status(500).json({ error: 'Sell execution failed' })
     }
 
-    console.log(`✅ Manual sell completed: ${result.signature}`)
+    loggers.server.info({ signature: result.signature }, 'Manual sell completed')
 
     return res.json({
       success: true,
@@ -351,7 +373,7 @@ router.post('/manual-sell', async (req: Request, res: Response) => {
       },
     })
   } catch (error) {
-    console.error('Error in manual sell:', error)
+    loggers.server.error({ error: String(error) }, 'Error in manual sell')
     return res.status(500).json({ error: 'Internal server error' })
   }
 })
@@ -421,7 +443,7 @@ async function verifyAdminAuth(req: Request, res: Response, next: Function) {
 
     next()
   } catch (error) {
-    console.error('Admin auth error:', error)
+    loggers.server.error({ error: String(error) }, 'Admin auth error')
     return res.status(500).json({ error: 'Authentication failed' })
   }
 }
@@ -490,7 +512,7 @@ router.get('/tokens', verifyAdminAuth, async (req: Request, res: Response) => {
     const { data: tokens, error } = await query
 
     if (error) {
-      console.error('Error fetching tokens:', error)
+      loggers.server.error({ error: String(error) }, 'Error fetching tokens')
       return res.status(500).json({ error: 'Failed to fetch tokens' })
     }
 
@@ -532,7 +554,7 @@ router.get('/tokens', verifyAdminAuth, async (req: Request, res: Response) => {
       },
     })
   } catch (error) {
-    console.error('Error in admin tokens list:', error)
+    loggers.server.error({ error: String(error) }, 'Error in admin tokens list')
     return res.status(500).json({ error: 'Internal server error' })
   }
 })
@@ -587,7 +609,7 @@ router.get('/tokens/:id', verifyAdminAuth, async (req: Request, res: Response) =
       },
     })
   } catch (error) {
-    console.error('Error fetching token details:', error)
+    loggers.server.error({ error: String(error) }, 'Error fetching token details')
     return res.status(500).json({ error: 'Internal server error' })
   }
 })
@@ -610,18 +632,18 @@ router.post('/tokens/:id/verify', verifyAdminAuth, async (req: Request, res: Res
       .eq('id', id)
 
     if (error) {
-      console.error('Error verifying token:', error)
+      loggers.server.error({ error: String(error) }, 'Error verifying token')
       return res.status(500).json({ error: 'Failed to verify token' })
     }
 
-    console.log(`✅ Admin verified token: ${id}`)
+    loggers.server.info({ tokenId: id }, 'Admin verified token')
 
     return res.json({
       success: true,
       message: 'Token verified successfully',
     })
   } catch (error) {
-    console.error('Error verifying token:', error)
+    loggers.server.error({ error: String(error) }, 'Error verifying token')
     return res.status(500).json({ error: 'Internal server error' })
   }
 })
@@ -658,7 +680,7 @@ router.post('/tokens/:id/suspend', verifyAdminAuth, async (req: Request, res: Re
       .eq('id', id)
 
     if (tokenError) {
-      console.error('Error suspending token:', tokenError)
+      loggers.server.error({ error: String(tokenError) }, 'Error suspending token')
       return res.status(500).json({ error: 'Failed to suspend token' })
     }
 
@@ -672,14 +694,14 @@ router.post('/tokens/:id/suspend', verifyAdminAuth, async (req: Request, res: Re
       })
       .eq('user_token_id', id)
 
-    console.log(`⚠️ Admin suspended token: ${id} - Reason: ${reason}`)
+    loggers.server.warn({ tokenId: id, reason }, 'Admin suspended token')
 
     return res.json({
       success: true,
       message: 'Token suspended successfully',
     })
   } catch (error) {
-    console.error('Error suspending token:', error)
+    loggers.server.error({ error: String(error) }, 'Error suspending token')
     return res.status(500).json({ error: 'Internal server error' })
   }
 })
@@ -705,18 +727,18 @@ router.post('/tokens/:id/unsuspend', verifyAdminAuth, async (req: Request, res: 
       .eq('id', id)
 
     if (error) {
-      console.error('Error unsuspending token:', error)
+      loggers.server.error({ error: String(error) }, 'Error unsuspending token')
       return res.status(500).json({ error: 'Failed to unsuspend token' })
     }
 
-    console.log(`✅ Admin unsuspended token: ${id}`)
+    loggers.server.info({ tokenId: id }, 'Admin unsuspended token')
 
     return res.json({
       success: true,
       message: 'Token unsuspended successfully',
     })
   } catch (error) {
-    console.error('Error unsuspending token:', error)
+    loggers.server.error({ error: String(error) }, 'Error unsuspending token')
     return res.status(500).json({ error: 'Internal server error' })
   }
 })
@@ -774,11 +796,11 @@ router.put('/tokens/:id/limits', verifyAdminAuth, async (req: Request, res: Resp
       .eq('id', id)
 
     if (error) {
-      console.error('Error updating limits:', error)
+      loggers.server.error({ error: String(error) }, 'Error updating limits')
       return res.status(500).json({ error: 'Failed to update limits' })
     }
 
-    console.log(`✅ Admin updated limits for token: ${id}`, updates)
+    loggers.server.info({ tokenId: id, updates }, 'Admin updated limits for token')
 
     return res.json({
       success: true,
@@ -786,7 +808,7 @@ router.put('/tokens/:id/limits', verifyAdminAuth, async (req: Request, res: Resp
       updates,
     })
   } catch (error) {
-    console.error('Error updating limits:', error)
+    loggers.server.error({ error: String(error) }, 'Error updating limits')
     return res.status(500).json({ error: 'Internal server error' })
   }
 })
@@ -842,7 +864,7 @@ router.get('/platform-stats', verifyAdminAuth, async (req: Request, res: Respons
       },
     })
   } catch (error) {
-    console.error('Error fetching platform stats:', error)
+    loggers.server.error({ error: String(error) }, 'Error fetching platform stats')
     return res.status(500).json({ error: 'Internal server error' })
   }
 })
@@ -880,7 +902,7 @@ router.post('/tokens/suspend-all', verifyAdminAuth, async (req: Request, res: Re
       .eq('is_suspended', false)
 
     if (fetchError) {
-      console.error('Error fetching tokens for bulk suspend:', fetchError)
+      loggers.server.error({ error: String(fetchError) }, 'Error fetching tokens for bulk suspend')
       return res.status(500).json({ error: 'Failed to fetch tokens' })
     }
 
@@ -904,7 +926,7 @@ router.post('/tokens/suspend-all', verifyAdminAuth, async (req: Request, res: Re
       .in('id', tokenIds)
 
     if (suspendError) {
-      console.error('Error bulk suspending tokens:', suspendError)
+      loggers.server.error({ error: String(suspendError) }, 'Error bulk suspending tokens')
       return res.status(500).json({ error: 'Failed to suspend tokens' })
     }
 
@@ -918,8 +940,7 @@ router.post('/tokens/suspend-all', verifyAdminAuth, async (req: Request, res: Re
       })
       .in('user_token_id', tokenIds)
 
-    console.log(`⚠️ Admin BULK SUSPENDED ${tokens.length} tokens - Reason: ${reason}`)
-    console.log(`   Excluded platform token: ${PLATFORM_TOKEN_MINT}`)
+    loggers.server.warn({ count: tokens.length, reason, excludedToken: PLATFORM_TOKEN_MINT }, 'Admin BULK SUSPENDED tokens')
 
     return res.json({
       success: true,
@@ -928,7 +949,7 @@ router.post('/tokens/suspend-all', verifyAdminAuth, async (req: Request, res: Re
       excluded: PLATFORM_TOKEN_MINT,
     })
   } catch (error) {
-    console.error('Error bulk suspending tokens:', error)
+    loggers.server.error({ error: String(error) }, 'Error bulk suspending tokens')
     return res.status(500).json({ error: 'Internal server error' })
   }
 })
@@ -950,7 +971,7 @@ router.post('/tokens/unsuspend-all', verifyAdminAuth, async (req: Request, res: 
       .eq('is_suspended', true)
 
     if (fetchError) {
-      console.error('Error fetching suspended tokens:', fetchError)
+      loggers.server.error({ error: String(fetchError) }, 'Error fetching suspended tokens')
       return res.status(500).json({ error: 'Failed to fetch tokens' })
     }
 
@@ -973,11 +994,11 @@ router.post('/tokens/unsuspend-all', verifyAdminAuth, async (req: Request, res: 
       .in('id', tokenIds)
 
     if (unsuspendError) {
-      console.error('Error bulk unsuspending tokens:', unsuspendError)
+      loggers.server.error({ error: String(unsuspendError) }, 'Error bulk unsuspending tokens')
       return res.status(500).json({ error: 'Failed to unsuspend tokens' })
     }
 
-    console.log(`✅ Admin BULK UNSUSPENDED ${tokens.length} tokens`)
+    loggers.server.info({ count: tokens.length }, 'Admin BULK UNSUSPENDED tokens')
 
     return res.json({
       success: true,
@@ -985,7 +1006,7 @@ router.post('/tokens/unsuspend-all', verifyAdminAuth, async (req: Request, res: 
       unsuspended: tokens.length,
     })
   } catch (error) {
-    console.error('Error bulk unsuspending tokens:', error)
+    loggers.server.error({ error: String(error) }, 'Error bulk unsuspending tokens')
     return res.status(500).json({ error: 'Internal server error' })
   }
 })
@@ -1027,7 +1048,7 @@ router.put('/platform-settings', verifyAdminAuth, async (req: Request, res: Resp
       return res.status(400).json({ error: 'No valid settings provided' })
     }
 
-    console.log(`✅ Admin updated platform settings:`, updates)
+    loggers.server.info({ updates }, 'Admin updated platform settings')
 
     return res.json({
       success: true,
@@ -1039,7 +1060,7 @@ router.put('/platform-settings', verifyAdminAuth, async (req: Request, res: Resp
       },
     })
   } catch (error) {
-    console.error('Error updating platform settings:', error)
+    loggers.server.error({ error: String(error) }, 'Error updating platform settings')
     return res.status(500).json({ error: 'Internal server error' })
   }
 })
@@ -1061,7 +1082,7 @@ router.get('/platform-settings', verifyAdminAuth, async (req: Request, res: Resp
       },
     })
   } catch (error) {
-    console.error('Error fetching platform settings:', error)
+    loggers.server.error({ error: String(error) }, 'Error fetching platform settings')
     return res.status(500).json({ error: 'Internal server error' })
   }
 })
@@ -1091,7 +1112,7 @@ router.get('/fast-claim/status', verifyAdminAuth, async (req: Request, res: Resp
       },
     })
   } catch (error) {
-    console.error('Error fetching fast claim status:', error)
+    loggers.server.error({ error: String(error) }, 'Error fetching fast claim status')
     return res.status(500).json({ error: 'Internal server error' })
   }
 })
@@ -1102,11 +1123,11 @@ router.get('/fast-claim/status', verifyAdminAuth, async (req: Request, res: Resp
  */
 router.post('/fast-claim/trigger', verifyAdminAuth, async (req: Request, res: Response) => {
   try {
-    console.log('⚡ Admin triggered manual fast claim cycle')
+    loggers.server.info('Admin triggered manual fast claim cycle')
 
     // Run async - don't wait for completion
     triggerFastClaimCycle().catch(err => {
-      console.error('Fast claim cycle error:', err)
+      loggers.server.error({ error: String(err) }, 'Fast claim cycle error')
     })
 
     return res.json({
@@ -1114,7 +1135,7 @@ router.post('/fast-claim/trigger', verifyAdminAuth, async (req: Request, res: Re
       message: 'Fast claim cycle triggered. Check logs for results.',
     })
   } catch (error) {
-    console.error('Error triggering fast claim:', error)
+    loggers.server.error({ error: String(error) }, 'Error triggering fast claim')
     return res.status(500).json({ error: 'Internal server error' })
   }
 })
@@ -1146,7 +1167,7 @@ router.post('/fast-claim/restart', verifyAdminAuth, async (req: Request, res: Re
       data: newStatus,
     })
   } catch (error) {
-    console.error('Error restarting fast claim job:', error)
+    loggers.server.error({ error: String(error) }, 'Error restarting fast claim job')
     return res.status(500).json({ error: 'Internal server error' })
   }
 })
@@ -1173,7 +1194,7 @@ router.get('/balance-update/status', verifyAdminAuth, async (req: Request, res: 
       },
     })
   } catch (error) {
-    console.error('Error fetching balance update status:', error)
+    loggers.server.error({ error: String(error) }, 'Error fetching balance update status')
     return res.status(500).json({ error: 'Internal server error' })
   }
 })
@@ -1184,11 +1205,11 @@ router.get('/balance-update/status', verifyAdminAuth, async (req: Request, res: 
  */
 router.post('/balance-update/trigger', verifyAdminAuth, async (req: Request, res: Response) => {
   try {
-    console.log('💰 Admin triggered manual balance update cycle')
+    loggers.server.info('Admin triggered manual balance update cycle')
 
     // Run async - don't wait for completion
     triggerBalanceUpdate().catch(err => {
-      console.error('Balance update cycle error:', err)
+      loggers.server.error({ error: String(err) }, 'Balance update cycle error')
     })
 
     return res.json({
@@ -1196,7 +1217,7 @@ router.post('/balance-update/trigger', verifyAdminAuth, async (req: Request, res
       message: 'Balance update cycle triggered. Check logs for results.',
     })
   } catch (error) {
-    console.error('Error triggering balance update:', error)
+    loggers.server.error({ error: String(error) }, 'Error triggering balance update')
     return res.status(500).json({ error: 'Internal server error' })
   }
 })
@@ -1228,7 +1249,7 @@ router.post('/balance-update/restart', verifyAdminAuth, async (req: Request, res
       data: newStatus,
     })
   } catch (error) {
-    console.error('Error restarting balance update job:', error)
+    loggers.server.error({ error: String(error) }, 'Error restarting balance update job')
     return res.status(500).json({ error: 'Internal server error' })
   }
 })
@@ -1254,7 +1275,7 @@ router.get('/flywheel-status', verifyAdminAuth, async (req: Request, res: Respon
       },
     })
   } catch (error) {
-    console.error('Error fetching flywheel status:', error)
+    loggers.server.error({ error: String(error) }, 'Error fetching flywheel status')
     return res.status(500).json({ error: 'Internal server error' })
   }
 })
@@ -1273,7 +1294,7 @@ router.post('/config/reload', verifyAdminAuth, async (req: Request, res: Respons
       currentMode: getCurrentAlgorithmMode(),
     })
   } catch (error) {
-    console.error('Error triggering config reload:', error)
+    loggers.server.error({ error: String(error) }, 'Error triggering config reload')
     return res.status(500).json({ error: 'Internal server error' })
   }
 })
@@ -1296,7 +1317,7 @@ router.get('/telegram/stats', verifyAdminAuth, async (req: Request, res: Respons
       data: stats,
     })
   } catch (error) {
-    console.error('Error fetching launch stats:', error)
+    loggers.server.error({ error: String(error) }, 'Error fetching launch stats')
     return res.status(500).json({ error: 'Internal server error' })
   }
 })
@@ -1330,7 +1351,7 @@ router.get('/telegram/launches', verifyAdminAuth, async (req: Request, res: Resp
     const { data: launches, error } = await query
 
     if (error) {
-      console.error('Error fetching launches:', error)
+      loggers.server.error({ error: String(error) }, 'Error fetching launches')
       return res.status(500).json({ error: 'Failed to fetch launches' })
     }
 
@@ -1349,7 +1370,7 @@ router.get('/telegram/launches', verifyAdminAuth, async (req: Request, res: Resp
       },
     })
   } catch (error) {
-    console.error('Error fetching launches:', error)
+    loggers.server.error({ error: String(error) }, 'Error fetching launches')
     return res.status(500).json({ error: 'Internal server error' })
   }
 })
@@ -1370,7 +1391,7 @@ router.get('/telegram/refunds', verifyAdminAuth, async (req: Request, res: Respo
       },
     })
   } catch (error) {
-    console.error('Error fetching pending refunds:', error)
+    loggers.server.error({ error: String(error) }, 'Error fetching pending refunds')
     return res.status(500).json({ error: 'Internal server error' })
   }
 })
@@ -1388,7 +1409,7 @@ router.post('/telegram/refund/:id', verifyAdminAuth, async (req: Request, res: R
       return res.status(400).json({ error: 'Refund address is required' })
     }
 
-    console.log(`💸 Admin initiating refund for launch ${id} to ${refundAddress}`)
+    loggers.server.info({ launchId: id, refundAddress }, 'Admin initiating refund')
 
     const result = await executeRefund(id, refundAddress)
 
@@ -1408,7 +1429,7 @@ router.post('/telegram/refund/:id', verifyAdminAuth, async (req: Request, res: R
       },
     })
   } catch (error) {
-    console.error('Error executing refund:', error)
+    loggers.server.error({ error: String(error) }, 'Error executing refund')
     return res.status(500).json({ error: 'Internal server error' })
   }
 })
@@ -1439,7 +1460,7 @@ router.get('/telegram/logs', verifyAdminAuth, async (req: Request, res: Response
     const { data: logs, error } = await query
 
     if (error) {
-      console.error('Error fetching audit logs:', error)
+      loggers.server.error({ error: String(error) }, 'Error fetching audit logs')
       return res.status(500).json({ error: 'Failed to fetch logs' })
     }
 
@@ -1451,7 +1472,7 @@ router.get('/telegram/logs', verifyAdminAuth, async (req: Request, res: Response
       },
     })
   } catch (error) {
-    console.error('Error fetching audit logs:', error)
+    loggers.server.error({ error: String(error) }, 'Error fetching audit logs')
     return res.status(500).json({ error: 'Internal server error' })
   }
 })
@@ -1496,7 +1517,7 @@ router.get('/telegram/launch/:id', verifyAdminAuth, async (req: Request, res: Re
       },
     })
   } catch (error) {
-    console.error('Error fetching launch details:', error)
+    loggers.server.error({ error: String(error) }, 'Error fetching launch details')
     return res.status(500).json({ error: 'Internal server error' })
   }
 })
@@ -1565,7 +1586,7 @@ router.post('/telegram/launch/:id/cancel', verifyAdminAuth, async (req: Request,
           )
         }
       } catch (e) {
-        console.error('Error notifying user:', e)
+        loggers.server.error({ error: String(e) }, 'Error notifying user')
       }
     }
 
@@ -1574,7 +1595,7 @@ router.post('/telegram/launch/:id/cancel', verifyAdminAuth, async (req: Request,
       message: 'Launch cancelled',
     })
   } catch (error) {
-    console.error('Error cancelling launch:', error)
+    loggers.server.error({ error: String(error) }, 'Error cancelling launch')
     return res.status(500).json({ error: 'Internal server error' })
   }
 })
@@ -1637,7 +1658,7 @@ router.get('/telegram/bot-health', verifyAdminAuth, async (req: Request, res: Re
       },
     })
   } catch (error) {
-    console.error('Error fetching bot health:', error)
+    loggers.server.error({ error: String(error) }, 'Error fetching bot health')
     return res.status(500).json({ error: 'Internal server error' })
   }
 })
@@ -1658,7 +1679,7 @@ router.get('/telegram/financial-metrics', verifyAdminAuth, async (req: Request, 
       .select('status, deposit_received_sol, created_at')
 
     if (error) {
-      console.error('Error fetching launches for metrics:', error)
+      loggers.server.error({ error: String(error) }, 'Error fetching launches for metrics')
       return res.status(500).json({ error: 'Failed to fetch financial metrics' })
     }
 
@@ -1716,7 +1737,7 @@ router.get('/telegram/financial-metrics', verifyAdminAuth, async (req: Request, 
       },
     })
   } catch (error) {
-    console.error('Error fetching financial metrics:', error)
+    loggers.server.error({ error: String(error) }, 'Error fetching financial metrics')
     return res.status(500).json({ error: 'Internal server error' })
   }
 })
@@ -1753,7 +1774,7 @@ router.get('/telegram/users', verifyAdminAuth, async (req: Request, res: Respons
     const { data: users, error } = await query
 
     if (error) {
-      console.error('Error fetching telegram users:', error)
+      loggers.server.error({ error: String(error) }, 'Error fetching telegram users')
       return res.status(500).json({ error: 'Failed to fetch users' })
     }
 
@@ -1781,7 +1802,7 @@ router.get('/telegram/users', verifyAdminAuth, async (req: Request, res: Respons
       },
     })
   } catch (error) {
-    console.error('Error fetching telegram users:', error)
+    loggers.server.error({ error: String(error) }, 'Error fetching telegram users')
     return res.status(500).json({ error: 'Internal server error' })
   }
 })
@@ -1865,7 +1886,7 @@ router.post('/telegram/bulk-refund', verifyAdminAuth, async (req: Request, res: 
       },
     })
   } catch (error) {
-    console.error('Error executing bulk refunds:', error)
+    loggers.server.error({ error: String(error) }, 'Error executing bulk refunds')
     return res.status(500).json({ error: 'Internal server error' })
   }
 })
@@ -1929,7 +1950,7 @@ router.get('/telegram/launches/search', verifyAdminAuth, async (req: Request, re
     const { data: launches, error } = await query
 
     if (error) {
-      console.error('Error searching launches:', error)
+      loggers.server.error({ error: String(error) }, 'Error searching launches')
       return res.status(500).json({ error: 'Failed to search launches' })
     }
 
@@ -1957,7 +1978,7 @@ router.get('/telegram/launches/search', verifyAdminAuth, async (req: Request, re
       },
     })
   } catch (error) {
-    console.error('Error searching launches:', error)
+    loggers.server.error({ error: String(error) }, 'Error searching launches')
     return res.status(500).json({ error: 'Internal server error' })
   }
 })
@@ -2006,7 +2027,7 @@ router.get('/telegram/export', verifyAdminAuth, async (req: Request, res: Respon
     const { data: launches, error } = await query
 
     if (error) {
-      console.error('Error exporting launches:', error)
+      loggers.server.error({ error: String(error) }, 'Error exporting launches')
       return res.status(500).json({ error: 'Failed to export launches' })
     }
 
@@ -2038,7 +2059,7 @@ router.get('/telegram/export', verifyAdminAuth, async (req: Request, res: Respon
       data: exportData,
     })
   } catch (error) {
-    console.error('Error exporting launches:', error)
+    loggers.server.error({ error: String(error) }, 'Error exporting launches')
     return res.status(500).json({ error: 'Internal server error' })
   }
 })
@@ -2069,7 +2090,7 @@ router.get('/telegram/chart-data', verifyAdminAuth, async (req: Request, res: Re
       .order('created_at', { ascending: true })
 
     if (error) {
-      console.error('Error fetching chart data:', error)
+      loggers.server.error({ error: String(error) }, 'Error fetching chart data')
       return res.status(500).json({ error: 'Failed to fetch chart data' })
     }
 
@@ -2199,7 +2220,7 @@ router.get('/telegram/chart-data', verifyAdminAuth, async (req: Request, res: Re
       },
     })
   } catch (error) {
-    console.error('Error fetching chart data:', error)
+    loggers.server.error({ error: String(error) }, 'Error fetching chart data')
     return res.status(500).json({ error: 'Internal server error' })
   }
 })
@@ -2240,7 +2261,7 @@ router.get('/telegram/alerts/status', verifyAdminAuth, async (req: Request, res:
       },
     })
   } catch (error) {
-    console.error('Error fetching alert status:', error)
+    loggers.server.error({ error: String(error) }, 'Error fetching alert status')
     return res.status(500).json({ error: 'Internal server error' })
   }
 })
@@ -2271,7 +2292,7 @@ router.post('/telegram/maintenance/enable', verifyAdminAuth, async (req: Request
       })
     }
 
-    console.log(`🔧 Admin enabled maintenance mode: ${reason}`)
+    loggers.server.info({ reason }, 'Admin enabled maintenance mode')
 
     return res.json({
       success: true,
@@ -2279,7 +2300,7 @@ router.post('/telegram/maintenance/enable', verifyAdminAuth, async (req: Request
       notifiedUsers: result.notifiedCount || 0,
     })
   } catch (error) {
-    console.error('Error enabling maintenance mode:', error)
+    loggers.server.error({ error: String(error) }, 'Error enabling maintenance mode')
     return res.status(500).json({ error: 'Internal server error' })
   }
 })
@@ -2302,7 +2323,7 @@ router.post('/telegram/maintenance/disable', verifyAdminAuth, async (req: Reques
       })
     }
 
-    console.log(`✅ Admin disabled maintenance mode`)
+    loggers.server.info('Admin disabled maintenance mode')
 
     return res.json({
       success: true,
@@ -2310,7 +2331,7 @@ router.post('/telegram/maintenance/disable', verifyAdminAuth, async (req: Reques
       notifiedUsers: result.notifiedCount || 0,
     })
   } catch (error) {
-    console.error('Error disabling maintenance mode:', error)
+    loggers.server.error({ error: String(error) }, 'Error disabling maintenance mode')
     return res.status(500).json({ error: 'Internal server error' })
   }
 })
@@ -2342,7 +2363,7 @@ router.post('/telegram/broadcast', verifyAdminAuth, async (req: Request, res: Re
     const { sendAdminAnnouncement } = await import('../services/bot-alerts.service')
     const result = await sendAdminAnnouncement(title, body)
 
-    console.log(`📢 Admin broadcast sent: ${title} (${result.successful}/${result.total} delivered)`)
+    loggers.server.info({ title, successful: result.successful, total: result.total }, 'Admin broadcast sent')
 
     return res.json({
       success: true,
@@ -2355,7 +2376,7 @@ router.post('/telegram/broadcast', verifyAdminAuth, async (req: Request, res: Re
       },
     })
   } catch (error) {
-    console.error('Error sending broadcast:', error)
+    loggers.server.error({ error: String(error) }, 'Error sending broadcast')
     return res.status(500).json({ error: 'Internal server error' })
   }
 })
@@ -2391,7 +2412,7 @@ _Use /alerts to manage your subscription._`
       },
     })
   } catch (error) {
-    console.error('Error previewing broadcast:', error)
+    loggers.server.error({ error: String(error) }, 'Error previewing broadcast')
     return res.status(500).json({ error: 'Internal server error' })
   }
 })

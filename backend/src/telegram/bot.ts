@@ -4,8 +4,10 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { Telegraf, Context, Scenes, session, Markup } from 'telegraf'
+import { randomBytes } from 'crypto'
 import { env } from '../config/env'
 import { supabase } from '../config/database'
+import { loggers } from '../utils/logger'
 
 // ═══════════════════════════════════════════════════════════════════════════
 // INLINE KEYBOARDS
@@ -152,13 +154,44 @@ export function getBot(): Telegraf<BotContext> | null {
 /**
  * Setup bot middleware and commands
  */
+// Rate limiter for Telegram commands
+const rateLimiter = new Map<number, { count: number; resetAt: number }>()
+const RATE_LIMIT_WINDOW_MS = 60000 // 1 minute
+const MAX_COMMANDS_PER_WINDOW = 10
+
+function checkRateLimit(userId: number): boolean {
+  const now = Date.now()
+  const userLimit = rateLimiter.get(userId)
+
+  if (!userLimit || now > userLimit.resetAt) {
+    rateLimiter.set(userId, { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS })
+    return true
+  }
+
+  if (userLimit.count >= MAX_COMMANDS_PER_WINDOW) {
+    return false
+  }
+
+  userLimit.count++
+  return true
+}
+
 function setupBot(bot: Telegraf<BotContext>) {
   // Session middleware
   bot.use(session())
 
+  // Rate limiting middleware - prevents command spam
+  bot.use(async (ctx, next) => {
+    if (ctx.from && !checkRateLimit(ctx.from.id)) {
+      await ctx.reply('You are sending commands too quickly. Please wait a moment.')
+      return
+    }
+    return next()
+  })
+
   // Error handling
   bot.catch((err, ctx) => {
-    console.error('Telegram bot error:', err)
+    loggers.telegram.error({ error: String(err), chatId: ctx.chat?.id, userId: ctx.from?.id }, 'Telegram bot error')
     ctx.reply('An error occurred. Please try again or contact support.')
   })
 
@@ -222,7 +255,7 @@ function setupBot(bot: Telegraf<BotContext>) {
 
   bot.action('confirm_token_yes', async (ctx) => {
     await ctx.answerCbQuery()
-    const data = ctx.session?.registerData as any
+    const data = ctx.session?.registerData
     if (data) {
       data.step = 'dev_key'
       await ctx.editMessageText(
@@ -247,7 +280,7 @@ function setupBot(bot: Telegraf<BotContext>) {
 
   bot.action('confirm_token_no', async (ctx) => {
     await ctx.answerCbQuery()
-    const data = ctx.session?.registerData as any
+    const data = ctx.session?.registerData
     if (data) {
       data.step = 'mint'
       await ctx.editMessageText(
@@ -260,7 +293,7 @@ function setupBot(bot: Telegraf<BotContext>) {
   // Handle reactivation flow - user clicked "Reactivate Token"
   bot.action('action_reactivate', async (ctx) => {
     await ctx.answerCbQuery()
-    const data = ctx.session?.registerData as any
+    const data = ctx.session?.registerData
     if (data && data.isReactivation) {
       data.step = 'reactivate_dev_key'
       await ctx.editMessageText(
@@ -311,11 +344,11 @@ function setupBot(bot: Telegraf<BotContext>) {
 
   // /launch - Start token launch wizard
   bot.command('launch', async (ctx) => {
-    console.log(`📱 /launch command received from user ${ctx.from?.id}`)
+    loggers.telegram.info({ userId: ctx.from?.id, command: 'launch' }, '📱 /launch command received')
     try {
       await startLaunchWizard(ctx)
     } catch (error) {
-      console.error('Error in /launch command:', error)
+      loggers.telegram.error({ error: String(error), userId: ctx.from?.id, command: 'launch' }, 'Error in /launch command')
       await ctx.reply('❌ Error starting launch wizard. Please try again.')
     }
   })
@@ -421,7 +454,7 @@ _Use /settings ${symbol} to configure_
 `
       await ctx.replyWithMarkdown(statusMessage)
     } catch (error) {
-      console.error('Error fetching token status:', error)
+      loggers.telegram.error({ error: String(error), userId: ctx.from?.id, command: 'status' }, 'Error fetching token status')
       await ctx.reply('Error fetching token status. Please try again.')
     }
   })
@@ -492,7 +525,7 @@ _Use /settings ${symbol} to configure_
 
       await ctx.reply(`${emoji} Flywheel ${state} for ${token.token_symbol}`)
     } catch (error) {
-      console.error('Error toggling flywheel:', error)
+      loggers.telegram.error({ error: String(error), userId: ctx.from?.id, command: 'toggle' }, 'Error toggling flywheel')
       await ctx.reply('Error toggling flywheel. Please try again.')
     }
   })
@@ -535,7 +568,7 @@ _Use /settings ${symbol} to configure_
   // Handle photo uploads for launch wizard image step
   bot.on('photo', async (ctx) => {
     ctx.session = ctx.session || {}
-    const data = ctx.session.launchData as any
+    const data = ctx.session.launchData
 
     // Only handle photos during launch wizard image step
     if (!data || data.step !== 'image') {
@@ -585,7 +618,7 @@ _Use /settings ${symbol} to configure_
         `Or type *"skip"* to continue without social links.`
       )
     } catch (error) {
-      console.error('Error handling photo upload:', error)
+      loggers.telegram.error({ error: String(error), userId: ctx.from?.id }, 'Error handling photo upload')
       await ctx.reply('⚠️ Error uploading image. Please try sending a URL instead, or type "skip":')
     }
   })
@@ -602,13 +635,13 @@ _Use /settings ${symbol} to configure_
 async function uploadTokenImage(imageBuffer: Buffer, originalPath: string): Promise<string | null> {
   try {
     if (!supabase) {
-      console.warn('⚠️ Supabase not configured - cannot upload image')
+      loggers.telegram.warn('⚠️ Supabase not configured - cannot upload image')
       return null
     }
 
     // Generate unique filename
     const extension = originalPath.split('.').pop() || 'jpg'
-    const filename = `token-${Date.now()}-${Math.random().toString(36).substring(7)}.${extension}`
+    const filename = `token-${Date.now()}-${randomBytes(8).toString('hex')}.${extension}`
     const storagePath = `token-images/${filename}`
 
     // Determine content type
@@ -623,7 +656,7 @@ async function uploadTokenImage(imageBuffer: Buffer, originalPath: string): Prom
       })
 
     if (error) {
-      console.error('Supabase storage upload error:', error)
+      loggers.telegram.error({ error: String(error), storagePath }, 'Supabase storage upload error')
       return null
     }
 
@@ -632,10 +665,10 @@ async function uploadTokenImage(imageBuffer: Buffer, originalPath: string): Prom
       .from('public-assets')
       .getPublicUrl(storagePath)
 
-    console.log(`✅ Image uploaded to Supabase: ${urlData.publicUrl}`)
+    loggers.telegram.info({ publicUrl: urlData.publicUrl }, '✅ Image uploaded to Supabase')
     return urlData.publicUrl
   } catch (error) {
-    console.error('Failed to upload token image:', error)
+    loggers.telegram.error({ error: String(error) }, 'Failed to upload token image')
     return null
   }
 }
@@ -645,7 +678,8 @@ async function uploadTokenImage(imageBuffer: Buffer, originalPath: string): Prom
  * Called after image step is complete (either URL, upload, or skip)
  */
 async function finalizeLaunchWizard(ctx: BotContext): Promise<void> {
-  const data = ctx.session.launchData as any
+  const data = ctx.session.launchData
+  if (!data) return
 
   try {
     const { generateEncryptedWalletPair } = await import('../services/wallet-generator')
@@ -727,7 +761,7 @@ async function finalizeLaunchWizard(ctx: BotContext): Promise<void> {
       .single()
 
     if (error) {
-      console.error('Error creating pending launch:', error)
+      loggers.telegram.error({ error: String(error), tokenName: data.tokenName, tokenSymbol: data.tokenSymbol }, 'Error creating pending launch')
       await ctx.reply('Error creating launch. Please try again with /launch')
       ctx.session.launchData = undefined
       return
@@ -782,7 +816,7 @@ _Expires in 24h • /cancel to abort_`
     // Clear launch data from session (deposit monitor will handle the rest)
     ctx.session.launchData = undefined
   } catch (error) {
-    console.error('Error in finalizeLaunchWizard:', error)
+    loggers.telegram.error({ error: String(error), chatId: ctx.chat?.id }, 'Error in finalizeLaunchWizard')
     await ctx.reply('Error generating wallets. Please try again with /launch')
     ctx.session.launchData = undefined
   }
@@ -870,7 +904,7 @@ ${subscribed
 
     await ctx.replyWithMarkdown(alertsMessage, alertsKeyboard)
   } catch (error) {
-    console.error('Error showing alerts menu:', error)
+    loggers.telegram.error({ error: String(error), userId: ctx.from?.id }, 'Error showing alerts menu')
     await ctx.reply('Error loading alerts settings. Please try again.')
   }
 }
@@ -926,7 +960,7 @@ Use /alerts to re-subscribe anytime.`)
       }
     }
   } catch (error) {
-    console.error('Error handling alert subscription:', error)
+    loggers.telegram.error({ error: String(error), userId: ctx.from?.id, subscribe }, 'Error handling alert subscription')
     await ctx.reply('Error updating subscription. Please try again.')
   }
 }
@@ -977,25 +1011,25 @@ Use /alerts to subscribe to downtime notifications.`
 
     await ctx.replyWithMarkdown(statusMessage)
   } catch (error) {
-    console.error('Error showing bot status:', error)
+    loggers.telegram.error({ error: String(error), userId: ctx.from?.id }, 'Error showing bot status')
     await ctx.reply('Error checking bot status. Please try again.')
   }
 }
 
 async function startLaunchWizard(ctx: BotContext) {
-  console.log(`🚀 startLaunchWizard called for chat ${ctx.chat?.id}, type: ${ctx.chat?.type}`)
+  loggers.telegram.info({ chatId: ctx.chat?.id, chatType: ctx.chat?.type }, '🚀 startLaunchWizard called')
 
   // Check if in private chat
   if (ctx.chat?.type !== 'private') {
-    console.log(`⚠️ Launch rejected - not private chat`)
+    loggers.telegram.warn({ chatId: ctx.chat?.id, chatType: ctx.chat?.type }, '⚠️ Launch rejected - not private chat')
     await ctx.reply('⚠️ For security, please use /launch in a private chat with me.')
     return
   }
 
   // Initialize session data
   ctx.session = ctx.session || {}
-  ctx.session.launchData = { step: 'name' } as any
-  console.log(`📝 Session initialized with launchData:`, ctx.session.launchData)
+  ctx.session.launchData = { step: 'name' }
+  loggers.telegram.debug({ chatId: ctx.chat?.id, step: 'name' }, '📝 Session initialized with launchData')
 
   const launchIntro = `🚀 *Launch New Token*
 
@@ -1009,9 +1043,9 @@ async function startLaunchWizard(ctx: BotContext) {
 
 📝 *TOKEN NAME?*
 _e.g. "Claude Wheel"_`
-  console.log(`📤 Sending launch intro message...`)
+  loggers.telegram.debug({ chatId: ctx.chat?.id }, '📤 Sending launch intro message...')
   await ctx.replyWithMarkdown(launchIntro, cancelKeyboard)
-  console.log(`✅ Launch intro sent successfully`)
+  loggers.telegram.debug({ chatId: ctx.chat?.id }, '✅ Launch intro sent successfully')
 }
 
 async function startRegisterWizard(ctx: BotContext) {
@@ -1023,7 +1057,7 @@ async function startRegisterWizard(ctx: BotContext) {
 
   // Initialize session data
   ctx.session = ctx.session || {}
-  ctx.session.registerData = { step: 'mint' } as any
+  ctx.session.registerData = { step: 'mint' }
 
   const registerIntro = `📝 *Register Existing Token*
 
@@ -1111,7 +1145,7 @@ Launch a new token or register an existing one to get started!`
 
     let message = `📊 *My Tokens*\n\n`
 
-    const buttons: any[][] = []
+    const buttons: ReturnType<typeof Markup.button.callback>[][] = []
 
     for (const token of tokens) {
       const config = Array.isArray(token.user_token_config)
@@ -1144,7 +1178,7 @@ Launch a new token or register an existing one to get started!`
 
     await ctx.replyWithMarkdown(message, Markup.inlineKeyboard(buttons))
   } catch (error) {
-    console.error('Error fetching tokens:', error)
+    loggers.telegram.error({ error: String(error), userId: ctx.from?.id }, 'Error fetching tokens')
     await ctx.reply('Error fetching your tokens. Please try again.')
   }
 }
@@ -1232,7 +1266,7 @@ ${statusEmoji} Flywheel: *${statusText}*
 
     await ctx.replyWithMarkdown(statusMessage, statusKeyboard)
   } catch (error) {
-    console.error('Error fetching token status:', error)
+    loggers.telegram.error({ error: String(error), userId: ctx.from?.id, symbol }, 'Error fetching token status')
     await ctx.reply('Error fetching token status. Please try again.')
   }
 }
@@ -1303,7 +1337,7 @@ ${newState ? '✅ Auto-trading now active' : '⏸️ Trading paused'}`
 
     await ctx.replyWithMarkdown(toggleMessage, toggleKeyboard)
   } catch (error) {
-    console.error('Error toggling flywheel:', error)
+    loggers.telegram.error({ error: String(error), userId: ctx.from?.id, symbol }, 'Error toggling flywheel')
     await ctx.reply('Error toggling flywheel. Please try again.')
   }
 }
@@ -1313,7 +1347,8 @@ ${newState ? '✅ Auto-trading now active' : '⏸️ Trading paused'}`
 // ═══════════════════════════════════════════════════════════════════════════
 
 async function handleLaunchWizard(ctx: BotContext, text: string) {
-  const data = ctx.session.launchData as any
+  const data = ctx.session.launchData
+  if (!data) return
 
   switch (data.step) {
     case 'name':
@@ -1421,7 +1456,8 @@ async function handleLaunchWizard(ctx: BotContext, text: string) {
 }
 
 async function handleRegisterWizard(ctx: BotContext, text: string) {
-  const data = ctx.session.registerData as any
+  const data = ctx.session.registerData
+  if (!data) return
   const { isValidSolanaAddress, validatePrivateKey } = await import('../services/wallet-generator')
 
   switch (data.step) {
@@ -1519,7 +1555,7 @@ Each token can only have one flywheel operator.`)
         }
       } catch (error) {
         // Continue if check fails (table might not exist yet)
-        console.warn('Could not check for existing token:', error)
+        loggers.telegram.warn({ error: String(error), tokenMint: text }, 'Could not check for existing token')
       }
 
       // Fetch token data from DexScreener and Bags.fm
@@ -1563,7 +1599,7 @@ Is this correct?`
           return
         }
       } catch (error) {
-        console.warn('Could not fetch token info:', error)
+        loggers.telegram.warn({ error: String(error), tokenMint: data.tokenMint }, 'Could not fetch token info')
       }
 
       // Token not found on Bags.fm - reject registration
@@ -1647,8 +1683,16 @@ Needed to claim Bags.fm fees
       // Try to delete the message with private key immediately
       try {
         await ctx.deleteMessage()
-      } catch (e) {
-        // Can't delete in some cases
+      } catch (deleteError) {
+        // Warn user if deletion fails - their private key may still be visible
+        try {
+          await ctx.reply(
+            '⚠️ *Security Warning*: I could not delete your private key message. Please manually delete it from this chat for security.',
+            { parse_mode: 'Markdown' }
+          )
+        } catch (warnError) {
+          loggers.telegram.error({ deleteError: String(deleteError), warnError: String(warnError) }, 'Failed to delete private key message and warn user')
+        }
       }
 
       // SECURITY: Verify wallet ownership against token creator
@@ -1702,8 +1746,16 @@ Now enter your *OPS WALLET PRIVATE KEY* (base58):
       // Try to delete the message with private key
       try {
         await ctx.deleteMessage()
-      } catch (e) {
-        // Can't delete in some cases
+      } catch (deleteError) {
+        // Warn user if deletion fails - their private key may still be visible
+        try {
+          await ctx.reply(
+            '⚠️ *Security Warning*: I could not delete your private key message. Please manually delete it from this chat for security.',
+            { parse_mode: 'Markdown' }
+          )
+        } catch (warnError) {
+          loggers.telegram.error({ deleteError: String(deleteError), warnError: String(warnError) }, 'Failed to delete private key message and warn user')
+        }
       }
 
       await ctx.replyWithMarkdown(`
@@ -1718,11 +1770,11 @@ Address: \`${opsAddress.slice(0, 8)}...\`
       const confirmMsg = `📋 *Review & Confirm*
 
 *Token:* ${data.tokenSymbol}
-*Mint:* \`${data.tokenMint.slice(0, 8)}...${data.tokenMint.slice(-6)}\`
+*Mint:* \`${data.tokenMint?.slice(0, 8)}...${data.tokenMint?.slice(-6)}\`
 
 💼 *Wallets*
-├ Dev: \`${data.devWalletAddress.slice(0, 8)}...\`
-└ Ops: \`${data.opsWalletAddress.slice(0, 8)}...\`
+├ Dev: \`${data.devWalletAddress?.slice(0, 8)}...\`
+└ Ops: \`${data.opsWalletAddress?.slice(0, 8)}...\`
 
 ⚙️ *Defaults*
 ├ Flywheel: OFF
@@ -1751,8 +1803,16 @@ Reply *"confirm"* or /cancel`
       // Try to delete the message with private key immediately
       try {
         await ctx.deleteMessage()
-      } catch (e) {
-        // Can't delete in some cases
+      } catch (deleteError) {
+        // Warn user if deletion fails - their private key may still be visible
+        try {
+          await ctx.reply(
+            '⚠️ *Security Warning*: I could not delete your private key message. Please manually delete it from this chat for security.',
+            { parse_mode: 'Markdown' }
+          )
+        } catch (warnError) {
+          loggers.telegram.error({ deleteError: String(deleteError), warnError: String(warnError) }, 'Failed to delete private key message and warn user')
+        }
       }
 
       // Verify the key matches the expected dev wallet
@@ -1796,8 +1856,16 @@ Reply *"confirm"* or /cancel`
       // Try to delete the message with private key
       try {
         await ctx.deleteMessage()
-      } catch (e) {
-        // Can't delete in some cases
+      } catch (deleteError) {
+        // Warn user if deletion fails - their private key may still be visible
+        try {
+          await ctx.reply(
+            '⚠️ *Security Warning*: I could not delete your private key message. Please manually delete it from this chat for security.',
+            { parse_mode: 'Markdown' }
+          )
+        } catch (warnError) {
+          loggers.telegram.error({ deleteError: String(deleteError), warnError: String(warnError) }, 'Failed to delete private key message and warn user')
+        }
       }
 
       // Verify the key matches the expected ops wallet
@@ -1852,6 +1920,11 @@ Reply *"confirm"* or /cancel`
         }
 
         // Reactivate the token
+        if (!data.suspendedTokenId || !data.devWalletPrivateKey || !data.opsWalletPrivateKey) {
+          await ctx.reply('❌ Missing required data. Please try again with /register')
+          ctx.session.registerData = undefined
+          return
+        }
         const reactivatedToken = await reactivateSuspendedToken(
           data.suspendedTokenId,
           data.devWalletPrivateKey,
@@ -1907,7 +1980,7 @@ Reply *"confirm"* or /cancel`
         await ctx.replyWithMarkdown(successMsg, successKeyboard)
         ctx.session.registerData = undefined
       } catch (error) {
-        console.error('Error reactivating token:', error)
+        loggers.telegram.error({ error: String(error), tokenId: data.suspendedTokenId, userId: ctx.from?.id }, 'Error reactivating token')
         await ctx.reply('❌ Error reactivating token. Please try again with /register')
         ctx.session.registerData = undefined
       }
@@ -1959,9 +2032,23 @@ Reply *"confirm"* or /cancel`
           mainUser = newMainUser
         }
 
+        // Validate required fields before encryption - check for null, undefined, and empty/whitespace strings
+        const devPrivateKey = data.devWalletPrivateKey?.trim()
+        const opsPrivateKey = data.opsWalletPrivateKey?.trim()
+        const tokenMint = data.tokenMint?.trim()
+        const tokenSymbol = data.tokenSymbol?.trim()
+        const devWalletAddress = data.devWalletAddress?.trim()
+        const opsWalletAddress = data.opsWalletAddress?.trim()
+
+        if (!devPrivateKey || !opsPrivateKey || !tokenMint || !tokenSymbol || !devWalletAddress || !opsWalletAddress) {
+          await ctx.reply('❌ Missing required fields. Please try again with /register')
+          ctx.session.registerData = undefined
+          return
+        }
+
         // Encrypt keys
-        const devEncrypted = encrypt(data.devWalletPrivateKey)
-        const opsEncrypted = encrypt(data.opsWalletPrivateKey)
+        const devEncrypted = encrypt(devPrivateKey)
+        const opsEncrypted = encrypt(opsPrivateKey)
 
         // Create user token
         const { data: userToken, error: tokenError } = await db
@@ -1969,15 +2056,15 @@ Reply *"confirm"* or /cancel`
           .insert({
             user_id: mainUser?.id,
             telegram_user_id: telegramUser?.id,
-            token_mint_address: data.tokenMint,
-            token_symbol: data.tokenSymbol,
+            token_mint_address: tokenMint,
+            token_symbol: tokenSymbol,
             token_name: data.tokenName || null,
             token_image: data.tokenImage || null,
-            dev_wallet_address: data.devWalletAddress,
+            dev_wallet_address: devWalletAddress,
             dev_wallet_private_key_encrypted: devEncrypted.ciphertext,
             dev_encryption_iv: devEncrypted.iv,
             dev_encryption_auth_tag: devEncrypted.authTag,
-            ops_wallet_address: data.opsWalletAddress,
+            ops_wallet_address: opsWalletAddress,
             ops_wallet_private_key_encrypted: opsEncrypted.ciphertext,
             ops_encryption_iv: opsEncrypted.iv,
             ops_encryption_auth_tag: opsEncrypted.authTag,
@@ -1988,11 +2075,15 @@ Reply *"confirm"* or /cancel`
           .single()
 
         if (tokenError) {
-          console.error('Error creating token:', tokenError)
+          loggers.telegram.error({ error: String(tokenError), tokenMint, userId: ctx.from?.id }, 'Error creating token')
           await ctx.reply('Error registering token. It may already be registered.')
           ctx.session.registerData = undefined
           return
         }
+
+        // Clear private keys from session after successful token creation
+        data.devWalletPrivateKey = undefined
+        data.opsWalletPrivateKey = undefined
 
         // Create default config
         await db.from('user_token_config').insert({
@@ -2017,15 +2108,15 @@ Reply *"confirm"* or /cancel`
           event_type: 'token_registered',
           user_token_id: userToken?.id,
           telegram_id: telegramId,
-          details: { token_symbol: data.tokenSymbol },
+          details: { token_symbol: tokenSymbol },
         })
 
-        const tokenDisplay = data.tokenName ? `${data.tokenName}` : data.tokenSymbol
+        const tokenDisplay = data.tokenName ? `${data.tokenName}` : tokenSymbol
         const graduatedStatus = data.isGraduated ? '✨ Graduated' : '📈 Bonding'
 
         const successMsg = `🎉 *${tokenDisplay}* registered!
 
-${graduatedStatus} • \`${data.tokenSymbol}\`
+${graduatedStatus} • \`${tokenSymbol}\`
 
 ─────────────────────────
 
@@ -2045,7 +2136,7 @@ ${graduatedStatus} • \`${data.tokenSymbol}\`
         await ctx.replyWithMarkdown(successMsg, successKeyboard)
         ctx.session.registerData = undefined
       } catch (error) {
-        console.error('Error registering token:', error)
+        loggers.telegram.error({ error: String(error), tokenMint: data.tokenMint, userId: ctx.from?.id }, 'Error registering token')
         await ctx.reply('Error registering token. Please try again with /register')
         ctx.session.registerData = undefined
       }
@@ -2064,45 +2155,45 @@ export async function startTelegramBot(): Promise<void> {
   const botInstance = getBot()
 
   if (!botInstance) {
-    console.log('⚠️ Telegram bot not configured (set TELEGRAM_BOT_TOKEN)')
+    loggers.telegram.warn('⚠️ Telegram bot not configured (set TELEGRAM_BOT_TOKEN)')
     return
   }
 
   try {
     // Get bot info to verify connection
     const botInfo = await botInstance.telegram.getMe()
-    console.log(`🤖 Bot connected: @${botInfo.username} (ID: ${botInfo.id})`)
+    loggers.telegram.info({ username: botInfo.username, botId: botInfo.id }, '🤖 Bot connected')
 
     // Use webhook in production, polling in development
     if (env.isProd && env.telegramWebhookUrl) {
       try {
         await botInstance.telegram.setWebhook(env.telegramWebhookUrl)
-        console.log(`✅ Telegram bot webhook set: ${env.telegramWebhookUrl}`)
+        loggers.telegram.info({ webhookUrl: env.telegramWebhookUrl }, '✅ Telegram bot webhook set')
       } catch (webhookError) {
-        console.warn(`⚠️ Webhook setup failed, falling back to polling mode`)
-        console.warn(`   Webhook URL: ${env.telegramWebhookUrl}`)
-        console.warn(`   Error: ${webhookError instanceof Error ? webhookError.message : webhookError}`)
-        console.warn(`   Tip: Update TELEGRAM_WEBHOOK_URL to your actual backend URL (e.g., https://your-backend.onrender.com/telegram/webhook)`)
+        loggers.telegram.warn({
+          webhookUrl: env.telegramWebhookUrl,
+          error: webhookError instanceof Error ? webhookError.message : String(webhookError)
+        }, '⚠️ Webhook setup failed, falling back to polling mode. Tip: Update TELEGRAM_WEBHOOK_URL to your actual backend URL')
         // Delete any existing webhook before falling back to polling
         try {
           await botInstance.telegram.deleteWebhook()
-          console.log('🗑️ Deleted existing webhook to enable polling')
+          loggers.telegram.info('🗑️ Deleted existing webhook to enable polling')
         } catch (deleteError) {
-          console.warn('Could not delete webhook:', deleteError)
+          loggers.telegram.warn({ error: String(deleteError) }, 'Could not delete webhook')
         }
         // Fall back to polling
         await botInstance.launch()
-        console.log('✅ Telegram bot started (polling mode - fallback)')
+        loggers.telegram.info('✅ Telegram bot started (polling mode - fallback)')
       }
     } else {
       // Use polling for development
       await botInstance.launch()
-      console.log('✅ Telegram bot started (polling mode)')
+      loggers.telegram.info('✅ Telegram bot started (polling mode)')
     }
 
-    console.log('📝 Registered commands: /start, /help, /launch, /register, /mytokens, /status, /toggle, /cancel, /alerts, /botstatus')
+    loggers.telegram.info({ commands: ['/start', '/help', '/launch', '/register', '/mytokens', '/status', '/toggle', '/cancel', '/alerts', '/botstatus'] }, '📝 Registered commands')
   } catch (error) {
-    console.error('Failed to start Telegram bot:', error)
+    loggers.telegram.error({ error: String(error) }, 'Failed to start Telegram bot')
   }
 }
 
@@ -2112,7 +2203,7 @@ export async function startTelegramBot(): Promise<void> {
 export function stopTelegramBot(): void {
   if (bot) {
     bot.stop('SIGTERM')
-    console.log('Telegram bot stopped')
+    loggers.telegram.info('Telegram bot stopped')
   }
 }
 

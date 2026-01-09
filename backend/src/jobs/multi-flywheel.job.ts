@@ -4,6 +4,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { multiUserMMService } from '../services/multi-user-mm.service'
+import { loggers } from '../utils/logger'
 
 let flywheelJobInterval: NodeJS.Timeout | null = null
 
@@ -17,13 +18,11 @@ export function startMultiUserFlywheelJob(): void {
 
   // Check if job is enabled
   if (process.env.MULTI_USER_FLYWHEEL_ENABLED === 'false') {
-    console.log('ℹ️ Multi-user flywheel job disabled via MULTI_USER_FLYWHEEL_ENABLED=false')
+    loggers.flywheel.info('ℹ️ Multi-user flywheel job disabled via MULTI_USER_FLYWHEEL_ENABLED=false')
     return
   }
 
-  console.log(`\n🔄 Starting multi-user flywheel job scheduler`)
-  console.log(`   Interval: every ${intervalMinutes} minute(s)`)
-  console.log(`   Max trades per minute: ${maxTradesPerMinute}`)
+  loggers.flywheel.info({ intervalMinutes, maxTradesPerMinute }, '🔄 Starting multi-user flywheel job scheduler')
 
   // Run immediately on start (like single-token flywheel does)
   runFlywheelCycle(maxTradesPerMinute)
@@ -34,7 +33,7 @@ export function startMultiUserFlywheelJob(): void {
     intervalMinutes * 60 * 1000
   )
 
-  console.log('📅 Multi-user flywheel job scheduled successfully\n')
+  loggers.flywheel.info('📅 Multi-user flywheel job scheduled successfully')
 }
 
 /**
@@ -44,7 +43,7 @@ export function stopMultiUserFlywheelJob(): void {
   if (flywheelJobInterval) {
     clearInterval(flywheelJobInterval)
     flywheelJobInterval = null
-    console.log('🛑 Multi-user flywheel job stopped')
+    loggers.flywheel.info('🛑 Multi-user flywheel job stopped')
   }
 }
 
@@ -53,10 +52,10 @@ export function stopMultiUserFlywheelJob(): void {
  */
 async function runFlywheelCycle(maxTradesPerMinute: number): Promise<void> {
   try {
-    console.log('\n⏰ Multi-user flywheel job triggered')
+    loggers.flywheel.info({ maxTradesPerMinute }, '⏰ Multi-user flywheel job triggered')
     await multiUserMMService.runFlywheelCycle(maxTradesPerMinute)
   } catch (error) {
-    console.error('❌ Multi-user flywheel job failed:', error)
+    loggers.flywheel.error({ error: String(error) }, '❌ Multi-user flywheel job failed')
   }
 }
 
@@ -105,5 +104,5 @@ export function restartFlywheelJob(newIntervalMinutes?: number, newMaxTrades?: n
   // Start with new settings
   startMultiUserFlywheelJob()
 
-  console.log(`🔄 Flywheel job restarted with interval: ${process.env.MULTI_USER_FLYWHEEL_INTERVAL_MINUTES}m, max trades: ${process.env.MAX_TRADES_PER_MINUTE}`)
+  loggers.flywheel.info({ intervalMinutes: process.env.MULTI_USER_FLYWHEEL_INTERVAL_MINUTES, maxTrades: process.env.MAX_TRADES_PER_MINUTE }, '🔄 Flywheel job restarted')
 }

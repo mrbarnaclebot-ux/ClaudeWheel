@@ -1,7 +1,7 @@
 import { PublicKey } from '@solana/web3.js'
 import nacl from 'tweetnacl'
 import bs58 from 'bs58'
-import { createHash } from 'crypto'
+import { createHash, randomBytes } from 'crypto'
 
 // ═══════════════════════════════════════════════════════════════════════════
 // WALLET SIGNATURE VERIFICATION
@@ -66,7 +66,7 @@ export function verifySignature(
  */
 export function generateNonceMessage(action: string): string {
   const timestamp = Date.now()
-  const nonce = Math.random().toString(36).substring(7)
+  const nonce = randomBytes(16).toString('hex')
   return `Claude Flywheel Admin\nAction: ${action}\nTimestamp: ${timestamp}\nNonce: ${nonce}`
 }
 
@@ -149,7 +149,7 @@ export function generateSecureNonceMessage(action: string, configHash: string): 
   nonce: string
 } {
   const timestamp = Date.now()
-  const nonce = Math.random().toString(36).substring(7)
+  const nonce = randomBytes(16).toString('hex')
   const message = `Claude Flywheel Admin\nAction: ${action}\nTimestamp: ${timestamp}\nNonce: ${nonce}\nConfigHash: ${configHash}`
   return { message, timestamp, nonce }
 }

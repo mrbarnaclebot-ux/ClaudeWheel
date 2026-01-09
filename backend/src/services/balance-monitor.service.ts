@@ -9,6 +9,7 @@ import { supabase } from '../config/database'
 import { getConnection, getBalance, getTokenBalance, getSolPrice } from '../config/solana'
 import { bagsFmService } from './bags-fm'
 import { getTokensForAutoClaim } from './user-token.service'
+import { loggers } from '../utils/logger'
 
 // ═══════════════════════════════════════════════════════════════════════════
 // TYPES
@@ -82,7 +83,7 @@ class BalanceMonitorService {
    */
   async updateAllBalances(): Promise<BatchBalanceUpdateResult> {
     if (this.isRunning) {
-      console.log('⚠️ Balance update already in progress, skipping')
+      loggers.balance.warn('Balance update already in progress, skipping')
       return this.emptyResult()
     }
 
@@ -90,23 +91,23 @@ class BalanceMonitorService {
     const startedAt = new Date()
     const results: BalanceUpdateResult[] = []
 
-    console.log('\n💰 BALANCE UPDATE CYCLE ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
+    loggers.balance.info('Starting balance update cycle')
 
     try {
       // Get all active tokens
       const tokens = await this.getAllActiveTokens()
 
       if (tokens.length === 0) {
-        console.log('   No active tokens to update')
+        loggers.balance.info('No active tokens to update')
         return this.emptyResult()
       }
 
       const tokensToProcess = tokens.slice(0, MAX_TOKENS_PER_BATCH)
-      console.log(`   Processing ${tokensToProcess.length}/${tokens.length} tokens`)
+      loggers.balance.info({ tokensToProcess: tokensToProcess.length, totalTokens: tokens.length }, 'Processing tokens')
 
       // Get current SOL price once for all updates
       const solPrice = await getSolPrice()
-      console.log(`   SOL Price: $${solPrice.toFixed(2)}`)
+      loggers.balance.info({ solPrice }, 'Fetched SOL price')
 
       // Group tokens by dev wallet to batch claimable position checks
       const walletToTokens = this.groupByDevWallet(tokensToProcess)
@@ -119,9 +120,9 @@ class BalanceMonitorService {
           results.push(result)
 
           if (result.success) {
-            console.log(`   ✓ ${token.token_symbol}: dev=${result.devSol.toFixed(4)} SOL, ops=${result.opsSol.toFixed(4)} SOL, claimable=${result.claimableFees.toFixed(4)} SOL`)
+            loggers.balance.debug({ tokenSymbol: token.token_symbol, devSol: result.devSol, opsSol: result.opsSol, claimableFees: result.claimableFees }, 'Token balance updated')
           } else {
-            console.log(`   ✗ ${token.token_symbol}: ${result.error}`)
+            loggers.balance.warn({ tokenSymbol: token.token_symbol, error: result.error }, 'Token balance update failed')
           }
 
           // Small delay to avoid RPC rate limits
@@ -146,11 +147,11 @@ class BalanceMonitorService {
       // Save snapshots periodically
       if (SNAPSHOT_INTERVAL > 0 && this.updateCount % SNAPSHOT_INTERVAL === 0) {
         await this.saveBalanceSnapshots(tokensToProcess.map(t => t.id))
-        console.log(`   📸 Saved balance snapshots for ${tokensToProcess.length} tokens`)
+        loggers.balance.info({ tokenCount: tokensToProcess.length }, 'Saved balance snapshots')
       }
 
     } catch (error: any) {
-      console.error(`   ❌ Balance update error: ${error.message}`)
+      loggers.balance.error({ error: String(error) }, 'Balance update error')
     } finally {
       this.isRunning = false
       this.lastRunAt = new Date()
@@ -162,9 +163,13 @@ class BalanceMonitorService {
     const totalOpsSol = successful.reduce((sum, r) => sum + r.opsSol, 0)
     const totalClaimable = successful.reduce((sum, r) => sum + r.claimableFees, 0)
 
-    console.log(`   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`)
-    console.log(`   Updated: ${successful.length}/${results.length} | Total Dev: ${totalDevSol.toFixed(4)} SOL | Total Ops: ${totalOpsSol.toFixed(4)} SOL | Claimable: ${totalClaimable.toFixed(4)} SOL`)
-    console.log(`   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`)
+    loggers.balance.info({
+      updatedCount: successful.length,
+      totalCount: results.length,
+      totalDevSol,
+      totalOpsSol,
+      totalClaimableFees: totalClaimable
+    }, 'Balance update cycle completed')
 
     return {
       totalTokens: results.length,
@@ -287,7 +292,7 @@ class BalanceMonitorService {
       .eq('is_suspended', false)
 
     if (error) {
-      console.error('Error fetching active tokens:', error)
+      loggers.balance.error({ error: String(error) }, 'Error fetching active tokens')
       return []
     }
 

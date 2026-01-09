@@ -5,6 +5,7 @@
 
 import { supabase } from '../config/database'
 import { getBot } from '../telegram/bot'
+import { loggers } from '../utils/logger'
 
 // ═══════════════════════════════════════════════════════════════════════════
 // TYPES
@@ -82,13 +83,13 @@ export async function subscribeToAlerts(
     })
 
     if (error) {
-      console.error('Error subscribing to alerts:', error)
+      loggers.alerts.error({ error: String(error), telegramId }, 'Error subscribing to alerts')
       return { success: false, error: 'Failed to subscribe' }
     }
 
     return { success: true }
   } catch (error: any) {
-    console.error('Error in subscribeToAlerts:', error)
+    loggers.alerts.error({ error: String(error), telegramId }, 'Error in subscribeToAlerts')
     return { success: false, error: error.message }
   }
 }
@@ -124,7 +125,7 @@ export async function unsubscribeFromAlerts(
 
     return { success: true, wasSubscribed: true }
   } catch (error: any) {
-    console.error('Error in unsubscribeFromAlerts:', error)
+    loggers.alerts.error({ error: String(error), telegramId }, 'Error in unsubscribeFromAlerts')
     return { success: false, error: error.message }
   }
 }
@@ -259,7 +260,7 @@ export async function enableMaintenanceMode(
       updated_at: now,
     })
 
-    console.log(`🔧 Maintenance mode ENABLED: ${reason}`)
+    loggers.alerts.info({ reason }, 'Maintenance mode ENABLED')
 
     // Notify subscribers if requested
     let notifiedCount = 0
@@ -271,7 +272,7 @@ export async function enableMaintenanceMode(
 
     return { success: true, notifiedCount }
   } catch (error: any) {
-    console.error('Error enabling maintenance mode:', error)
+    loggers.alerts.error({ error: String(error) }, 'Error enabling maintenance mode')
     return { success: false, error: error.message }
   }
 }
@@ -297,7 +298,7 @@ export async function disableMaintenanceMode(
       updated_at: new Date().toISOString(),
     })
 
-    console.log(`✅ Maintenance mode DISABLED`)
+    loggers.alerts.info('Maintenance mode DISABLED')
 
     // Notify subscribers if requested
     let notifiedCount = 0
@@ -320,7 +321,7 @@ _Use /alerts to manage your subscription._`
 
     return { success: true, notifiedCount }
   } catch (error: any) {
-    console.error('Error disabling maintenance mode:', error)
+    loggers.alerts.error({ error: String(error) }, 'Error disabling maintenance mode')
     return { success: false, error: error.message }
   }
 }
@@ -357,7 +358,7 @@ export async function broadcastMessage(
       return result
     }
 
-    console.log(`📢 Broadcasting to ${subscribers.length} subscribers...`)
+    loggers.alerts.info({ subscriberCount: subscribers.length }, 'Broadcasting to subscribers')
 
     // Send messages with rate limiting (25 messages per second for Telegram limits)
     const BATCH_SIZE = 25
@@ -422,13 +423,14 @@ export async function broadcastMessage(
       })
     }
 
-    console.log(
-      `📢 Broadcast complete: ${result.successful}/${result.total} delivered`
-    )
+    loggers.alerts.info({
+      successful: result.successful,
+      total: result.total
+    }, 'Broadcast complete')
 
     return result
   } catch (error: any) {
-    console.error('Error in broadcastMessage:', error)
+    loggers.alerts.error({ error: String(error) }, 'Error in broadcastMessage')
     result.errors.push(error.message)
     return result
   }

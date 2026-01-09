@@ -8,6 +8,7 @@ import bs58 from 'bs58'
 import { env } from '../config/env'
 import { getConnection } from '../config/solana'
 import { decrypt } from './encryption.service'
+import { loggers } from '../utils/logger'
 
 // Import Bags SDK
 import { BagsSDK, signAndSendTransaction } from '@bagsfm/bags-sdk'
@@ -85,7 +86,7 @@ class TokenLauncherService {
     }
 
     try {
-      console.log(`🚀 Launching token: ${params.tokenName} (${params.tokenSymbol})`)
+      loggers.token.info({ tokenName: params.tokenName, tokenSymbol: params.tokenSymbol }, 'Launching token')
 
       // Decrypt the dev wallet private key
       const devPrivateKey = decrypt({
@@ -99,7 +100,7 @@ class TokenLauncherService {
       const commitment = this.sdk.state.getCommitment()
 
       // Step 1: Create token info and metadata
-      console.log('📝 Step 1: Creating token info and metadata...')
+      loggers.token.info('Creating token info and metadata')
       const tokenInfoResponse = await this.sdk.tokenLaunch.createTokenInfoAndMetadata({
         imageUrl: params.tokenImageUrl,
         name: params.tokenName,
@@ -110,14 +111,13 @@ class TokenLauncherService {
         telegram: params.telegramUrl,
       })
 
-      console.log(`✨ Token info created! Mint: ${tokenInfoResponse.tokenMint}`)
-      console.log(`📄 Metadata URI: ${tokenInfoResponse.tokenMetadata}`)
+      loggers.token.info({ tokenMint: tokenInfoResponse.tokenMint, metadataUri: tokenInfoResponse.tokenMetadata }, 'Token info created')
 
       const tokenMint = new PublicKey(tokenInfoResponse.tokenMint)
 
       // Step 2: Create fee share config
       // Creator must always be explicitly included with 10000 BPS (100%)
-      console.log('⚙️ Step 2: Creating fee share config...')
+      loggers.token.info('Creating fee share config')
       const feeClaimers = [
         {
           user: keypair.publicKey,
@@ -125,7 +125,7 @@ class TokenLauncherService {
         },
       ]
 
-      console.log(`💰 Fee sharing: 100% to creator (${keypair.publicKey.toString().slice(0, 8)}...)`)
+      loggers.token.debug({ creatorWallet: keypair.publicKey.toString() }, 'Fee sharing: 100% to creator')
 
       const configResult = await this.sdk.config.createBagsFeeShareConfig({
         payer: keypair.publicKey,
@@ -135,7 +135,7 @@ class TokenLauncherService {
 
       // Sign and send any config transactions
       if (configResult.transactions && configResult.transactions.length > 0) {
-        console.log(`📝 Signing ${configResult.transactions.length} config transaction(s)...`)
+        loggers.token.debug({ transactionCount: configResult.transactions.length }, 'Signing config transactions')
         for (const tx of configResult.transactions) {
           await signAndSendTransaction(connection, commitment, tx, keypair)
         }
@@ -143,7 +143,7 @@ class TokenLauncherService {
 
       // Handle bundles if returned (for large fee claimer lists)
       if (configResult.bundles && configResult.bundles.length > 0) {
-        console.log(`📦 Processing ${configResult.bundles.length} bundle(s)...`)
+        loggers.token.debug({ bundleCount: configResult.bundles.length }, 'Processing bundles')
         for (const bundle of configResult.bundles) {
           for (const tx of bundle) {
             tx.sign([keypair])
@@ -153,10 +153,10 @@ class TokenLauncherService {
       }
 
       const configKey = configResult.meteoraConfigKey
-      console.log(`🔑 Config key: ${configKey.toString().slice(0, 8)}...`)
+      loggers.token.debug({ configKey: configKey.toString() }, 'Config key generated')
 
       // Step 3: Create launch transaction
-      console.log('🎯 Step 3: Creating launch transaction...')
+      loggers.token.info('Creating launch transaction')
       const launchTransaction = await this.sdk.tokenLaunch.createLaunchTransaction({
         metadataUrl: tokenInfoResponse.tokenMetadata,
         tokenMint: tokenMint,
@@ -166,7 +166,7 @@ class TokenLauncherService {
       })
 
       // Step 4 & 5: Sign and broadcast
-      console.log('📡 Step 4 & 5: Signing and broadcasting transaction...')
+      loggers.token.info('Signing and broadcasting transaction')
       const signature = await signAndSendTransaction(
         connection,
         commitment,
@@ -174,10 +174,7 @@ class TokenLauncherService {
         keypair
       )
 
-      console.log(`✅ Token launched successfully!`)
-      console.log(`🪙 Token Mint: ${tokenInfoResponse.tokenMint}`)
-      console.log(`🔑 Signature: ${signature}`)
-      console.log(`🌐 View at: https://bags.fm/${tokenInfoResponse.tokenMint}`)
+      loggers.token.info({ tokenMint: tokenInfoResponse.tokenMint, signature, url: `https://bags.fm/${tokenInfoResponse.tokenMint}` }, 'Token launched successfully')
 
       return {
         success: true,
@@ -185,7 +182,7 @@ class TokenLauncherService {
         transactionSignature: signature,
       }
     } catch (error: any) {
-      console.error('🚨 Token launch failed:', error)
+      loggers.token.error({ error: String(error) }, 'Token launch failed')
       return {
         success: false,
         error: error.message || 'Unknown error during token launch',

@@ -1,33 +1,29 @@
 import { Router, Request, Response } from 'express'
-import { walletMonitor } from '../services/wallet-monitor'
-import { feeCollector } from '../services/fee-collector'
-import { marketMaker } from '../services/market-maker'
-import { getRecentTransactions, getRecentLogs } from '../jobs/flywheel.job'
 import { env } from '../config/env'
 import { supabase } from '../config/database'
 import { connection } from '../config/solana'
 import type { ApiResponse, FlywheelStatus } from '../types'
+import { loggers } from '../utils/logger'
+import { getMultiUserFlywheelJobStatus } from '../jobs/multi-flywheel.job'
 
 const router = Router()
 
 // ═══════════════════════════════════════════════════════════════════════════
-// STATUS ROUTES
+// STATUS ROUTES (Multi-user mode)
 // ═══════════════════════════════════════════════════════════════════════════
 
-// GET /api/status - Get flywheel status
+// GET /api/status - Get platform status
 router.get('/', async (req: Request, res: Response) => {
   try {
-    const balances = await walletMonitor.getAllBalances()
-    const feeStats = feeCollector.getStats()
-    const mmStats = marketMaker.getStats()
+    const flywheelStatus = getMultiUserFlywheelJobStatus()
 
     const status: FlywheelStatus = {
-      is_active: mmStats.isEnabled,
-      last_fee_collection: feeStats.lastCollectionTime,
-      last_market_making: mmStats.lastOrderTime,
-      dev_wallet_balance: balances.devWallet?.sol_balance || 0,
-      ops_wallet_balance: balances.opsWallet?.sol_balance || 0,
-      total_fees_collected: feeStats.totalCollected,
+      is_active: flywheelStatus.running,
+      last_fee_collection: null,
+      last_market_making: flywheelStatus.lastRunAt || null,
+      dev_wallet_balance: 0,
+      ops_wallet_balance: 0,
+      total_fees_collected: 0,
     }
 
     const response: ApiResponse<FlywheelStatus> = {
@@ -38,7 +34,7 @@ router.get('/', async (req: Request, res: Response) => {
 
     res.json(response)
   } catch (error) {
-    console.error('Status fetch error:', error)
+    loggers.server.error({ error: String(error) }, 'Status fetch error')
     res.status(500).json({
       success: false,
       error: 'Failed to fetch status',
@@ -47,45 +43,25 @@ router.get('/', async (req: Request, res: Response) => {
   }
 })
 
-// GET /api/status/wallets - Get wallet balances
+// GET /api/status/wallets - Get wallet balances (deprecated - use user-specific endpoints)
 router.get('/wallets', async (req: Request, res: Response) => {
-  try {
-    const balances = await walletMonitor.getAllBalances()
-
-    res.json({
-      success: true,
-      data: balances,
-      timestamp: new Date().toISOString(),
-    })
-  } catch (error) {
-    console.error('Wallet balance fetch error:', error)
-    res.status(500).json({
-      success: false,
-      error: 'Failed to fetch wallet balances',
-      timestamp: new Date().toISOString(),
-    })
-  }
+  res.json({
+    success: true,
+    data: {
+      message: 'This endpoint is deprecated. Use /api/user/tokens/:tokenId for token-specific wallet data.',
+    },
+    timestamp: new Date().toISOString(),
+  })
 })
 
-// GET /api/status/transactions - Get recent transactions
+// GET /api/status/transactions - Get recent transactions (deprecated)
 router.get('/transactions', async (req: Request, res: Response) => {
-  try {
-    const limit = Math.min(parseInt(req.query.limit as string) || 20, 100)
-    const transactions = getRecentTransactions().slice(0, limit)
-
-    res.json({
-      success: true,
-      data: transactions,
-      timestamp: new Date().toISOString(),
-    })
-  } catch (error) {
-    console.error('Transactions fetch error:', error)
-    res.status(500).json({
-      success: false,
-      error: 'Failed to fetch transactions',
-      timestamp: new Date().toISOString(),
-    })
-  }
+  res.json({
+    success: true,
+    data: [],
+    message: 'Use /api/user/tokens/:tokenId/claims for token-specific transaction history.',
+    timestamp: new Date().toISOString(),
+  })
 })
 
 // GET /api/status/health - Health check
@@ -177,25 +153,14 @@ router.get('/system', async (req: Request, res: Response) => {
   })
 })
 
-// GET /api/status/logs - Get recent backend logs
+// GET /api/status/logs - Get recent backend logs (deprecated - use structured logging)
 router.get('/logs', (req: Request, res: Response) => {
-  try {
-    const limit = Math.min(parseInt(req.query.limit as string) || 50, 200)
-    const logs = getRecentLogs(limit)
-
-    res.json({
-      success: true,
-      data: logs,
-      timestamp: new Date().toISOString(),
-    })
-  } catch (error) {
-    console.error('Logs fetch error:', error)
-    res.status(500).json({
-      success: false,
-      error: 'Failed to fetch logs',
-      timestamp: new Date().toISOString(),
-    })
-  }
+  res.json({
+    success: true,
+    data: [],
+    message: 'In-memory logs are deprecated. Use structured logging with pino and external log aggregation.',
+    timestamp: new Date().toISOString(),
+  })
 })
 
 export default router

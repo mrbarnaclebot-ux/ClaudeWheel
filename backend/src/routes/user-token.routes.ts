@@ -16,6 +16,7 @@ import { multiUserClaimService } from '../services/multi-user-claim.service'
 import { bagsFmService } from '../services/bags-fm'
 import { balanceMonitorService } from '../services/balance-monitor.service'
 import crypto from 'crypto'
+import { loggers } from '../utils/logger'
 
 const router = Router()
 
@@ -134,7 +135,7 @@ router.get('/tokens', verifyWalletOwnership, async (req: Request, res: Response)
       data: tokensWithConfig,
     })
   } catch (error) {
-    console.error('Error getting user tokens:', error)
+    loggers.user.error({ error: String(error) }, 'Error getting user tokens')
     res.status(500).json({
       success: false,
       error: 'Failed to get tokens',
@@ -208,7 +209,7 @@ router.post('/tokens', verifyWalletOwnership, async (req: Request, res: Response
       message: 'Token registered successfully',
     })
   } catch (error: any) {
-    console.error('Error registering token:', error)
+    loggers.user.error({ error: String(error) }, 'Error registering token')
     res.status(400).json({
       success: false,
       error: error.message || 'Failed to register token',
@@ -254,7 +255,7 @@ router.get('/tokens/:tokenId', verifyWalletOwnership, async (req: Request, res: 
       },
     })
   } catch (error) {
-    console.error('Error getting token:', error)
+    loggers.user.error({ error: String(error) }, 'Error getting token')
     res.status(500).json({
       success: false,
       error: 'Failed to get token',
@@ -302,7 +303,7 @@ router.delete('/tokens/:tokenId', verifyWalletOwnership, async (req: Request, re
       message: 'Token deactivated successfully',
     })
   } catch (error) {
-    console.error('Error deactivating token:', error)
+    loggers.user.error({ error: String(error) }, 'Error deactivating token')
     res.status(500).json({
       success: false,
       error: 'Failed to deactivate token',
@@ -342,7 +343,7 @@ router.get('/tokens/:tokenId/config', verifyWalletOwnership, async (req: Request
       data: config,
     })
   } catch (error) {
-    console.error('Error getting config:', error)
+    loggers.user.error({ error: String(error) }, 'Error getting config')
     res.status(500).json({
       success: false,
       error: 'Failed to get configuration',
@@ -388,7 +389,7 @@ This signature authorizes the configuration update.`
       },
     })
   } catch (error) {
-    console.error('Error generating config nonce:', error)
+    loggers.user.error({ error: String(error) }, 'Error generating config nonce')
     res.status(500).json({
       success: false,
       error: 'Failed to generate nonce',
@@ -513,7 +514,7 @@ router.put('/tokens/:tokenId/config', verifyWalletOwnership, async (req: Request
       message: 'Configuration updated successfully',
     })
   } catch (error) {
-    console.error('Error updating config:', error)
+    loggers.user.error({ error: String(error) }, 'Error updating config')
     res.status(500).json({
       success: false,
       error: 'Failed to update configuration',
@@ -566,7 +567,7 @@ router.get('/tokens/:tokenId/claimable', verifyWalletOwnership, async (req: Requ
       },
     })
   } catch (error) {
-    console.error('Error getting claimable:', error)
+    loggers.user.error({ error: String(error) }, 'Error getting claimable')
     res.status(500).json({
       success: false,
       error: 'Failed to get claimable fees',
@@ -602,7 +603,7 @@ This signature authorizes a manual fee claim.`
       },
     })
   } catch (error) {
-    console.error('Error generating claim nonce:', error)
+    loggers.user.error({ error: String(error) }, 'Error generating claim nonce')
     res.status(500).json({
       success: false,
       error: 'Failed to generate nonce',
@@ -662,7 +663,7 @@ router.post('/tokens/:tokenId/claim', verifyWalletOwnership, async (req: Request
       message: `Successfully claimed ${result.amountClaimedSol.toFixed(4)} SOL`,
     })
   } catch (error) {
-    console.error('Error executing claim:', error)
+    loggers.user.error({ error: String(error) }, 'Error executing claim')
     res.status(500).json({
       success: false,
       error: 'Failed to execute claim',
@@ -708,7 +709,7 @@ router.get('/tokens/:tokenId/claims', verifyWalletOwnership, async (req: Request
       },
     })
   } catch (error) {
-    console.error('Error getting claims:', error)
+    loggers.user.error({ error: String(error) }, 'Error getting claims')
     res.status(500).json({
       success: false,
       error: 'Failed to get claim history',
@@ -783,12 +784,20 @@ router.get('/tokens/:tokenId/activity', verifyWalletOwnership, async (req: Reque
     }> = []
 
     // Log for debugging
-    console.log(`📋 Activity for token ${tokenId}:`)
-    console.log(`   Claims: ${claims?.length || 0}, Transactions: ${transactions?.length || 0}`)
-    if (transactions && transactions.length > 0) {
-      console.log(`   Latest TX: type=${transactions[0].type}, amount=${transactions[0].amount}, sig=${transactions[0].signature?.slice(0, 8)}...`)
-    }
-    console.log(`   Flywheel: ${flywheelState ? `phase=${flywheelState.cycle_phase}, lastCheck=${flywheelState.last_check_result}` : 'no state'}`)
+    loggers.user.debug({
+      tokenId,
+      claimsCount: claims?.length || 0,
+      transactionsCount: transactions?.length || 0,
+      latestTx: transactions && transactions.length > 0 ? {
+        type: transactions[0].type,
+        amount: transactions[0].amount,
+        signature: transactions[0].signature?.slice(0, 8),
+      } : null,
+      flywheelState: flywheelState ? {
+        phase: flywheelState.cycle_phase,
+        lastCheck: flywheelState.last_check_result,
+      } : null,
+    }, 'Activity for token')
 
     // Add claims
     if (claims) {
@@ -856,7 +865,7 @@ router.get('/tokens/:tokenId/activity', verifyWalletOwnership, async (req: Reque
       },
     })
   } catch (error) {
-    console.error('Error getting activity:', error)
+    loggers.user.error({ error: String(error) }, 'Error getting activity')
     res.status(500).json({
       success: false,
       error: 'Failed to get activity logs',
@@ -907,7 +916,7 @@ This signature authorizes a manual token sell.`
       },
     })
   } catch (error) {
-    console.error('Error generating sell nonce:', error)
+    loggers.user.error({ error: String(error) }, 'Error generating sell nonce')
     res.status(500).json({
       success: false,
       error: 'Failed to generate nonce',
@@ -1061,7 +1070,7 @@ router.post('/tokens/:tokenId/sell', verifyWalletOwnership, async (req: Request,
       message: `Successfully sold ${percentage}% (${sellAmount.toFixed(0)} tokens)`,
     })
   } catch (error: any) {
-    console.error('Error executing sell:', error)
+    loggers.user.error({ error: String(error) }, 'Error executing sell')
     res.status(500).json({
       success: false,
       error: error.message || 'Failed to execute sell',
@@ -1156,7 +1165,7 @@ router.get('/tokens/:tokenId/balances', verifyWalletOwnership, async (req: Reque
       },
     })
   } catch (error) {
-    console.error('Error getting balances:', error)
+    loggers.user.error({ error: String(error) }, 'Error getting balances')
     res.status(500).json({
       success: false,
       error: 'Failed to get wallet balances',
@@ -1223,7 +1232,7 @@ router.post('/tokens/:tokenId/balances/refresh', verifyWalletOwnership, async (r
       message: 'Balances refreshed from blockchain',
     })
   } catch (error) {
-    console.error('Error refreshing balances:', error)
+    loggers.user.error({ error: String(error) }, 'Error refreshing balances')
     res.status(500).json({
       success: false,
       error: 'Failed to refresh balances',
@@ -1277,7 +1286,7 @@ router.get('/tokens/:tokenId/balances/history', verifyWalletOwnership, async (re
       },
     })
   } catch (error) {
-    console.error('Error getting balance history:', error)
+    loggers.user.error({ error: String(error) }, 'Error getting balance history')
     res.status(500).json({
       success: false,
       error: 'Failed to get balance history',

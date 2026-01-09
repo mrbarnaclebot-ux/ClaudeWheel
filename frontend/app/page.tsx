@@ -27,7 +27,6 @@ import {
   type Config,
 } from '@/lib/supabase'
 import { fetchStatus } from '@/lib/api'
-import { PLACEHOLDER_CA } from '@/lib/utils'
 
 interface WalletData {
   devWallet: {
@@ -83,7 +82,7 @@ export default function Dashboard() {
   const [transactions, setTransactions] = useState<TransactionDisplay[]>([])
   const [walletData, setWalletData] = useState<WalletData>(defaultWalletData)
   const [feeStats, setFeeStats] = useState(defaultFeeStats)
-  const [tokenMintAddress, setTokenMintAddress] = useState<string>(PLACEHOLDER_CA)
+  const [tokenMintAddress, setTokenMintAddress] = useState<string>('')
   const [tokenSymbol, setTokenSymbol] = useState<string>('TOKEN')
 
   // Load initial data

@@ -6,6 +6,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { fastClaimService } from '../services/fast-claim.service'
+import { loggers } from '../utils/logger'
 
 let fastClaimJobInterval: NodeJS.Timeout | null = null
 
@@ -21,21 +22,17 @@ export function startFastClaimJob(): void {
 
   // Check if job is enabled
   if (process.env.FAST_CLAIM_JOB_ENABLED === 'false') {
-    console.log('ℹ️ Fast claim job disabled via FAST_CLAIM_JOB_ENABLED=false')
+    loggers.claim.info('ℹ️ Fast claim job disabled via FAST_CLAIM_JOB_ENABLED=false')
     return
   }
 
   const threshold = process.env.FAST_CLAIM_THRESHOLD_SOL || '0.15'
 
-  console.log(`\n⚡ Starting FAST CLAIM job scheduler`)
-  console.log(`   Interval: every ${intervalSeconds} seconds`)
-  console.log(`   Threshold: ${threshold} SOL`)
-  console.log(`   Platform fee: 10% → WHEEL ops wallet`)
-  console.log(`   User receives: 90% → their ops wallet`)
+  loggers.claim.info({ intervalSeconds, threshold, platformFee: '10%', userReceives: '90%' }, '⚡ Starting FAST CLAIM job scheduler')
 
   // Run immediately on startup (after a short delay)
   setTimeout(() => {
-    console.log('\n⚡ Running initial fast claim cycle...')
+    loggers.claim.info('⚡ Running initial fast claim cycle...')
     runFastClaimCycle()
   }, 5000)
 
@@ -45,7 +42,7 @@ export function startFastClaimJob(): void {
     intervalSeconds * 1000
   )
 
-  console.log('📅 Fast claim job scheduled successfully\n')
+  loggers.claim.info('📅 Fast claim job scheduled successfully')
 }
 
 /**
@@ -55,7 +52,7 @@ export function stopFastClaimJob(): void {
   if (fastClaimJobInterval) {
     clearInterval(fastClaimJobInterval)
     fastClaimJobInterval = null
-    console.log('🛑 Fast claim job stopped')
+    loggers.claim.info('🛑 Fast claim job stopped')
   }
 }
 
@@ -66,7 +63,7 @@ async function runFastClaimCycle(): Promise<void> {
   try {
     await fastClaimService.runFastClaimCycle()
   } catch (error) {
-    console.error('❌ Fast claim job error:', error)
+    loggers.claim.error({ error: String(error) }, '❌ Fast claim job error')
   }
 }
 
@@ -74,7 +71,7 @@ async function runFastClaimCycle(): Promise<void> {
  * Manually trigger a fast claim cycle (for admin/testing)
  */
 export async function triggerFastClaimCycle(): Promise<void> {
-  console.log('⚡ Manual fast claim cycle triggered')
+  loggers.claim.info('⚡ Manual fast claim cycle triggered')
   await runFastClaimCycle()
 }
 
@@ -111,5 +108,5 @@ export function restartFastClaimJob(newIntervalSeconds?: number): void {
   stopFastClaimJob()
   startFastClaimJob()
 
-  console.log(`🔄 Fast claim job restarted`)
+  loggers.claim.info('🔄 Fast claim job restarted')
 }

@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express'
 import { bagsFmService } from '../services/bags-fm'
 import { env } from '../config/env'
+import { loggers } from '../utils/logger'
 
 const router = Router()
 
@@ -29,7 +30,7 @@ router.get('/token/:mint', async (req: Request, res: Response) => {
       timestamp: new Date().toISOString(),
     })
   } catch (error) {
-    console.error('Error fetching Bags.fm token info:', error)
+    loggers.bags.error({ error: String(error) }, 'Error fetching Bags.fm token info')
     res.status(500).json({
       success: false,
       error: 'Failed to fetch token info',
@@ -58,7 +59,7 @@ router.get('/fees/:mint', async (req: Request, res: Response) => {
       timestamp: new Date().toISOString(),
     })
   } catch (error) {
-    console.error('Error fetching Bags.fm fees:', error)
+    loggers.bags.error({ error: String(error) }, 'Error fetching Bags.fm fees')
     res.status(500).json({
       success: false,
       error: 'Failed to fetch fees',
@@ -79,7 +80,7 @@ router.get('/claimable/:wallet', async (req: Request, res: Response) => {
       timestamp: new Date().toISOString(),
     })
   } catch (error) {
-    console.error('Error fetching claimable positions:', error)
+    loggers.bags.error({ error: String(error) }, 'Error fetching claimable positions')
     res.status(500).json({
       success: false,
       error: 'Failed to fetch claimable positions',
@@ -114,7 +115,7 @@ router.get('/claim-stats/:wallet', async (req: Request, res: Response) => {
       timestamp: new Date().toISOString(),
     })
   } catch (error) {
-    console.error('Error fetching claim stats:', error)
+    loggers.bags.error({ error: String(error) }, 'Error fetching claim stats')
     res.status(500).json({
       success: false,
       error: 'Failed to fetch claim stats',
@@ -157,7 +158,7 @@ router.get('/quote', async (req: Request, res: Response) => {
       timestamp: new Date().toISOString(),
     })
   } catch (error) {
-    console.error('Error fetching quote:', error)
+    loggers.bags.error({ error: String(error) }, 'Error fetching quote')
     res.status(500).json({
       success: false,
       error: 'Failed to fetch quote',
@@ -214,7 +215,7 @@ router.get('/dashboard', async (req: Request, res: Response) => {
       timestamp: new Date().toISOString(),
     })
   } catch (error) {
-    console.error('Error fetching Bags.fm dashboard:', error)
+    loggers.bags.error({ error: String(error) }, 'Error fetching Bags.fm dashboard')
     res.status(500).json({
       success: false,
       error: 'Failed to fetch dashboard data',
@@ -244,7 +245,7 @@ router.post('/api-key', async (req: Request, res: Response) => {
       timestamp: new Date().toISOString(),
     })
   } catch (error) {
-    console.error('Error setting API key:', error)
+    loggers.bags.error({ error: String(error) }, 'Error setting API key')
     res.status(500).json({
       success: false,
       error: 'Failed to set API key',

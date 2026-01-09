@@ -1,5 +1,6 @@
 import { createClient } from '@supabase/supabase-js'
 import { env } from './env'
+import { loggers } from '../utils/logger'
 
 // ═══════════════════════════════════════════════════════════════════════════
 // SUPABASE CLIENT (Backend - uses service role key)
@@ -10,7 +11,7 @@ export const supabase = env.supabaseUrl && env.supabaseServiceKey
   : null
 
 if (!supabase) {
-  console.warn('⚠️ Supabase not configured - database features disabled')
+  loggers.db.warn('Supabase not configured - database features disabled')
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -25,11 +26,11 @@ export async function insertTransaction(data: {
   status: string
 }) {
   if (!supabase) {
-    console.warn('⚠️ Supabase not configured - skipping transaction insert')
+    loggers.db.warn('Supabase not configured - skipping transaction insert')
     return null
   }
 
-  console.log(`📝 Inserting ${data.type} transaction to Supabase: ${data.amount} ${data.token}`)
+  loggers.db.info({ type: data.type, amount: data.amount, token: data.token }, 'Inserting transaction to Supabase')
 
   const { data: result, error } = await supabase
     .from('transactions')
@@ -41,11 +42,11 @@ export async function insertTransaction(data: {
     .single()
 
   if (error) {
-    console.error('❌ Failed to insert transaction:', error)
+    loggers.db.error({ error: String(error) }, 'Failed to insert transaction')
     return null
   }
 
-  console.log(`✅ Transaction inserted successfully`)
+  loggers.db.info('Transaction inserted successfully')
   return result
 }
 
@@ -57,11 +58,11 @@ export async function updateWalletBalance(data: {
   usd_value: number
 }) {
   if (!supabase) {
-    console.warn('⚠️ Supabase not configured - skipping wallet balance update')
+    loggers.db.warn('Supabase not configured - skipping wallet balance update')
     return null
   }
 
-  console.log(`📝 Updating ${data.wallet_type} wallet balance in Supabase: ${data.sol_balance.toFixed(6)} SOL, ${data.token_balance} tokens`)
+  loggers.db.info({ walletType: data.wallet_type, solBalance: data.sol_balance, tokenBalance: data.token_balance }, 'Updating wallet balance in Supabase')
 
   const { data: result, error } = await supabase
     .from('wallet_balances')
@@ -75,11 +76,11 @@ export async function updateWalletBalance(data: {
     .single()
 
   if (error) {
-    console.error('❌ Failed to update wallet balance:', error)
+    loggers.db.error({ error: String(error) }, 'Failed to update wallet balance')
     return null
   }
 
-  console.log(`✅ Wallet balance updated successfully`)
+  loggers.db.info('Wallet balance updated successfully')
   return result
 }
 
@@ -103,7 +104,7 @@ export async function updateFeeStats(data: {
     .single()
 
   if (error) {
-    console.error('Failed to update fee stats:', error)
+    loggers.db.error({ error: String(error) }, 'Failed to update fee stats')
     return null
   }
 
@@ -116,7 +117,7 @@ export async function calculateAndUpdateFeeStats(): Promise<{
   hour_collected: number
 } | null> {
   if (!supabase) {
-    console.warn('⚠️ Supabase not configured - skipping fee stats calculation')
+    loggers.db.warn('Supabase not configured - skipping fee stats calculation')
     return null
   }
 
@@ -133,7 +134,7 @@ export async function calculateAndUpdateFeeStats(): Promise<{
       .eq('status', 'confirmed')
 
     if (allError) {
-      console.error('Failed to fetch total fees:', allError)
+      loggers.db.error({ error: String(allError) }, 'Failed to fetch total fees')
       return null
     }
 
@@ -146,7 +147,7 @@ export async function calculateAndUpdateFeeStats(): Promise<{
       .gte('created_at', todayStart)
 
     if (todayError) {
-      console.error('Failed to fetch today fees:', todayError)
+      loggers.db.error({ error: String(todayError) }, 'Failed to fetch today fees')
       return null
     }
 
@@ -159,7 +160,7 @@ export async function calculateAndUpdateFeeStats(): Promise<{
       .gte('created_at', hourAgo)
 
     if (hourError) {
-      console.error('Failed to fetch hour fees:', hourError)
+      loggers.db.error({ error: String(hourError) }, 'Failed to fetch hour fees')
       return null
     }
 
@@ -167,7 +168,7 @@ export async function calculateAndUpdateFeeStats(): Promise<{
     const today_collected = todayFees?.reduce((sum, tx) => sum + Number(tx.amount), 0) || 0
     const hour_collected = hourFees?.reduce((sum, tx) => sum + Number(tx.amount), 0) || 0
 
-    console.log(`📊 Fee stats: Total=${total_collected.toFixed(4)} SOL, Today=${today_collected.toFixed(4)} SOL, Hour=${hour_collected.toFixed(4)} SOL`)
+    loggers.db.info({ totalCollected: total_collected, todayCollected: today_collected, hourCollected: hour_collected }, 'Fee stats calculated')
 
     // Update the fee_stats table
     await updateFeeStats({
@@ -178,7 +179,7 @@ export async function calculateAndUpdateFeeStats(): Promise<{
 
     return { total_collected, today_collected, hour_collected }
   } catch (error) {
-    console.error('Failed to calculate fee stats:', error)
+    loggers.db.error({ error: String(error) }, 'Failed to calculate fee stats')
     return null
   }
 }
@@ -193,7 +194,7 @@ export async function getRecentTransactions(limit: number = 20) {
     .limit(limit)
 
   if (error) {
-    console.error('Failed to get transactions:', error)
+    loggers.db.error({ error: String(error) }, 'Failed to get transactions')
     return []
   }
 
@@ -246,7 +247,7 @@ export async function fetchConfig(): Promise<FlywheelConfig> {
     .single()
 
   if (error) {
-    console.error('Failed to fetch config:', error)
+    loggers.db.error({ error: String(error) }, 'Failed to fetch config')
     return DEFAULT_CONFIG
   }
 
@@ -281,7 +282,7 @@ const DEFAULT_FLYWHEEL_STATE: FlywheelState = {
 
 export async function saveFlywheelState(state: Omit<FlywheelState, 'updated_at'>): Promise<boolean> {
   if (!supabase) {
-    console.warn('⚠️ Supabase not configured - flywheel state not persisted')
+    loggers.db.warn('Supabase not configured - flywheel state not persisted')
     return false
   }
 
@@ -296,7 +297,7 @@ export async function saveFlywheelState(state: Omit<FlywheelState, 'updated_at'>
     })
 
   if (error) {
-    console.error('❌ Failed to save flywheel state:', error)
+    loggers.db.error({ error: String(error) }, 'Failed to save flywheel state')
     return false
   }
 
@@ -305,7 +306,7 @@ export async function saveFlywheelState(state: Omit<FlywheelState, 'updated_at'>
 
 export async function loadFlywheelState(): Promise<FlywheelState> {
   if (!supabase) {
-    console.warn('⚠️ Supabase not configured - using default flywheel state')
+    loggers.db.warn('Supabase not configured - using default flywheel state')
     return DEFAULT_FLYWHEEL_STATE
   }
 
@@ -318,12 +319,12 @@ export async function loadFlywheelState(): Promise<FlywheelState> {
   if (error) {
     // Table might not exist yet or no row - return defaults
     if (error.code !== 'PGRST116') { // PGRST116 = no rows returned
-      console.warn('⚠️ Could not load flywheel state:', error.message)
+      loggers.db.warn({ error: error.message }, 'Could not load flywheel state')
     }
     return DEFAULT_FLYWHEEL_STATE
   }
 
-  console.log(`📂 Loaded flywheel state: ${data.cycle_phase} phase, buys: ${data.buy_count}, sells: ${data.sell_count}`)
+  loggers.db.info({ cyclePhase: data.cycle_phase, buyCount: data.buy_count, sellCount: data.sell_count }, 'Loaded flywheel state')
 
   // IMPORTANT: Supabase returns NUMERIC columns as strings for large values
   // Must explicitly convert to numbers to avoid calculation issues

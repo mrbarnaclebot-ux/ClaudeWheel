@@ -1,4 +1,5 @@
 import crypto from 'crypto'
+import { loggers } from '../utils/logger'
 
 // ═══════════════════════════════════════════════════════════════════════════
 // ENCRYPTION SERVICE
@@ -125,7 +126,7 @@ export async function validateEncryptedKey(
     // Check if the public key matches the expected address
     return keypair.publicKey.toString() === expectedWalletAddress
   } catch (error) {
-    console.error('Failed to validate encrypted key:', error)
+    loggers.encryption.error({ error: String(error) }, 'Failed to validate encrypted key')
     return false
   }
 }
@@ -160,7 +161,7 @@ export function testEncryption(): boolean {
     const decrypted = decrypt(encrypted)
     return decrypted === testData
   } catch (error) {
-    console.error('Encryption test failed:', error)
+    loggers.encryption.error({ error: String(error) }, 'Encryption test failed')
     return false
   }
 }

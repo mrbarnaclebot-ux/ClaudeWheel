@@ -11,10 +11,6 @@ import {
   shortenAddress,
   formatTimeAgo,
   formatTimestamp,
-  PLACEHOLDER_CA,
-  mockWalletData,
-  mockTransactions,
-  mockFeeStats,
 } from './utils'
 
 describe('cn (className utility)', () => {
@@ -137,32 +133,5 @@ describe('formatTimestamp', () => {
     const result = formatTimestamp(date)
     // Result depends on timezone, so just check format
     expect(result).toMatch(/^\d{2}:\d{2}:\d{2}$/)
-  })
-})
-
-describe('Constants and Mock Data', () => {
-  it('should have PLACEHOLDER_CA defined', () => {
-    expect(PLACEHOLDER_CA).toBe('UPDATE_AFTER_TOKEN_LAUNCH')
-  })
-
-  it('should have mockWalletData defined', () => {
-    expect(mockWalletData).toBeDefined()
-    expect(mockWalletData.devWallet).toBeDefined()
-    expect(mockWalletData.opsWallet).toBeDefined()
-    expect(mockWalletData.devWallet.solBalance).toBeGreaterThan(0)
-    expect(mockWalletData.opsWallet.tokenBalance).toBeGreaterThan(0)
-  })
-
-  it('should have mockTransactions defined', () => {
-    expect(mockTransactions).toBeDefined()
-    expect(mockTransactions.length).toBeGreaterThan(0)
-    expect(mockTransactions[0]).toHaveProperty('type')
-    expect(mockTransactions[0]).toHaveProperty('amount')
-  })
-
-  it('should have mockFeeStats defined', () => {
-    expect(mockFeeStats).toBeDefined()
-    expect(mockFeeStats.totalCollected).toBeGreaterThan(0)
-    expect(mockFeeStats.todayCollected).toBeGreaterThan(0)
   })
 })

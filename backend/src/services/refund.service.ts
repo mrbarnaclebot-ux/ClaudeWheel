@@ -12,6 +12,7 @@ import {
 import { connection, getBalance } from '../config/solana'
 import { supabase } from '../config/database'
 import { getKeypairFromEncrypted } from './wallet-generator'
+import { loggers } from '../utils/logger'
 
 // Minimum SOL to keep for rent exemption
 const RENT_RESERVE_SOL = 0.001
@@ -51,7 +52,7 @@ export interface RefundResult {
  */
 export async function getPendingRefunds(): Promise<PendingRefund[]> {
   if (!supabase) {
-    console.warn('⚠️ Supabase not configured')
+    loggers.refund.warn('Supabase not configured')
     return []
   }
 
@@ -66,7 +67,7 @@ export async function getPendingRefunds(): Promise<PendingRefund[]> {
     .order('updated_at', { ascending: false })
 
   if (error) {
-    console.error('Error fetching pending refunds:', error)
+    loggers.refund.error({ error: String(error) }, 'Error fetching pending refunds')
     return []
   }
 
@@ -86,7 +87,7 @@ export async function getPendingRefunds(): Promise<PendingRefund[]> {
           original_funder: originalFunder,
         }
       } catch (error) {
-        console.error(`Error enriching launch ${launch.id}:`, error)
+        loggers.refund.error({ launchId: launch.id, error: String(error) }, 'Error enriching launch')
         return {
           ...launch,
           current_balance: 0,
@@ -142,7 +143,7 @@ export async function findOriginalFunder(devWalletAddress: string): Promise<stri
 
     return null
   } catch (error) {
-    console.error('Error finding original funder:', error)
+    loggers.refund.error({ error: String(error) }, 'Error finding original funder')
     return null
   }
 }
@@ -203,7 +204,7 @@ export async function executeRefund(
     const refundAmountSol = currentBalance - RENT_RESERVE_SOL
     const refundAmountLamports = Math.floor(refundAmountSol * LAMPORTS_PER_SOL)
 
-    console.log(`💸 Refunding ${refundAmountSol.toFixed(6)} SOL to ${refundAddress}`)
+    loggers.refund.info({ amountSol: refundAmountSol, refundAddress }, 'Processing refund')
 
     // Create transfer transaction
     const transaction = new Transaction().add(
@@ -233,7 +234,7 @@ export async function executeRefund(
       lastValidBlockHeight,
     }, 'confirmed')
 
-    console.log(`✅ Refund successful: ${signature}`)
+    loggers.refund.info({ signature }, 'Refund successful')
 
     // Update database
     await supabase
@@ -273,7 +274,7 @@ export async function executeRefund(
       refundAddress,
     }
   } catch (error: any) {
-    console.error('Refund failed:', error)
+    loggers.refund.error({ error: String(error) }, 'Refund failed')
 
     // Log the failure
     if (supabase) {
@@ -324,7 +325,7 @@ Use /launch to try again!`
       })
     }
   } catch (error) {
-    console.error('Error sending refund notification:', error)
+    loggers.refund.error({ error: String(error) }, 'Error sending refund notification')
   }
 }
 
@@ -341,7 +342,7 @@ export async function getTelegramAuditLogs(limit: number = 100): Promise<any[]> 
     .limit(limit)
 
   if (error) {
-    console.error('Error fetching audit logs:', error)
+    loggers.refund.error({ error: String(error) }, 'Error fetching audit logs')
     return []
   }
 
@@ -381,7 +382,7 @@ export async function getLaunchStats(): Promise<{
     .select('status, deposit_received_sol')
 
   if (error || !data) {
-    console.error('Error fetching launch stats:', error)
+    loggers.refund.error({ error: String(error) }, 'Error fetching launch stats')
     return {
       total: 0,
       awaiting: 0,

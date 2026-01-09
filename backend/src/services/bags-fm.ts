@@ -3,6 +3,8 @@
 // Integration with Bags.fm token launchpad for fee tracking and claiming
 // ═══════════════════════════════════════════════════════════════════════════
 
+import { loggers } from '../utils/logger'
+
 const BAGS_API_BASE = 'https://public-api-v2.bags.fm/api/v1'
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -48,9 +50,25 @@ export interface ClaimStats {
   lastClaimTime: string | null
 }
 
+// Raw quote response structure from Bags.fm API
+export interface RawQuoteResponse {
+  inputMint: string
+  outputMint: string
+  inAmount: string
+  outAmount: string
+  priceImpactPct?: string
+  platformFee?: {
+    amount?: string
+    feeBps?: number
+  }
+  routePlan?: unknown[]
+  contextSlot?: number
+  timeTaken?: number
+}
+
 export interface TradeQuote {
   // Raw quote response - needed for swap execution
-  rawQuoteResponse: any
+  rawQuoteResponse: RawQuoteResponse
   // Parsed fields for convenience
   inputMint: string
   outputMint: string
@@ -85,7 +103,7 @@ class BagsFmService {
       }
 
       const url = `${BAGS_API_BASE}${endpoint}`
-      console.log(`📡 Bags.fm API: ${options.method || 'GET'} ${endpoint}`)
+      loggers.bags.debug({ method: options.method || 'GET', endpoint }, 'Bags.fm API request')
 
       const response = await fetch(url, {
         ...options,
@@ -95,8 +113,7 @@ class BagsFmService {
       const responseText = await response.text()
 
       if (!response.ok) {
-        console.error(`Bags.fm API error: ${response.status} ${response.statusText}`)
-        console.error(`Response body: ${responseText.slice(0, 500)}`)
+        loggers.bags.error({ status: response.status, statusText: response.statusText, responseBody: responseText.slice(0, 500) }, 'Bags.fm API error')
         return null
       }
 
@@ -105,23 +122,22 @@ class BagsFmService {
       try {
         data = JSON.parse(responseText)
       } catch {
-        console.error(`Bags.fm API: Invalid JSON response: ${responseText.slice(0, 200)}`)
+        loggers.bags.error({ responseText: responseText.slice(0, 200) }, 'Bags.fm API: Invalid JSON response')
         return null
       }
 
       // Handle different response formats - some endpoints return data directly
       if (data.success === false) {
-        console.error(`Bags.fm API error: ${data.error || data.message || 'Unknown error'}`)
+        loggers.bags.error({ error: data.error || data.message || 'Unknown error' }, 'Bags.fm API error')
         return null
       }
 
       // Return response field if exists, otherwise return data directly
       const result = data.response ?? data.data ?? data
-      console.log(`✅ Bags.fm API response received`)
-      console.log(`📦 Response data: ${JSON.stringify(result).slice(0, 500)}`)
+      loggers.bags.debug({ endpoint, responseDataPreview: JSON.stringify(result).slice(0, 200) }, 'Bags.fm API response received')
       return result as T
     } catch (error) {
-      console.error('Bags.fm API request failed:', error)
+      loggers.bags.error({ error: String(error) }, 'Bags.fm API request failed')
       return null
     }
   }
@@ -200,7 +216,7 @@ class BagsFmService {
         }
       }
     } catch (error) {
-      console.warn('Could not fetch DexScreener data:', error)
+      loggers.bags.warn({ error: String(error) }, 'Could not fetch DexScreener data')
     }
 
     // Try to get holder count from Solana FM or Helius (free tier)
@@ -210,7 +226,7 @@ class BagsFmService {
         tokenInfo.holders = holders
       }
     } catch (error) {
-      console.warn('Could not fetch holder count:', error)
+      loggers.bags.warn({ error: String(error) }, 'Could not fetch holder count')
     }
 
     return tokenInfo
@@ -405,11 +421,12 @@ class BagsFmService {
     slippageBps: number = 300 // Default 3% slippage for bonding curve trades
   ): Promise<TradeQuote | null> {
     // GET request with query params (API does not support POST for quote)
-    // Use explicit slippage instead of 'auto' which only gives 1%
+    // Must include slippageMode='manual' when providing slippageBps (per API v2 docs)
     const params = new URLSearchParams({
       inputMint,
       outputMint,
       amount: amount.toString(),
+      slippageMode: 'manual',
       slippageBps: slippageBps.toString(),
     })
 
@@ -434,7 +451,7 @@ class BagsFmService {
    */
   async generateSwapTransaction(
     walletAddress: string,
-    quoteResponse: any
+    quoteResponse: RawQuoteResponse
   ): Promise<SwapTransaction | null> {
     const data = await this.fetch<any>('/trade/swap', {
       method: 'POST',

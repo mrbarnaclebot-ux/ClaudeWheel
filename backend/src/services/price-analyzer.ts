@@ -1,5 +1,6 @@
 import { getTokenMint } from '../config/solana'
 import { env } from '../config/env'
+import { loggers } from '../utils/logger'
 
 // ═══════════════════════════════════════════════════════════════════════════
 // PRICE ANALYZER SERVICE
@@ -79,7 +80,7 @@ export class PriceAnalyzer {
   async fetchCurrentPrice(): Promise<PriceData | null> {
     const tokenMint = this.getTokenMintAddress()
     if (!tokenMint) {
-      console.warn('⚠️ Token mint not configured')
+      loggers.solana.warn('Token mint not configured')
       return null
     }
 
@@ -90,7 +91,7 @@ export class PriceAnalyzer {
       const data = await response.json() as { pairs?: any[] }
 
       if (!data.pairs || data.pairs.length === 0) {
-        console.log('ℹ️ No trading pairs found (token may not be live yet)')
+        loggers.solana.info('No trading pairs found (token may not be live yet)')
         return null
       }
 
@@ -113,7 +114,7 @@ export class PriceAnalyzer {
 
       return priceData
     } catch (error) {
-      console.error('Failed to fetch price:', error)
+      loggers.solana.error({ error: String(error) }, 'Failed to fetch price')
       return null
     }
   }
@@ -138,7 +139,7 @@ export class PriceAnalyzer {
       }
       return null
     } catch (error) {
-      console.error('Failed to fetch Jupiter price:', error)
+      loggers.solana.error({ error: String(error) }, 'Failed to fetch Jupiter price')
       return null
     }
   }

@@ -4,6 +4,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 import cron from 'node-cron'
+import { loggers } from '../utils/logger'
 import { PublicKey } from '@solana/web3.js'
 import { supabase } from '../config/database'
 import { getConnection, getBalance } from '../config/solana'
@@ -80,10 +81,10 @@ async function checkPendingLaunches(): Promise<void> {
         telegram_users (telegram_id)
       `)
       .eq('status', 'awaiting_deposit')
-      .lt('expires_at', new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()) // Not expired
+      .lt('expires_at', new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()) // Includes expired (handled separately below)
 
     if (error) {
-      console.error('Error fetching pending launches:', error)
+      loggers.deposit.error({ error: String(error) }, 'Error fetching pending launches')
       return
     }
 
@@ -91,7 +92,7 @@ async function checkPendingLaunches(): Promise<void> {
       return
     }
 
-    console.log(`📡 Checking ${pendingLaunches.length} pending token launches...`)
+    loggers.deposit.info({ count: pendingLaunches.length }, '📡 Checking pending token launches...')
 
     const connection = getConnection()
 
@@ -108,10 +109,11 @@ async function checkPendingLaunches(): Promise<void> {
         const balance = await getBalance(devWalletPubkey)
 
         if (balance >= MIN_DEPOSIT_SOL) {
-          console.log(`💰 Deposit detected for ${launch.token_symbol}: ${balance} SOL`)
+          loggers.deposit.info({ tokenSymbol: launch.token_symbol, balance }, '💰 Deposit detected')
 
-          // Update deposit amount
-          await db
+          // Atomic update with optimistic locking - only update if status is still 'awaiting_deposit'
+          // This prevents race conditions when multiple instances detect the same deposit
+          const { data: updated, error: updateError } = await db
             .from('pending_token_launches')
             .update({
               deposit_received_sol: balance,
@@ -119,6 +121,21 @@ async function checkPendingLaunches(): Promise<void> {
               updated_at: new Date().toISOString(),
             })
             .eq('id', launch.id)
+            .eq('status', 'awaiting_deposit') // Only update if still awaiting
+            .select()
+            .single()
+
+          // Handle update result - differentiate between race condition and real errors
+          if (updateError) {
+            // Real database error - log as error, not info
+            loggers.deposit.error({ launchId: launch.id, error: String(updateError) }, '❌ Database error updating launch status')
+            continue
+          }
+          if (!updated) {
+            // No rows updated means another process got it first (race condition) - this is expected
+            loggers.deposit.info({ launchId: launch.id }, '⏭️ Launch already being processed by another instance')
+            continue
+          }
 
           // Log audit event
           await db.from('audit_log').insert({
@@ -132,11 +149,11 @@ async function checkPendingLaunches(): Promise<void> {
           await triggerTokenLaunch(launch, balance)
         }
       } catch (error) {
-        console.error(`Error checking launch ${launch.id}:`, error)
+        loggers.deposit.error({ launchId: launch.id, error: String(error) }, 'Error checking launch')
       }
     }
   } catch (error) {
-    console.error('Error in deposit monitor:', error)
+    loggers.deposit.error({ error: String(error) }, 'Error in deposit monitor')
   } finally {
     isRunning = false
   }
@@ -146,7 +163,7 @@ async function checkPendingLaunches(): Promise<void> {
  * Handle expired pending launch
  */
 async function handleExpiredLaunch(launch: PendingLaunch): Promise<void> {
-  console.log(`⏰ Launch expired for ${launch.token_symbol}`)
+  loggers.deposit.info({ tokenSymbol: launch.token_symbol }, '⏰ Launch expired')
   const db = requireSupabase()
 
   // Check if there's any balance to refund
@@ -178,20 +195,20 @@ async function handleExpiredLaunch(launch: PendingLaunch): Promise<void> {
       // Find the original funder address to refund to
       const originalFunder = await findOriginalFunder(launch.dev_wallet_address)
       if (originalFunder) {
-        console.log(`💸 Auto-refunding ${balance.toFixed(4)} SOL to original funder: ${originalFunder}`)
+        loggers.deposit.info({ balance: balance.toFixed(4), originalFunder }, '💸 Auto-refunding SOL to original funder')
         const refundResult = await executeRefund(launch.id, originalFunder)
         if (refundResult.success) {
-          console.log(`✅ Auto-refund successful: ${refundResult.signature}`)
+          loggers.deposit.info({ signature: refundResult.signature }, '✅ Auto-refund successful')
           // Notification is handled by executeRefund
           return
         } else {
-          console.error(`❌ Auto-refund failed: ${refundResult.error}`)
+          loggers.deposit.error({ error: refundResult.error }, '❌ Auto-refund failed')
         }
       } else {
-        console.log(`⚠️ Could not find original funder for ${launch.token_symbol} - manual refund required`)
+        loggers.deposit.warn({ tokenSymbol: launch.token_symbol }, '⚠️ Could not find original funder - manual refund required')
       }
     } catch (refundError) {
-      console.error('Auto-refund error:', refundError)
+      loggers.deposit.error({ error: String(refundError) }, 'Auto-refund error')
     }
   } else {
     // No balance - just mark as expired
@@ -224,7 +241,7 @@ async function handleExpiredLaunch(launch: PendingLaunch): Promise<void> {
  */
 async function triggerTokenLaunch(launch: PendingLaunch, depositAmount: number): Promise<void> {
   try {
-    console.log(`🚀 Launching ${launch.token_symbol} on Bags.fm...`)
+    loggers.deposit.info({ tokenSymbol: launch.token_symbol }, '🚀 Launching on Bags.fm...')
 
     // Notify user that launch is starting
     await notifyUser(
@@ -260,7 +277,7 @@ async function triggerTokenLaunch(launch: PendingLaunch, depositAmount: number):
       await handleFailedLaunch(launch, result.error || 'Unknown error')
     }
   } catch (error: any) {
-    console.error(`Error launching ${launch.token_symbol}:`, error)
+    loggers.deposit.error({ tokenSymbol: launch.token_symbol, error: String(error) }, 'Error launching token')
     await handleFailedLaunch(launch, error.message || 'Launch failed')
   }
 }
@@ -269,7 +286,7 @@ async function triggerTokenLaunch(launch: PendingLaunch, depositAmount: number):
  * Handle successful token launch
  */
 async function handleSuccessfulLaunch(launch: PendingLaunch, tokenMint: string): Promise<void> {
-  console.log(`✅ Successfully launched ${launch.token_symbol}: ${tokenMint}`)
+  loggers.deposit.info({ tokenSymbol: launch.token_symbol, tokenMint }, '✅ Successfully launched token')
   const db = requireSupabase()
 
   try {
@@ -489,7 +506,7 @@ bags.fm/token/${tokenMint}
  * Handle failed token launch
  */
 async function handleFailedLaunch(launch: PendingLaunch, errorMessage: string): Promise<void> {
-  console.error(`❌ Failed to launch ${launch.token_symbol}: ${errorMessage}`)
+  loggers.deposit.error({ tokenSymbol: launch.token_symbol, errorMessage }, '❌ Failed to launch token')
   const db = requireSupabase()
 
   const newRetryCount = (launch.retry_count || 0) + 1
@@ -540,21 +557,21 @@ async function handleFailedLaunch(launch: PendingLaunch, errorMessage: string): 
       if (balance > 0.001) {
         const originalFunder = await findOriginalFunder(launch.dev_wallet_address)
         if (originalFunder) {
-          console.log(`💸 Auto-refunding ${balance.toFixed(4)} SOL after failed launch to: ${originalFunder}`)
+          loggers.deposit.info({ balance: balance.toFixed(4), originalFunder }, '💸 Auto-refunding SOL after failed launch')
           const refundResult = await executeRefund(launch.id, originalFunder)
           if (refundResult.success) {
-            console.log(`✅ Auto-refund successful: ${refundResult.signature}`)
+            loggers.deposit.info({ signature: refundResult.signature }, '✅ Auto-refund successful')
             refundTriggered = true
             // Notification is handled by executeRefund
           } else {
-            console.error(`❌ Auto-refund failed: ${refundResult.error}`)
+            loggers.deposit.error({ error: refundResult.error }, '❌ Auto-refund failed')
           }
         } else {
-          console.log(`⚠️ Could not find original funder for ${launch.token_symbol} - manual refund required`)
+          loggers.deposit.warn({ tokenSymbol: launch.token_symbol }, '⚠️ Could not find original funder - manual refund required')
         }
       }
     } catch (refundError) {
-      console.error('Auto-refund error:', refundError)
+      loggers.deposit.error({ error: String(refundError) }, 'Auto-refund error')
     }
 
     // Notify user about failure (only if refund wasn't triggered - refund service sends its own notification)
@@ -590,7 +607,7 @@ async function notifyUser(
       const { getBot } = await import('../telegram/bot')
       const bot = getBot()
       if (!bot) {
-        console.warn('⚠️ Telegram bot not initialized - notification not sent')
+        loggers.deposit.warn('⚠️ Telegram bot not initialized - notification not sent')
         return false
       }
 
@@ -601,15 +618,13 @@ async function notifyUser(
       const errorMessage = error?.message || 'Unknown error'
 
       if (isLastAttempt) {
-        console.error(`❌ Failed to send Telegram notification after ${maxRetries} attempts: ${errorMessage}`)
-        console.error(`   Telegram ID: ${telegramId}`)
-        console.error(`   Message preview: ${message.substring(0, 100)}...`)
+        loggers.deposit.error({ telegramId, messagePreview: message.substring(0, 100), maxRetries, error: errorMessage }, '❌ Failed to send Telegram notification')
         return false
       }
 
       // Exponential backoff: 1s, 2s, 4s
       const delay = Math.pow(2, attempt - 1) * 1000
-      console.warn(`⚠️ Telegram notification attempt ${attempt}/${maxRetries} failed, retrying in ${delay}ms: ${errorMessage}`)
+      loggers.deposit.warn({ attempt, maxRetries, delay, error: errorMessage }, '⚠️ Telegram notification attempt failed, retrying')
       await new Promise(resolve => setTimeout(resolve, delay))
     }
   }
@@ -622,11 +637,11 @@ async function notifyUser(
  */
 export function startDepositMonitorJob(): void {
   if (jobTask) {
-    console.log('⚠️ Deposit monitor job already running')
+    loggers.deposit.warn('⚠️ Deposit monitor job already running')
     return
   }
 
-  console.log('🔄 Starting deposit monitor job (every 30 seconds)')
+  loggers.deposit.info('🔄 Starting deposit monitor job (every 30 seconds)')
 
   jobTask = cron.schedule(CHECK_INTERVAL, async () => {
     await checkPendingLaunches()
@@ -643,7 +658,7 @@ export function stopDepositMonitorJob(): void {
   if (jobTask) {
     jobTask.stop()
     jobTask = null
-    console.log('⏹️ Deposit monitor job stopped')
+    loggers.deposit.info('⏹️ Deposit monitor job stopped')
   }
 }
 

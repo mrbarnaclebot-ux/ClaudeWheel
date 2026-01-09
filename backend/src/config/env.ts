@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import dotenv from 'dotenv'
+import { loggers } from '../utils/logger'
 
 dotenv.config()
 
@@ -11,10 +12,12 @@ const envSchema = z.object({
   // Server
   PORT: z.string().default('3001'),
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
+  LOG_LEVEL: z.enum(['trace', 'debug', 'info', 'warn', 'error', 'fatal']).optional(),
 
   // Solana
   SOLANA_RPC_URL: z.string().url().default('https://api.mainnet-beta.solana.com'),
   SOLANA_WS_URL: z.string().default('wss://api.mainnet-beta.solana.com'),
+  HELIUS_API_KEY: z.string().optional(),
 
   // Wallets
   DEV_WALLET_PRIVATE_KEY: z.string().optional(),
@@ -30,6 +33,9 @@ const envSchema = z.object({
   SUPABASE_URL: z.string().url().optional(),
   SUPABASE_SERVICE_KEY: z.string().optional(),
 
+  // Encryption
+  ENCRYPTION_MASTER_KEY: z.string().optional(),
+
   // Automation
   FEE_COLLECTION_INTERVAL_MS: z.string().default('60000'),
   MARKET_MAKING_ENABLED: z.string().default('true'),
@@ -39,6 +45,25 @@ const envSchema = z.object({
   MAX_SELL_AMOUNT_TOKENS: z.string().default('100000'),
   PLATFORM_FEE_PERCENTAGE: z.string().default('10'), // Platform fee % taken from user claims
   PLATFORM_FEE_WALLET: z.string().optional(), // Wallet to receive platform fees
+
+  // Job Enable Flags
+  FAST_CLAIM_JOB_ENABLED: z.string().default('true'),
+  MULTI_USER_FLYWHEEL_ENABLED: z.string().default('true'),
+  DEPOSIT_MONITOR_ENABLED: z.string().default('true'),
+  BALANCE_UPDATE_JOB_ENABLED: z.string().default('true'),
+
+  // Fast Claim Job
+  FAST_CLAIM_INTERVAL_SECONDS: z.string().default('30'),
+  FAST_CLAIM_THRESHOLD_SOL: z.string().default('0.15'),
+
+  // Multi-User Flywheel Job
+  MULTI_USER_FLYWHEEL_INTERVAL_MINUTES: z.string().default('1'),
+  MAX_TRADES_PER_MINUTE: z.string().default('30'),
+
+  // Balance Update Job
+  BALANCE_UPDATE_BATCH_SIZE: z.string().default('50'),
+  BALANCE_FETCH_DELAY_MS: z.string().default('100'),
+  BALANCE_SNAPSHOT_INTERVAL: z.string().default('12'),
 
   // Jupiter
   JUPITER_API_URL: z.string().url().default('https://quote-api.jup.ag/v6'),
@@ -59,8 +84,7 @@ const envSchema = z.object({
 const parsed = envSchema.safeParse(process.env)
 
 if (!parsed.success) {
-  console.error('❌ Invalid environment variables:')
-  console.error(parsed.error.format())
+  loggers.server.error({ errors: parsed.error.format() }, 'Invalid environment variables')
   process.exit(1)
 }
 
@@ -70,10 +94,12 @@ export const env = {
   nodeEnv: parsed.data.NODE_ENV,
   isDev: parsed.data.NODE_ENV === 'development',
   isProd: parsed.data.NODE_ENV === 'production',
+  logLevel: parsed.data.LOG_LEVEL,
 
   // Solana
   solanaRpcUrl: parsed.data.SOLANA_RPC_URL,
   solanaWsUrl: parsed.data.SOLANA_WS_URL,
+  heliusApiKey: parsed.data.HELIUS_API_KEY,
 
   // Wallets
   devWalletPrivateKey: parsed.data.DEV_WALLET_PRIVATE_KEY,
@@ -89,6 +115,9 @@ export const env = {
   supabaseUrl: parsed.data.SUPABASE_URL,
   supabaseServiceKey: parsed.data.SUPABASE_SERVICE_KEY,
 
+  // Encryption
+  encryptionMasterKey: parsed.data.ENCRYPTION_MASTER_KEY,
+
   // Automation
   feeCollectionIntervalMs: parseInt(parsed.data.FEE_COLLECTION_INTERVAL_MS, 10),
   marketMakingEnabled: parsed.data.MARKET_MAKING_ENABLED === 'true',
@@ -98,6 +127,25 @@ export const env = {
   maxSellAmountTokens: parseFloat(parsed.data.MAX_SELL_AMOUNT_TOKENS),
   platformFeePercentage: parseFloat(parsed.data.PLATFORM_FEE_PERCENTAGE),
   platformFeeWallet: parsed.data.PLATFORM_FEE_WALLET,
+
+  // Job Enable Flags
+  fastClaimJobEnabled: parsed.data.FAST_CLAIM_JOB_ENABLED !== 'false',
+  multiUserFlywheelEnabled: parsed.data.MULTI_USER_FLYWHEEL_ENABLED !== 'false',
+  depositMonitorEnabled: parsed.data.DEPOSIT_MONITOR_ENABLED !== 'false',
+  balanceUpdateJobEnabled: parsed.data.BALANCE_UPDATE_JOB_ENABLED !== 'false',
+
+  // Fast Claim Job
+  fastClaimIntervalSeconds: parseInt(parsed.data.FAST_CLAIM_INTERVAL_SECONDS, 10),
+  fastClaimThresholdSol: parseFloat(parsed.data.FAST_CLAIM_THRESHOLD_SOL),
+
+  // Multi-User Flywheel Job
+  flywheelIntervalMinutes: parseInt(parsed.data.MULTI_USER_FLYWHEEL_INTERVAL_MINUTES, 10),
+  maxTradesPerMinute: parseInt(parsed.data.MAX_TRADES_PER_MINUTE, 10),
+
+  // Balance Update Job
+  balanceUpdateBatchSize: parseInt(parsed.data.BALANCE_UPDATE_BATCH_SIZE, 10),
+  balanceFetchDelayMs: parseInt(parsed.data.BALANCE_FETCH_DELAY_MS, 10),
+  balanceSnapshotInterval: parseInt(parsed.data.BALANCE_SNAPSHOT_INTERVAL, 10),
 
   // Jupiter
   jupiterApiUrl: parsed.data.JUPITER_API_URL,

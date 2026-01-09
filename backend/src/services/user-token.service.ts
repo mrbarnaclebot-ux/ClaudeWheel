@@ -2,6 +2,7 @@ import { supabase } from '../config/database'
 import { encrypt, decrypt, validateEncryptedKey, EncryptedData } from './encryption.service'
 import { Keypair } from '@solana/web3.js'
 import bs58 from 'bs58'
+import { loggers } from '../utils/logger'
 
 // ═══════════════════════════════════════════════════════════════════════════
 // USER TOKEN SERVICE
@@ -101,7 +102,7 @@ const DEFAULT_FLYWHEEL_STATE: Omit<UserFlywheelState, 'id' | 'user_token_id' | '
  */
 export async function registerToken(params: RegisterTokenParams): Promise<UserToken | null> {
   if (!supabase) {
-    console.warn('⚠️ Supabase not configured')
+    loggers.user.warn('Supabase not configured')
     return null
   }
 
@@ -113,7 +114,7 @@ export async function registerToken(params: RegisterTokenParams): Promise<UserTo
       const keypair = Keypair.fromSecretKey(secretKey)
       devWalletAddress = keypair.publicKey.toString()
     } catch (error) {
-      console.error('❌ Invalid dev wallet private key format')
+      loggers.user.error('Invalid dev wallet private key format')
       throw new Error('Invalid dev wallet private key format. Must be Base58 encoded.')
     }
 
@@ -124,7 +125,7 @@ export async function registerToken(params: RegisterTokenParams): Promise<UserTo
       const keypair = Keypair.fromSecretKey(secretKey)
       opsWalletAddress = keypair.publicKey.toString()
     } catch (error) {
-      console.error('❌ Invalid ops wallet private key format')
+      loggers.user.error('Invalid ops wallet private key format')
       throw new Error('Invalid ops wallet private key format. Must be Base58 encoded.')
     }
 
@@ -165,7 +166,7 @@ export async function registerToken(params: RegisterTokenParams): Promise<UserTo
       .single()
 
     if (tokenError) {
-      console.error('❌ Failed to register token:', tokenError)
+      loggers.user.error({ error: tokenError.message }, 'Failed to register token')
       throw new Error('Failed to register token: ' + tokenError.message)
     }
 
@@ -184,7 +185,7 @@ export async function registerToken(params: RegisterTokenParams): Promise<UserTo
       }])
 
     if (configError) {
-      console.error('❌ Failed to create token config:', configError)
+      loggers.user.error({ error: configError.message, tokenId: userToken.id }, 'Failed to create token config')
       // Clean up the token if config creation fails
       await supabase.from('user_tokens').delete().eq('id', userToken.id)
       throw new Error('Failed to create token configuration')
@@ -199,7 +200,7 @@ export async function registerToken(params: RegisterTokenParams): Promise<UserTo
       }])
 
     if (stateError) {
-      console.error('❌ Failed to create flywheel state:', stateError)
+      loggers.user.error({ error: stateError.message, tokenId: userToken.id }, 'Failed to create flywheel state')
       // Clean up token and config if state creation fails
       await supabase.from('user_token_config').delete().eq('user_token_id', userToken.id)
       await supabase.from('user_tokens').delete().eq('id', userToken.id)
@@ -209,7 +210,7 @@ export async function registerToken(params: RegisterTokenParams): Promise<UserTo
     // Note: Fee stats are tracked via user_claim_history table
     // Aggregates can be computed from claim history when needed
 
-    console.log(`✅ Registered token ${params.tokenSymbol} for user ${params.userId}`)
+    loggers.user.info({ tokenSymbol: params.tokenSymbol, userId: params.userId }, 'Registered token')
 
     // Return without sensitive data
     return {
@@ -228,7 +229,7 @@ export async function registerToken(params: RegisterTokenParams): Promise<UserTo
       updated_at: userToken.updated_at,
     }
   } catch (error) {
-    console.error('❌ Token registration failed:', error)
+    loggers.user.error({ error: String(error) }, 'Token registration failed')
     throw error
   }
 }
@@ -248,7 +249,7 @@ export async function getUserTokens(userId: string): Promise<UserToken[]> {
     .order('created_at', { ascending: false })
 
   if (error) {
-    console.error('❌ Failed to get user tokens:', error)
+    loggers.user.error({ error: error.message, userId }, 'Failed to get user tokens')
     return []
   }
 
@@ -271,7 +272,7 @@ export async function getUserToken(userTokenId: string): Promise<UserToken | nul
 
   if (error) {
     if (error.code !== 'PGRST116') {
-      console.error('❌ Failed to get user token:', error)
+      loggers.user.error({ error: error.message, userTokenId }, 'Failed to get user token')
     }
     return null
   }
@@ -296,7 +297,7 @@ export async function getUserTokenByMint(userId: string, tokenMintAddress: strin
 
   if (error) {
     if (error.code !== 'PGRST116') {
-      console.error('❌ Failed to get user token by mint:', error)
+      loggers.user.error({ error: error.message, userId, tokenMintAddress }, 'Failed to get user token by mint')
     }
     return null
   }
@@ -320,7 +321,7 @@ export async function getDecryptedDevWallet(userTokenId: string): Promise<Keypai
     .single()
 
   if (error) {
-    console.error('❌ Failed to get encrypted key:', error)
+    loggers.user.error({ error: error.message, userTokenId }, 'Failed to get encrypted key')
     return null
   }
 
@@ -334,7 +335,7 @@ export async function getDecryptedDevWallet(userTokenId: string): Promise<Keypai
     const secretKey = bs58.decode(decryptedKey)
     return Keypair.fromSecretKey(secretKey)
   } catch (error) {
-    console.error('❌ Failed to decrypt dev wallet:', error)
+    loggers.user.error({ error: String(error), userTokenId }, 'Failed to decrypt dev wallet')
     return null
   }
 }
@@ -355,13 +356,13 @@ export async function getDecryptedOpsWallet(userTokenId: string): Promise<Keypai
     .single()
 
   if (error) {
-    console.error('❌ Failed to get encrypted ops key:', error)
+    loggers.user.error({ error: error.message, userTokenId }, 'Failed to get encrypted ops key')
     return null
   }
 
   // Check if ops wallet key exists
   if (!data.ops_wallet_private_key_encrypted) {
-    console.warn('⚠️ Ops wallet private key not configured for token:', userTokenId)
+    loggers.user.warn({ userTokenId }, 'Ops wallet private key not configured for token')
     return null
   }
 
@@ -375,7 +376,7 @@ export async function getDecryptedOpsWallet(userTokenId: string): Promise<Keypai
     const secretKey = bs58.decode(decryptedKey)
     return Keypair.fromSecretKey(secretKey)
   } catch (error) {
-    console.error('❌ Failed to decrypt ops wallet:', error)
+    loggers.user.error({ error: String(error), userTokenId }, 'Failed to decrypt ops wallet')
     return null
   }
 }
@@ -396,7 +397,7 @@ export async function getTokenConfig(userTokenId: string): Promise<UserTokenConf
 
   if (error) {
     if (error.code !== 'PGRST116') {
-      console.error('❌ Failed to get token config:', error)
+      loggers.user.error({ error: error.message, userTokenId }, 'Failed to get token config')
     }
     return null
   }
@@ -423,7 +424,7 @@ export async function updateTokenConfig(
     .single()
 
   if (error) {
-    console.error('❌ Failed to update token config:', error)
+    loggers.user.error({ error: error.message, userTokenId }, 'Failed to update token config')
     return null
   }
 
@@ -446,7 +447,7 @@ export async function getFlywheelState(userTokenId: string): Promise<UserFlywhee
 
   if (error) {
     if (error.code !== 'PGRST116') {
-      console.error('❌ Failed to get flywheel state:', error)
+      loggers.user.error({ error: error.message, userTokenId }, 'Failed to get flywheel state')
     }
     return null
   }
@@ -478,7 +479,7 @@ export async function updateFlywheelState(
     .eq('user_token_id', userTokenId)
 
   if (error) {
-    console.error('❌ Failed to update flywheel state:', error)
+    loggers.user.error({ error: error.message, userTokenId }, 'Failed to update flywheel state')
     return false
   }
 
@@ -504,7 +505,7 @@ export async function getAllActiveUserTokens(): Promise<(UserToken & { config: U
     .eq('is_active', true)
 
   if (error) {
-    console.error('❌ Failed to get active user tokens:', error)
+    loggers.user.error({ error: error.message }, 'Failed to get active user tokens')
     return []
   }
 
@@ -534,7 +535,7 @@ export async function getTokensForAutoClaim(): Promise<UserToken[]> {
     .eq('user_token_config.auto_claim_enabled', true)
 
   if (error) {
-    console.error('❌ Failed to get tokens for auto-claim:', error)
+    loggers.user.error({ error: error.message }, 'Failed to get tokens for auto-claim')
     return []
   }
 
@@ -561,7 +562,7 @@ export async function getTokensForFlywheel(): Promise<(UserToken & { config: Use
     .eq('user_token_config.flywheel_active', true)
 
   if (error) {
-    console.error('❌ Failed to get tokens for flywheel:', error)
+    loggers.user.error({ error: error.message }, 'Failed to get tokens for flywheel')
     return []
   }
 
@@ -593,11 +594,11 @@ export async function deactivateToken(userTokenId: string): Promise<boolean> {
     .eq('id', userTokenId)
 
   if (error) {
-    console.error('❌ Failed to deactivate token:', error)
+    loggers.user.error({ error: error.message, userTokenId }, 'Failed to deactivate token')
     return false
   }
 
-  console.log(`✅ Deactivated token ${userTokenId}`)
+  loggers.user.info({ userTokenId }, 'Deactivated token')
   return true
 }
 
@@ -615,7 +616,7 @@ export async function updateGraduationStatus(userTokenId: string, isGraduated: b
     .eq('id', userTokenId)
 
   if (error) {
-    console.error('❌ Failed to update graduation status:', error)
+    loggers.user.error({ error: error.message, userTokenId, isGraduated }, 'Failed to update graduation status')
     return false
   }
 
@@ -648,7 +649,7 @@ export async function getSuspendedTokenByMint(tokenMintAddress: string): Promise
 
   if (error) {
     if (error.code !== 'PGRST116') {
-      console.error('❌ Failed to check for suspended token:', error)
+      loggers.user.error({ error: error.message, tokenMintAddress }, 'Failed to check for suspended token')
     }
     return null
   }
@@ -733,10 +734,10 @@ export async function verifySuspendedTokenOwnership(
     }
 
     // Both keys verified - the user has proven ownership
-    console.log(`✅ Ownership verified for suspended token ${userTokenId}`)
+    loggers.user.info({ userTokenId }, 'Ownership verified for suspended token')
     return { verified: true }
   } catch (error) {
-    console.error('❌ Error verifying suspended token ownership:', error)
+    loggers.user.error({ error: String(error), userTokenId }, 'Error verifying suspended token ownership')
     return { verified: false, error: 'Verification failed due to an internal error' }
   }
 }
@@ -766,7 +767,7 @@ export async function reactivateSuspendedToken(
     // First verify ownership
     const verification = await verifySuspendedTokenOwnership(userTokenId, devPrivateKey, opsPrivateKey)
     if (!verification.verified) {
-      console.error('❌ Reactivation failed - ownership not verified:', verification.error)
+      loggers.user.error({ userTokenId, error: verification.error }, 'Reactivation failed - ownership not verified')
       return null
     }
 
@@ -799,7 +800,7 @@ export async function reactivateSuspendedToken(
       .single()
 
     if (error) {
-      console.error('❌ Failed to reactivate token:', error)
+      loggers.user.error({ error: error.message, userTokenId }, 'Failed to reactivate token')
       return null
     }
 
@@ -824,10 +825,10 @@ export async function reactivateSuspendedToken(
       })
       .eq('user_token_id', userTokenId)
 
-    console.log(`✅ Reactivated suspended token ${userTokenId}`)
+    loggers.user.info({ userTokenId }, 'Reactivated suspended token')
     return data as UserToken
   } catch (error) {
-    console.error('❌ Token reactivation failed:', error)
+    loggers.user.error({ error: String(error), userTokenId }, 'Token reactivation failed')
     return null
   }
 }

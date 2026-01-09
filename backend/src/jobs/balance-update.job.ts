@@ -5,6 +5,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { balanceMonitorService } from '../services/balance-monitor.service'
+import { loggers } from '../utils/logger'
 
 let balanceUpdateInterval: NodeJS.Timeout | null = null
 
@@ -19,17 +20,16 @@ export function startBalanceUpdateJob(): void {
 
   // Check if job is enabled
   if (process.env.BALANCE_UPDATE_JOB_ENABLED === 'false') {
-    console.log('ℹ️ Balance update job disabled via BALANCE_UPDATE_JOB_ENABLED=false')
+    loggers.balance.info('ℹ️ Balance update job disabled via BALANCE_UPDATE_JOB_ENABLED=false')
     return
   }
 
-  console.log(`\n💰 Starting BALANCE UPDATE job scheduler`)
-  console.log(`   Interval: every ${intervalSeconds} seconds (${(intervalSeconds / 60).toFixed(1)} minutes)`)
-  console.log(`   Batch size: ${process.env.BALANCE_UPDATE_BATCH_SIZE || '50'} tokens per cycle`)
+  const batchSize = process.env.BALANCE_UPDATE_BATCH_SIZE || '50'
+  loggers.balance.info({ intervalSeconds, intervalMinutes: (intervalSeconds / 60).toFixed(1), batchSize }, '💰 Starting BALANCE UPDATE job scheduler')
 
   // Run immediately on startup (after a short delay)
   setTimeout(() => {
-    console.log('\n💰 Running initial balance update...')
+    loggers.balance.info('💰 Running initial balance update...')
     runBalanceUpdateCycle()
   }, 10000) // 10 second delay to let other services initialize
 
@@ -39,7 +39,7 @@ export function startBalanceUpdateJob(): void {
     intervalSeconds * 1000
   )
 
-  console.log('📅 Balance update job scheduled successfully\n')
+  loggers.balance.info('📅 Balance update job scheduled successfully')
 }
 
 /**
@@ -49,7 +49,7 @@ export function stopBalanceUpdateJob(): void {
   if (balanceUpdateInterval) {
     clearInterval(balanceUpdateInterval)
     balanceUpdateInterval = null
-    console.log('🛑 Balance update job stopped')
+    loggers.balance.info('🛑 Balance update job stopped')
   }
 }
 
@@ -60,7 +60,7 @@ async function runBalanceUpdateCycle(): Promise<void> {
   try {
     await balanceMonitorService.updateAllBalances()
   } catch (error) {
-    console.error('❌ Balance update job error:', error)
+    loggers.balance.error({ error: String(error) }, '❌ Balance update job error')
   }
 }
 
@@ -68,7 +68,7 @@ async function runBalanceUpdateCycle(): Promise<void> {
  * Manually trigger a balance update cycle
  */
 export async function triggerBalanceUpdate(): Promise<void> {
-  console.log('💰 Manual balance update triggered')
+  loggers.balance.info('💰 Manual balance update triggered')
   await runBalanceUpdateCycle()
 }
 
@@ -110,5 +110,5 @@ export function restartBalanceUpdateJob(newIntervalSeconds?: number): void {
   stopBalanceUpdateJob()
   startBalanceUpdateJob()
 
-  console.log(`🔄 Balance update job restarted`)
+  loggers.balance.info('🔄 Balance update job restarted')
 }
