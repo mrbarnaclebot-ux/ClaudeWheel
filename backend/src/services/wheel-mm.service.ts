@@ -4,7 +4,7 @@
 // Uses environment wallet keys and old flywheel_state table
 // ═══════════════════════════════════════════════════════════════════════════
 
-import { PublicKey, VersionedTransaction, Connection } from '@solana/web3.js'
+import { PublicKey, VersionedTransaction, Transaction, Connection } from '@solana/web3.js'
 import bs58 from 'bs58'
 import { supabase } from '../config/database'
 import { getConnection, getBalance, getTokenBalance, getDevWallet, getOpsWallet } from '../config/solana'
@@ -267,6 +267,7 @@ class WheelMMService {
 
   /**
    * Execute a swap using Bags.fm
+   * Handles both VersionedTransaction and legacy Transaction formats
    */
   private async executeSwap(
     connection: Connection,
@@ -286,28 +287,41 @@ class WheelMMService {
         return null
       }
 
-      // Deserialize the transaction
+      // Deserialize the transaction - try VersionedTransaction first, fall back to legacy
       const txBuffer = Buffer.from(swapData.transaction, 'base64')
-      const transaction = VersionedTransaction.deserialize(txBuffer)
+      let signature: string
 
-      // Send transaction
-      const result = await sendVersionedTransactionWithRetry(
-        connection,
-        transaction,
-        [wallet],
-        {
+      try {
+        // Try VersionedTransaction first
+        const versionedTx = VersionedTransaction.deserialize(txBuffer)
+        versionedTx.sign([wallet])
+        signature = await connection.sendTransaction(versionedTx, {
           skipPreflight: true,
           maxRetries: 3,
-          logContext: { service: 'wheel-flywheel', type: 'swap' },
-        }
-      )
-
-      if (!result.success) {
-        loggers.flywheel.error({ error: result.error }, 'WHEEL: Swap transaction failed')
-        return null
+        })
+        loggers.flywheel.debug({ signature }, 'WHEEL: Sent versioned transaction')
+      } catch {
+        // Fall back to legacy Transaction
+        loggers.flywheel.debug('WHEEL: Falling back to legacy transaction format')
+        const legacyTx = Transaction.from(txBuffer)
+        legacyTx.sign(wallet)
+        signature = await connection.sendRawTransaction(legacyTx.serialize(), {
+          skipPreflight: true,
+          maxRetries: 3,
+        })
+        loggers.flywheel.debug({ signature }, 'WHEEL: Sent legacy transaction')
       }
 
-      return result.signature || null
+      // Wait for confirmation
+      const latestBlockhash = await connection.getLatestBlockhash()
+      await connection.confirmTransaction({
+        signature,
+        blockhash: latestBlockhash.blockhash,
+        lastValidBlockHeight: latestBlockhash.lastValidBlockHeight,
+      })
+
+      loggers.flywheel.info({ signature }, 'WHEEL: Swap confirmed')
+      return signature
     } catch (error) {
       loggers.flywheel.error({ error: String(error) }, 'WHEEL: Swap failed')
       return null
