@@ -43,13 +43,21 @@ export interface JobStatus {
 export interface SystemStatus {
   rpcConnection: boolean
   databaseConnection: boolean
-  memoryUsage: {
+  memoryUsage?: {
     heapUsed: number
     heapTotal: number
     percentage: number
   }
   uptime: number
-  environment: string
+  environment: string | {
+    nodeEnv: string
+    port: number
+    solanaRpcUrl: string
+    jupiterApiUrl: string
+    marketMakingEnabled: boolean
+    minFeeThresholdSol: number
+    maxBuyAmountSol: number
+  }
   version: string
 }
 
