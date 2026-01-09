@@ -79,6 +79,7 @@ const envSchema = z.object({
   // Privy
   PRIVY_APP_ID: z.string().optional(),
   PRIVY_APP_SECRET: z.string().optional(),
+  PRIVY_AUTHORIZATION_KEY: z.string().optional(), // Authorization key for signing transactions
   TMA_URL: z.string().url().optional(), // Telegram Mini App URL
 })
 
@@ -166,6 +167,7 @@ export const env = {
   // Privy
   privyAppId: parsed.data.PRIVY_APP_ID,
   privyAppSecret: parsed.data.PRIVY_APP_SECRET,
+  privyAuthorizationKey: parsed.data.PRIVY_AUTHORIZATION_KEY,
   tmaUrl: parsed.data.TMA_URL,
 }
 

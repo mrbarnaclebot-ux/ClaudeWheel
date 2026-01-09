@@ -5,11 +5,14 @@ export const dynamic = 'force-dynamic';
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { usePrivy, useDelegatedActions, type WalletWithMetadata } from '@privy-io/react-auth';
+import { usePrivy, useSigners, type WalletWithMetadata } from '@privy-io/react-auth';
 import { useWallets, useCreateWallet } from '@privy-io/react-auth/solana';
 import { useTelegram } from '@/components/TelegramProvider';
 import { motion, AnimatePresence } from 'framer-motion';
 import { api } from '@/lib/api';
+
+// Key Quorum ID from Privy Dashboard -> Wallet Infrastructure -> Authorization Keys
+const PRIVY_SIGNER_ID = process.env.NEXT_PUBLIC_PRIVY_SIGNER_ID;
 
 type Step = 'welcome' | 'creating_wallets' | 'delegate_dev' | 'delegate_ops' | 'registering' | 'complete';
 
@@ -18,8 +21,8 @@ export default function OnboardingPage() {
     const { ready, authenticated, getAccessToken, user } = usePrivy();
     const { wallets } = useWallets();
     const { createWallet } = useCreateWallet();
-    // Use regular delegation with popup - headless was hanging
-    const { delegateWallet } = useDelegatedActions();
+    // Use new Signers API (replaces deprecated delegateWallet)
+    const { addSigners } = useSigners();
     const { user: telegramUser, hapticFeedback } = useTelegram();
 
     const [step, setStep] = useState<Step>('welcome');
@@ -100,6 +103,11 @@ export default function OnboardingPage() {
         setIsDelegating(true);
 
         try {
+            // Check for required signer ID
+            if (!PRIVY_SIGNER_ID) {
+                throw new Error('NEXT_PUBLIC_PRIVY_SIGNER_ID not configured');
+            }
+
             const devWallet = solanaWallets[0];
             if (!devWallet) {
                 throw new Error('Dev wallet not found');
@@ -114,12 +122,7 @@ export default function OnboardingPage() {
                 chainType: (a as any).chainType || 'unknown',
             }));
 
-            // Check if there's an Ethereum wallet (known Privy bug with mixed chain wallets)
-            const hasEthWallet = user?.linkedAccounts?.some(a =>
-                a.type === 'wallet' && (a as WalletWithMetadata).address?.startsWith('0x')
-            );
-
-            const walletInfo = `Dev: ${devWallet.address.slice(0, 8)}...\ndelegated: ${isDelegated}\nhasEthWallet: ${hasEthWallet} (potential bug)\nlinkedWallets: ${JSON.stringify(linkedAccountsInfo, null, 1)}`;
+            const walletInfo = `Dev: ${devWallet.address.slice(0, 8)}...\ndelegated: ${isDelegated}\nsignerId: ${PRIVY_SIGNER_ID.slice(0, 8)}...\nlinkedWallets: ${JSON.stringify(linkedAccountsInfo, null, 1)}`;
             console.log('[Onboarding] Wallet info:', walletInfo);
             setDebugInfo(walletInfo);
 
@@ -129,28 +132,21 @@ export default function OnboardingPage() {
                 return;
             }
 
-            setDebugInfo(`${walletInfo}\n\nDelegating... (30s timeout)`);
-            console.log('[Onboarding] Delegating dev wallet:', devWallet.address);
+            setDebugInfo(`${walletInfo}\n\nAdding signer...`);
+            console.log('[Onboarding] Adding signer to dev wallet:', devWallet.address);
 
-            // Add timeout to prevent hanging forever
-            const timeoutPromise = new Promise((_, reject) =>
-                setTimeout(() => reject(new Error('Delegation timed out after 30 seconds')), 30000)
-            );
+            // Use new Signers API instead of delegateWallet
+            const result = await addSigners({
+                address: devWallet.address,
+                signers: [{ signerId: PRIVY_SIGNER_ID, policyIds: [] }],
+            });
 
-            const result = await Promise.race([
-                delegateWallet({
-                    address: devWallet.address,
-                    chainType: 'solana',
-                }),
-                timeoutPromise,
-            ]);
-
-            console.log('[Onboarding] Delegation result:', result);
-            setDebugInfo(`${walletInfo}\n\nDelegation succeeded!`);
+            console.log('[Onboarding] addSigners result:', result);
+            setDebugInfo(`${walletInfo}\n\nSigner added successfully!`);
 
             setStep('delegate_ops');
         } catch (err: any) {
-            console.error('[Onboarding] Dev wallet delegation failed:', err);
+            console.error('[Onboarding] Dev wallet signer failed:', err);
             console.error('[Onboarding] Full error:', JSON.stringify(err, Object.getOwnPropertyNames(err), 2));
 
             const errorDetails = {
@@ -162,7 +158,7 @@ export default function OnboardingPage() {
             };
 
             setDebugInfo(`Error: ${JSON.stringify(errorDetails)}`);
-            setError(`Dev wallet delegation failed: ${err?.message || 'Unknown error'}`);
+            setError(`Dev wallet authorization failed: ${err?.message || 'Unknown error'}`);
         } finally {
             setIsDelegating(false);
         }
@@ -172,8 +168,14 @@ export default function OnboardingPage() {
         hapticFeedback('medium');
         setError(null);
         setDebugInfo(null);
+        setIsDelegating(true);
 
         try {
+            // Check for required signer ID
+            if (!PRIVY_SIGNER_ID) {
+                throw new Error('NEXT_PUBLIC_PRIVY_SIGNER_ID not configured');
+            }
+
             const opsWallet = solanaWallets[1];
             if (!opsWallet) {
                 throw new Error('Ops wallet not found');
@@ -186,7 +188,7 @@ export default function OnboardingPage() {
                 delegated: (a as WalletWithMetadata).delegated,
                 walletClientType: (a as WalletWithMetadata).walletClientType,
             }));
-            const walletInfo = `Ops: ${opsWallet.address.slice(0, 8)}... | delegated: ${isDelegated} | linkedWallets: ${JSON.stringify(linkedAccountsInfo)}`;
+            const walletInfo = `Ops: ${opsWallet.address.slice(0, 8)}... | delegated: ${isDelegated} | signerId: ${PRIVY_SIGNER_ID.slice(0, 8)}...`;
             console.log('[Onboarding] Wallet info:', walletInfo);
             setDebugInfo(walletInfo);
 
@@ -197,22 +199,22 @@ export default function OnboardingPage() {
                 return;
             }
 
-            console.log('[Onboarding] Delegating ops wallet:', opsWallet.address);
-            console.log('[Onboarding] Wallet object:', JSON.stringify(opsWallet, null, 2));
+            console.log('[Onboarding] Adding signer to ops wallet:', opsWallet.address);
 
-            const result = await delegateWallet({
+            // Use new Signers API instead of delegateWallet
+            const result = await addSigners({
                 address: opsWallet.address,
-                chainType: 'solana',
+                signers: [{ signerId: PRIVY_SIGNER_ID, policyIds: [] }],
             });
 
-            console.log('[Onboarding] Delegation result:', result);
-            console.log('[Onboarding] Ops wallet delegated successfully');
+            console.log('[Onboarding] addSigners result:', result);
+            console.log('[Onboarding] Ops wallet signer added successfully');
 
             // Now register with backend
             setStep('registering');
             await completeRegistration();
         } catch (err: any) {
-            console.error('[Onboarding] Ops wallet delegation failed:', err);
+            console.error('[Onboarding] Ops wallet signer failed:', err);
             console.error('[Onboarding] Full error:', JSON.stringify(err, Object.getOwnPropertyNames(err), 2));
 
             const errorDetails = {
@@ -224,7 +226,9 @@ export default function OnboardingPage() {
             };
 
             setDebugInfo(`Error: ${JSON.stringify(errorDetails)}`);
-            setError(`Ops wallet delegation failed: ${err?.message || 'Unknown error'}`);
+            setError(`Ops wallet authorization failed: ${err?.message || 'Unknown error'}`);
+        } finally {
+            setIsDelegating(false);
         }
     }
 

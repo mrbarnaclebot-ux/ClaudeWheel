@@ -44,8 +44,18 @@ class PrivyService {
 
   constructor() {
     if (env.privyAppId && env.privyAppSecret) {
-      this.client = new PrivyClient(env.privyAppId, env.privyAppSecret)
-      logger.info('Privy client initialized')
+      // Initialize with authorization key for delegated wallet signing
+      const options = env.privyAuthorizationKey
+        ? { walletApi: { authorizationPrivateKey: env.privyAuthorizationKey } }
+        : undefined
+
+      this.client = new PrivyClient(env.privyAppId, env.privyAppSecret, options)
+
+      if (env.privyAuthorizationKey) {
+        logger.info('Privy client initialized with authorization key for wallet signing')
+      } else {
+        logger.warn('Privy client initialized WITHOUT authorization key - wallet signing will fail')
+      }
     } else {
       logger.warn('Privy not configured - set PRIVY_APP_ID and PRIVY_APP_SECRET')
     }
@@ -56,6 +66,13 @@ class PrivyService {
    */
   isConfigured(): boolean {
     return this.client !== null
+  }
+
+  /**
+   * Check if wallet signing is available (requires authorization key)
+   */
+  canSignTransactions(): boolean {
+    return this.client !== null && !!env.privyAuthorizationKey
   }
 
   /**
