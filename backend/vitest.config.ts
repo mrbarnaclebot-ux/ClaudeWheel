@@ -11,5 +11,10 @@ export default defineConfig({
       exclude: ['node_modules/', 'src/**/*.test.ts'],
     },
     setupFiles: ['./src/test/setup.ts'],
+    server: {
+      deps: {
+        inline: ['pino', 'pino-pretty'],
+      },
+    },
   },
 })

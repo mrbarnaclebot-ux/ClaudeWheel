@@ -23,5 +23,30 @@ process.env.MAX_BUY_AMOUNT_SOL = '0.5'
 process.env.MAX_SELL_AMOUNT_TOKENS = '100000'
 process.env.JUPITER_API_URL = 'https://quote-api.jup.ag/v6'
 
+// Mock pino logger
+const mockLogger = {
+  info: vi.fn(),
+  error: vi.fn(),
+  warn: vi.fn(),
+  debug: vi.fn(),
+  trace: vi.fn(),
+  fatal: vi.fn(),
+  child: vi.fn(() => mockLogger),
+}
+
+const mockPino = Object.assign(vi.fn(() => mockLogger), {
+  stdTimeFunctions: {
+    isoTime: () => `,"time":"${new Date().toISOString()}"`,
+    epochTime: () => `,"time":${Date.now()}`,
+    unixTime: () => `,"time":${Math.floor(Date.now() / 1000)}`,
+    nullTime: () => '',
+  },
+})
+
+vi.mock('pino', () => ({
+  default: mockPino,
+  pino: mockPino,
+}))
+
 // Mock fetch globally
 global.fetch = vi.fn()

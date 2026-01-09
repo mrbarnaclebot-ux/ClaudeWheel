@@ -10,6 +10,7 @@ import { supabase } from '../config/database'
 import { getConnection, getBalance, getTokenBalance, getOpsWallet } from '../config/solana'
 import { env } from '../config/env'
 import { bagsFmService } from './bags-fm'
+import { jupiterService } from './jupiter.service'
 import { PriceAnalyzer } from './price-analyzer'
 import { loggers } from '../utils/logger'
 import {
@@ -22,6 +23,7 @@ import {
   getTokenConfig,
   getFlywheelState,
   updateFlywheelState,
+  updateGraduationStatus,
 } from './user-token.service'
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -35,6 +37,11 @@ const SELLS_PER_CYCLE = 5
 // Fee collection settings
 const DEV_WALLET_MIN_RESERVE_SOL = 0.01 // Keep minimum SOL in dev wallet for claiming
 const MIN_FEE_THRESHOLD_SOL = 0.01 // Minimum SOL to trigger fee collection
+
+// Failure tracking settings
+const MAX_CONSECUTIVE_FAILURES = 5 // Pause flywheel after this many consecutive failures
+const PAUSE_DURATION_MINUTES = 30 // How long to pause after failures
+const GRADUATION_CHECK_INTERVAL_MS = 5 * 60 * 1000 // Check graduation status every 5 minutes
 
 export interface TradeResult {
   userTokenId: string
@@ -150,6 +157,293 @@ class MultiUserMMService {
       } catch (error) {
         loggers.flywheel.warn({ tokenId, error: String(error) }, 'Failed to persist trade timestamp to DB')
       }
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // FAILURE TRACKING
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * Check if flywheel is paused due to repeated failures
+   */
+  private async isFlywheelPaused(state: UserFlywheelState): Promise<boolean> {
+    if (!state.paused_until) return false
+
+    const pausedUntil = new Date(state.paused_until).getTime()
+    const now = Date.now()
+
+    if (now < pausedUntil) {
+      return true
+    }
+
+    // Pause period has expired, reset it
+    await this.clearPauseState(state.user_token_id)
+    return false
+  }
+
+  /**
+   * Record a trade failure and potentially pause the flywheel
+   */
+  private async recordFailure(tokenId: string, reason: string): Promise<void> {
+    if (!supabase) return
+
+    try {
+      // Get current failure count
+      const { data } = await supabase
+        .from('user_flywheel_state')
+        .select('consecutive_failures, total_failures')
+        .eq('user_token_id', tokenId)
+        .single()
+
+      const consecutiveFailures = (data?.consecutive_failures || 0) + 1
+      const totalFailures = (data?.total_failures || 0) + 1
+
+      const updates: Record<string, unknown> = {
+        consecutive_failures: consecutiveFailures,
+        total_failures: totalFailures,
+        last_failure_reason: reason,
+        last_failure_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      }
+
+      // Check if we should pause
+      if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+        const pauseUntil = new Date(Date.now() + PAUSE_DURATION_MINUTES * 60 * 1000)
+        updates.paused_until = pauseUntil.toISOString()
+
+        loggers.flywheel.warn({
+          tokenId,
+          consecutiveFailures,
+          pauseUntil: pauseUntil.toISOString(),
+          reason,
+        }, 'Pausing flywheel due to repeated failures')
+      }
+
+      await supabase
+        .from('user_flywheel_state')
+        .update(updates)
+        .eq('user_token_id', tokenId)
+
+      loggers.flywheel.debug({
+        tokenId,
+        consecutiveFailures,
+        reason,
+      }, 'Recorded trade failure')
+    } catch (error) {
+      loggers.flywheel.error({ tokenId, error: String(error) }, 'Failed to record failure')
+    }
+  }
+
+  /**
+   * Clear failure count after successful trade
+   */
+  private async clearFailures(tokenId: string): Promise<void> {
+    if (!supabase) return
+
+    try {
+      await supabase
+        .from('user_flywheel_state')
+        .update({
+          consecutive_failures: 0,
+          last_failure_reason: null,
+          paused_until: null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('user_token_id', tokenId)
+    } catch (error) {
+      loggers.flywheel.warn({ tokenId, error: String(error) }, 'Failed to clear failures')
+    }
+  }
+
+  /**
+   * Clear pause state (called when pause period expires)
+   */
+  private async clearPauseState(tokenId: string): Promise<void> {
+    if (!supabase) return
+
+    try {
+      await supabase
+        .from('user_flywheel_state')
+        .update({
+          paused_until: null,
+          consecutive_failures: 0,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('user_token_id', tokenId)
+
+      loggers.flywheel.info({ tokenId }, 'Flywheel pause period expired, resuming')
+    } catch (error) {
+      loggers.flywheel.warn({ tokenId, error: String(error) }, 'Failed to clear pause state')
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // GRADUATION/BONDING STATUS DETECTION
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * Check and update token graduation status
+   * Graduated tokens have moved from bonding curve to DEX (Raydium, etc.)
+   */
+  private async checkAndUpdateGraduationStatus(token: UserToken): Promise<boolean> {
+    // Check if we recently checked (avoid spamming APIs)
+    if (token.created_at) {
+      const lastCheck = await this.getLastGraduationCheck(token.id)
+      if (lastCheck && Date.now() - lastCheck < GRADUATION_CHECK_INTERVAL_MS) {
+        return token.is_graduated
+      }
+    }
+
+    try {
+      // Check if token has liquidity on Jupiter (indicates graduation)
+      const hasJupiterLiquidity = await jupiterService.hasLiquidity(token.token_mint_address)
+
+      // Also check DexScreener to confirm graduation
+      const dexData = await this.checkDexScreenerGraduation(token.token_mint_address)
+
+      const isGraduated = hasJupiterLiquidity || dexData.isGraduated
+
+      // Update if status changed
+      if (isGraduated !== token.is_graduated) {
+        await updateGraduationStatus(token.id, isGraduated)
+        loggers.flywheel.info({
+          tokenSymbol: token.token_symbol,
+          tokenMint: token.token_mint_address,
+          isGraduated,
+          hasJupiterLiquidity,
+          dexGraduated: dexData.isGraduated,
+        }, 'Token graduation status updated')
+      }
+
+      // Record check time
+      await this.recordGraduationCheck(token.id)
+
+      return isGraduated
+    } catch (error) {
+      loggers.flywheel.warn({
+        tokenSymbol: token.token_symbol,
+        error: String(error),
+      }, 'Failed to check graduation status')
+      return token.is_graduated
+    }
+  }
+
+  /**
+   * Check DexScreener for graduation status
+   */
+  private async checkDexScreenerGraduation(tokenMint: string): Promise<{ isGraduated: boolean; dexId?: string }> {
+    try {
+      const response = await fetch(
+        `https://api.dexscreener.com/latest/dex/tokens/${tokenMint}`,
+        { signal: AbortSignal.timeout(5000) }
+      )
+
+      if (!response.ok) return { isGraduated: false }
+
+      const data = await response.json() as { pairs?: Array<{ dexId: string; liquidity?: { usd: number } }> }
+
+      if (!data.pairs || data.pairs.length === 0) return { isGraduated: false }
+
+      // Get pair with highest liquidity
+      const bestPair = data.pairs.reduce((best, pair) => {
+        return (pair.liquidity?.usd || 0) > (best.liquidity?.usd || 0) ? pair : best
+      }, data.pairs[0])
+
+      // Bonding curve DEXes
+      const bondingCurveDexes = ['pump', 'bags', 'moonshot', 'bonding']
+      const dexId = (bestPair.dexId || '').toLowerCase()
+      const isGraduated = !bondingCurveDexes.some(bc => dexId.includes(bc))
+
+      return { isGraduated, dexId: bestPair.dexId }
+    } catch {
+      return { isGraduated: false }
+    }
+  }
+
+  /**
+   * Get last graduation check timestamp from database
+   */
+  private async getLastGraduationCheck(tokenId: string): Promise<number | null> {
+    if (!supabase) return null
+
+    try {
+      const { data } = await supabase
+        .from('user_tokens')
+        .select('last_graduation_check')
+        .eq('id', tokenId)
+        .single()
+
+      if (data?.last_graduation_check) {
+        return new Date(data.last_graduation_check).getTime()
+      }
+    } catch {
+      // Ignore - column may not exist yet
+    }
+    return null
+  }
+
+  /**
+   * Record graduation check timestamp
+   */
+  private async recordGraduationCheck(tokenId: string): Promise<void> {
+    if (!supabase) return
+
+    try {
+      await supabase
+        .from('user_tokens')
+        .update({ last_graduation_check: new Date().toISOString() })
+        .eq('id', tokenId)
+    } catch {
+      // Ignore - column may not exist yet
+    }
+  }
+
+  /**
+   * Determine which trading route to use
+   */
+  private getTradingRoute(token: UserToken, config: UserTokenConfig): 'bags' | 'jupiter' {
+    if (config.trading_route === 'bags') return 'bags'
+    if (config.trading_route === 'jupiter') return 'jupiter'
+
+    // Auto mode - use graduation status
+    return token.is_graduated ? 'jupiter' : 'bags'
+  }
+
+  /**
+   * Get trade quote from appropriate exchange
+   */
+  private async getTradeQuote(
+    route: 'bags' | 'jupiter',
+    inputMint: string,
+    outputMint: string,
+    amount: number,
+    side: 'buy' | 'sell',
+    slippageBps: number
+  ): Promise<{ rawQuoteResponse: unknown; outputAmount: number } | null> {
+    if (route === 'jupiter') {
+      const quote = await jupiterService.getTradeQuote(inputMint, outputMint, amount, slippageBps)
+      if (!quote) return null
+      return { rawQuoteResponse: quote.rawQuoteResponse, outputAmount: quote.outputAmount }
+    } else {
+      const quote = await bagsFmService.getTradeQuote(inputMint, outputMint, amount, side, slippageBps)
+      if (!quote) return null
+      return { rawQuoteResponse: quote.rawQuoteResponse, outputAmount: quote.outputAmount }
+    }
+  }
+
+  /**
+   * Generate swap transaction from appropriate exchange
+   */
+  private async generateSwapTx(
+    route: 'bags' | 'jupiter',
+    walletAddress: string,
+    quoteResponse: unknown
+  ): Promise<{ transaction: string; lastValidBlockHeight: number } | null> {
+    if (route === 'jupiter') {
+      return jupiterService.generateSwapTransaction(walletAddress, quoteResponse as any)
+    } else {
+      return bagsFmService.generateSwapTransaction(walletAddress, quoteResponse as any)
     }
   }
 
@@ -357,11 +651,7 @@ class MultiUserMMService {
 
     const connection = getConnection()
 
-    // Step 1: Collect fees from dev wallet to ops wallet
-    // This ensures ops wallet has SOL for trading
-    await this.collectFees(token, connection)
-
-    // Get current flywheel state
+    // Get current flywheel state first
     let state = await getFlywheelState(token.id)
     if (!state) {
       // Initialize state if not exists
@@ -370,6 +660,8 @@ class MultiUserMMService {
         cycle_phase: 'buy',
         buy_count: 0,
         sell_count: 0,
+        consecutive_failures: 0,
+        total_failures: 0,
       }])
       state = await getFlywheelState(token.id)
     }
@@ -377,6 +669,38 @@ class MultiUserMMService {
     if (!state) {
       return { ...baseResult, tradeType: 'buy', success: false, amount: 0, error: 'Failed to get flywheel state' }
     }
+
+    // Check if flywheel is paused due to repeated failures
+    if (await this.isFlywheelPaused(state)) {
+      const pausedUntil = state.paused_until ? new Date(state.paused_until).toLocaleTimeString() : 'unknown'
+      loggers.flywheel.info({
+        tokenSymbol: token.token_symbol,
+        pausedUntil,
+        consecutiveFailures: state.consecutive_failures,
+        lastFailureReason: state.last_failure_reason,
+      }, 'Flywheel paused due to repeated failures, skipping')
+      return null
+    }
+
+    // Check and update graduation status (for auto route detection)
+    if (config.trading_route === 'auto') {
+      const isGraduated = await this.checkAndUpdateGraduationStatus(token)
+      // Update local token object with new status
+      token.is_graduated = isGraduated
+    }
+
+    // Determine trading route
+    const tradingRoute = this.getTradingRoute(token, config)
+    loggers.flywheel.debug({
+      tokenSymbol: token.token_symbol,
+      tradingRoute,
+      isGraduated: token.is_graduated,
+      configRoute: config.trading_route,
+    }, 'Using trading route')
+
+    // Collect fees from dev wallet to ops wallet
+    // This ensures ops wallet has SOL for trading
+    await this.collectFees(token, connection)
 
     // Get ops wallet for trading (this wallet has the private key for signing trades)
     const opsWallet = await getDecryptedOpsWallet(token.id)
@@ -386,12 +710,12 @@ class MultiUserMMService {
 
     // Determine trade based on algorithm mode
     if (config.algorithm_mode === 'simple') {
-      return this.runSimpleAlgorithm(token, config, state, opsWallet, connection, baseResult)
+      return this.runSimpleAlgorithm(token, config, state, opsWallet, connection, baseResult, tradingRoute)
     } else if (config.algorithm_mode === 'rebalance') {
-      return this.runRebalanceAlgorithm(token, config, state, opsWallet, connection, baseResult)
+      return this.runRebalanceAlgorithm(token, config, state, opsWallet, connection, baseResult, tradingRoute)
     } else {
       // Smart mode - signal-based trading with RSI, Bollinger Bands, and trend analysis
-      return this.runSmartAlgorithm(token, config, state, opsWallet, connection, baseResult)
+      return this.runSmartAlgorithm(token, config, state, opsWallet, connection, baseResult, tradingRoute)
     }
   }
 
@@ -404,7 +728,8 @@ class MultiUserMMService {
     state: UserFlywheelState,
     wallet: Keypair,
     connection: Connection,
-    baseResult: { userTokenId: string; tokenMint: string; tokenSymbol: string }
+    baseResult: { userTokenId: string; tokenMint: string; tokenSymbol: string },
+    tradingRoute: 'bags' | 'jupiter' = 'bags'
   ): Promise<TradeResult | null> {
     const tokenMint = new PublicKey(token.token_mint_address)
 
@@ -425,10 +750,17 @@ class MultiUserMMService {
       const buyAmount = this.randomBetween(config.min_buy_amount_sol, config.max_buy_amount_sol)
       const lamports = Math.floor(buyAmount * 1e9)
 
-      loggers.flywheel.info({ tokenSymbol: token.token_symbol, buyAmount, buyCount: state.buy_count, maxBuys: BUYS_PER_CYCLE }, 'Executing BUY')
+      loggers.flywheel.info({
+        tokenSymbol: token.token_symbol,
+        buyAmount,
+        buyCount: state.buy_count,
+        maxBuys: BUYS_PER_CYCLE,
+        route: tradingRoute,
+      }, 'Executing BUY')
 
-      // Get quote and execute
-      const quote = await bagsFmService.getTradeQuote(
+      // Get quote from appropriate exchange
+      const quote = await this.getTradeQuote(
+        tradingRoute,
         SOL_MINT,
         token.token_mint_address,
         lamports,
@@ -437,14 +769,21 @@ class MultiUserMMService {
       )
 
       if (!quote?.rawQuoteResponse) {
-        return { ...baseResult, tradeType: 'buy', success: false, amount: buyAmount, error: 'Failed to get quote' }
+        const errorMsg = `Failed to get ${tradingRoute} quote`
+        await this.recordFailure(token.id, errorMsg)
+        return { ...baseResult, tradeType: 'buy', success: false, amount: buyAmount, error: errorMsg }
       }
 
-      const signature = await this.executeSwap(connection, wallet, quote.rawQuoteResponse)
+      const signature = await this.executeSwapWithRoute(connection, wallet, quote.rawQuoteResponse, tradingRoute)
 
       if (!signature) {
-        return { ...baseResult, tradeType: 'buy', success: false, amount: buyAmount, error: 'Swap failed' }
+        const errorMsg = `${tradingRoute} swap failed`
+        await this.recordFailure(token.id, errorMsg)
+        return { ...baseResult, tradeType: 'buy', success: false, amount: buyAmount, error: errorMsg }
       }
+
+      // Clear failures on success
+      await this.clearFailures(token.id)
 
       // Update state
       const newBuyCount = state.buy_count + 1
@@ -504,10 +843,17 @@ class MultiUserMMService {
 
       const tokenUnits = Math.floor(actualSellAmount * Math.pow(10, token.token_decimals))
 
-      loggers.flywheel.info({ tokenSymbol: token.token_symbol, sellAmount: actualSellAmount, sellCount: state.sell_count, maxSells: SELLS_PER_CYCLE }, 'Executing SELL')
+      loggers.flywheel.info({
+        tokenSymbol: token.token_symbol,
+        sellAmount: actualSellAmount,
+        sellCount: state.sell_count,
+        maxSells: SELLS_PER_CYCLE,
+        route: tradingRoute,
+      }, 'Executing SELL')
 
-      // Get quote and execute
-      const quote = await bagsFmService.getTradeQuote(
+      // Get quote from appropriate exchange
+      const quote = await this.getTradeQuote(
+        tradingRoute,
         token.token_mint_address,
         SOL_MINT,
         tokenUnits,
@@ -516,14 +862,21 @@ class MultiUserMMService {
       )
 
       if (!quote?.rawQuoteResponse) {
-        return { ...baseResult, tradeType: 'sell', success: false, amount: actualSellAmount, error: 'Failed to get quote' }
+        const errorMsg = `Failed to get ${tradingRoute} quote`
+        await this.recordFailure(token.id, errorMsg)
+        return { ...baseResult, tradeType: 'sell', success: false, amount: actualSellAmount, error: errorMsg }
       }
 
-      const signature = await this.executeSwap(connection, wallet, quote.rawQuoteResponse)
+      const signature = await this.executeSwapWithRoute(connection, wallet, quote.rawQuoteResponse, tradingRoute)
 
       if (!signature) {
-        return { ...baseResult, tradeType: 'sell', success: false, amount: actualSellAmount, error: 'Swap failed' }
+        const errorMsg = `${tradingRoute} swap failed`
+        await this.recordFailure(token.id, errorMsg)
+        return { ...baseResult, tradeType: 'sell', success: false, amount: actualSellAmount, error: errorMsg }
       }
+
+      // Clear failures on success
+      await this.clearFailures(token.id)
 
       // Update state
       const newSellCount = state.sell_count + 1
@@ -545,6 +898,57 @@ class MultiUserMMService {
   }
 
   /**
+   * Execute swap with the appropriate route
+   */
+  private async executeSwapWithRoute(
+    connection: Connection,
+    wallet: Keypair,
+    quoteResponse: unknown,
+    route: 'bags' | 'jupiter'
+  ): Promise<string | null> {
+    const swapData = await this.generateSwapTx(route, wallet.publicKey.toString(), quoteResponse)
+
+    if (!swapData) {
+      loggers.flywheel.error({ route }, 'Failed to get swap transaction')
+      return null
+    }
+
+    // Deserialize the transaction - Jupiter uses base64, Bags uses base58
+    let transaction: VersionedTransaction
+    try {
+      if (route === 'jupiter') {
+        const txBuffer = Buffer.from(swapData.transaction, 'base64')
+        transaction = VersionedTransaction.deserialize(txBuffer)
+      } else {
+        const txBuffer = bs58.decode(swapData.transaction)
+        transaction = VersionedTransaction.deserialize(txBuffer)
+      }
+    } catch (error) {
+      loggers.flywheel.error({ route, error: String(error) }, 'Failed to deserialize transaction')
+      return null
+    }
+
+    // Use unified transaction utility for better retry handling
+    const result = await sendVersionedTransactionWithRetry(
+      connection,
+      transaction,
+      [wallet],
+      {
+        skipPreflight: true,
+        maxRetries: 3,
+        logContext: { service: 'flywheel', type: 'swap', route },
+      }
+    )
+
+    if (!result.success) {
+      loggers.flywheel.error({ route, error: result.error }, 'Swap transaction failed')
+      return null
+    }
+
+    return result.signature || null
+  }
+
+  /**
    * Rebalance algorithm: maintain target SOL/token allocation
    */
   private async runRebalanceAlgorithm(
@@ -553,7 +957,8 @@ class MultiUserMMService {
     state: UserFlywheelState,
     wallet: Keypair,
     connection: Connection,
-    baseResult: { userTokenId: string; tokenMint: string; tokenSymbol: string }
+    baseResult: { userTokenId: string; tokenMint: string; tokenSymbol: string },
+    tradingRoute: 'bags' | 'jupiter' = 'bags'
   ): Promise<TradeResult | null> {
     const tokenMint = new PublicKey(token.token_mint_address)
 
@@ -562,7 +967,8 @@ class MultiUserMMService {
     const tokenBalance = await getTokenBalance(wallet.publicKey, tokenMint)
 
     // Get token price (approximate from a small quote)
-    const priceQuote = await bagsFmService.getTradeQuote(
+    const priceQuote = await this.getTradeQuote(
+      tradingRoute,
       SOL_MINT,
       token.token_mint_address,
       1e9, // 1 SOL
@@ -571,7 +977,9 @@ class MultiUserMMService {
     )
 
     if (!priceQuote) {
-      return { ...baseResult, tradeType: 'buy', success: false, amount: 0, error: 'Failed to get price' }
+      const errorMsg = `Failed to get price quote via ${tradingRoute}`
+      await this.recordFailure(token.id, errorMsg)
+      return { ...baseResult, tradeType: 'buy', success: false, amount: 0, error: errorMsg }
     }
 
     const tokensPerSol = priceQuote.outputAmount / Math.pow(10, token.token_decimals)
@@ -608,9 +1016,10 @@ class MultiUserMMService {
 
       const lamports = Math.floor(buyAmount * 1e9)
 
-      loggers.flywheel.info({ tokenSymbol: token.token_symbol, buyAmount, action: 'rebalance' }, 'Executing rebalance BUY')
+      loggers.flywheel.info({ tokenSymbol: token.token_symbol, buyAmount, action: 'rebalance', route: tradingRoute }, 'Executing rebalance BUY')
 
-      const quote = await bagsFmService.getTradeQuote(
+      const quote = await this.getTradeQuote(
+        tradingRoute,
         SOL_MINT,
         token.token_mint_address,
         lamports,
@@ -619,15 +1028,20 @@ class MultiUserMMService {
       )
 
       if (!quote?.rawQuoteResponse) {
-        return { ...baseResult, tradeType: 'buy', success: false, amount: buyAmount, error: 'Failed to get quote' }
+        const errorMsg = `Failed to get buy quote via ${tradingRoute}`
+        await this.recordFailure(token.id, errorMsg)
+        return { ...baseResult, tradeType: 'buy', success: false, amount: buyAmount, error: errorMsg }
       }
 
-      const signature = await this.executeSwap(connection, wallet, quote.rawQuoteResponse)
+      const signature = await this.executeSwapWithRoute(connection, wallet, quote.rawQuoteResponse, tradingRoute)
 
       if (!signature) {
-        return { ...baseResult, tradeType: 'buy', success: false, amount: buyAmount, error: 'Swap failed' }
+        const errorMsg = `Rebalance buy swap failed via ${tradingRoute}`
+        await this.recordFailure(token.id, errorMsg)
+        return { ...baseResult, tradeType: 'buy', success: false, amount: buyAmount, error: errorMsg }
       }
 
+      await this.clearFailures(token.id)
       await this.recordTransaction(token.id, 'buy', buyAmount, signature)
       await this.updateFlywheelCheck(token.id, 'traded')
       return { ...baseResult, tradeType: 'buy', success: true, amount: buyAmount, signature }
@@ -643,9 +1057,10 @@ class MultiUserMMService {
 
       const tokenUnits = Math.floor(sellTokens * Math.pow(10, token.token_decimals))
 
-      loggers.flywheel.info({ tokenSymbol: token.token_symbol, sellAmount: sellTokens, action: 'rebalance' }, 'Executing rebalance SELL')
+      loggers.flywheel.info({ tokenSymbol: token.token_symbol, sellAmount: sellTokens, action: 'rebalance', route: tradingRoute }, 'Executing rebalance SELL')
 
-      const quote = await bagsFmService.getTradeQuote(
+      const quote = await this.getTradeQuote(
+        tradingRoute,
         token.token_mint_address,
         SOL_MINT,
         tokenUnits,
@@ -654,15 +1069,20 @@ class MultiUserMMService {
       )
 
       if (!quote?.rawQuoteResponse) {
-        return { ...baseResult, tradeType: 'sell', success: false, amount: sellTokens, error: 'Failed to get quote' }
+        const errorMsg = `Failed to get sell quote via ${tradingRoute}`
+        await this.recordFailure(token.id, errorMsg)
+        return { ...baseResult, tradeType: 'sell', success: false, amount: sellTokens, error: errorMsg }
       }
 
-      const signature = await this.executeSwap(connection, wallet, quote.rawQuoteResponse)
+      const signature = await this.executeSwapWithRoute(connection, wallet, quote.rawQuoteResponse, tradingRoute)
 
       if (!signature) {
-        return { ...baseResult, tradeType: 'sell', success: false, amount: sellTokens, error: 'Swap failed' }
+        const errorMsg = `Rebalance sell swap failed via ${tradingRoute}`
+        await this.recordFailure(token.id, errorMsg)
+        return { ...baseResult, tradeType: 'sell', success: false, amount: sellTokens, error: errorMsg }
       }
 
+      await this.clearFailures(token.id)
       await this.recordTransaction(token.id, 'sell', sellTokens, signature)
       await this.updateFlywheelCheck(token.id, 'traded')
       return { ...baseResult, tradeType: 'sell', success: true, amount: sellTokens, signature }
@@ -680,7 +1100,8 @@ class MultiUserMMService {
     state: UserFlywheelState,
     wallet: Keypair,
     connection: Connection,
-    baseResult: { userTokenId: string; tokenMint: string; tokenSymbol: string }
+    baseResult: { userTokenId: string; tokenMint: string; tokenSymbol: string },
+    tradingRoute: 'bags' | 'jupiter' = 'bags'
   ): Promise<TradeResult | null> {
     const tokenMint = new PublicKey(token.token_mint_address)
 
@@ -699,7 +1120,7 @@ class MultiUserMMService {
     const priceData = await analyzer.fetchCurrentPrice()
     if (!priceData) {
       loggers.flywheel.warn({ tokenSymbol: token.token_symbol }, 'No price data available, falling back to simple mode')
-      return this.runSimpleAlgorithm(token, config, state, wallet, connection, baseResult)
+      return this.runSimpleAlgorithm(token, config, state, wallet, connection, baseResult, tradingRoute)
     }
 
     // Get trading signals
@@ -752,9 +1173,10 @@ class MultiUserMMService {
       const buyAmount = Math.min(Math.max(baseAmount, config.min_buy_amount_sol), config.max_buy_amount_sol)
       const lamports = Math.floor(buyAmount * 1e9)
 
-      loggers.flywheel.info({ tokenSymbol: token.token_symbol, buyAmount, action: optimalSignal.action, confidence: optimalSignal.confidence }, 'Executing SMART BUY')
+      loggers.flywheel.info({ tokenSymbol: token.token_symbol, buyAmount, action: optimalSignal.action, confidence: optimalSignal.confidence, route: tradingRoute }, 'Executing SMART BUY')
 
-      const quote = await bagsFmService.getTradeQuote(
+      const quote = await this.getTradeQuote(
+        tradingRoute,
         SOL_MINT,
         token.token_mint_address,
         lamports,
@@ -763,16 +1185,21 @@ class MultiUserMMService {
       )
 
       if (!quote?.rawQuoteResponse) {
-        return { ...baseResult, tradeType: 'buy', success: false, amount: buyAmount, error: 'Failed to get quote' }
+        const errorMsg = `Failed to get smart buy quote via ${tradingRoute}`
+        await this.recordFailure(token.id, errorMsg)
+        return { ...baseResult, tradeType: 'buy', success: false, amount: buyAmount, error: errorMsg }
       }
 
-      const signature = await this.executeSwap(connection, wallet, quote.rawQuoteResponse)
+      const signature = await this.executeSwapWithRoute(connection, wallet, quote.rawQuoteResponse, tradingRoute)
 
       if (!signature) {
-        return { ...baseResult, tradeType: 'buy', success: false, amount: buyAmount, error: 'Swap failed' }
+        const errorMsg = `Smart buy swap failed via ${tradingRoute}`
+        await this.recordFailure(token.id, errorMsg)
+        return { ...baseResult, tradeType: 'buy', success: false, amount: buyAmount, error: errorMsg }
       }
 
       // Record trade and cooldown
+      await this.clearFailures(token.id)
       await this.recordTradeTimestamp(token.id)
       await this.recordTransaction(token.id, 'buy', buyAmount, signature)
       await this.updateFlywheelCheck(token.id, 'smart_buy')
@@ -797,9 +1224,10 @@ class MultiUserMMService {
       const sellAmount = Math.min(tokenBalance * (positionSizePct / 100), tokenBalance * 0.4) // Max 40% per trade
       const tokenUnits = Math.floor(sellAmount * Math.pow(10, token.token_decimals))
 
-      loggers.flywheel.info({ tokenSymbol: token.token_symbol, sellAmount, action: optimalSignal.action, confidence: optimalSignal.confidence }, 'Executing SMART SELL')
+      loggers.flywheel.info({ tokenSymbol: token.token_symbol, sellAmount, action: optimalSignal.action, confidence: optimalSignal.confidence, route: tradingRoute }, 'Executing SMART SELL')
 
-      const quote = await bagsFmService.getTradeQuote(
+      const quote = await this.getTradeQuote(
+        tradingRoute,
         token.token_mint_address,
         SOL_MINT,
         tokenUnits,
@@ -808,16 +1236,21 @@ class MultiUserMMService {
       )
 
       if (!quote?.rawQuoteResponse) {
-        return { ...baseResult, tradeType: 'sell', success: false, amount: sellAmount, error: 'Failed to get quote' }
+        const errorMsg = `Failed to get smart sell quote via ${tradingRoute}`
+        await this.recordFailure(token.id, errorMsg)
+        return { ...baseResult, tradeType: 'sell', success: false, amount: sellAmount, error: errorMsg }
       }
 
-      const signature = await this.executeSwap(connection, wallet, quote.rawQuoteResponse)
+      const signature = await this.executeSwapWithRoute(connection, wallet, quote.rawQuoteResponse, tradingRoute)
 
       if (!signature) {
-        return { ...baseResult, tradeType: 'sell', success: false, amount: sellAmount, error: 'Swap failed' }
+        const errorMsg = `Smart sell swap failed via ${tradingRoute}`
+        await this.recordFailure(token.id, errorMsg)
+        return { ...baseResult, tradeType: 'sell', success: false, amount: sellAmount, error: errorMsg }
       }
 
       // Record trade and cooldown
+      await this.clearFailures(token.id)
       await this.recordTradeTimestamp(token.id)
       await this.recordTransaction(token.id, 'sell', sellAmount, signature)
       await this.updateFlywheelCheck(token.id, 'smart_sell')

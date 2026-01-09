@@ -43,6 +43,8 @@ export interface UserTokenConfig {
   rebalance_threshold: number
   use_twap: boolean
   twap_threshold_usd: number
+  // Trading route: 'bags' (bonding curve), 'jupiter' (graduated), 'auto' (detect)
+  trading_route: 'bags' | 'jupiter' | 'auto'
   updated_at: string
 }
 
@@ -55,6 +57,12 @@ export interface UserFlywheelState {
   sell_phase_token_snapshot: number
   sell_amount_per_tx: number
   last_trade_at: string | null
+  // Failure tracking
+  consecutive_failures: number
+  last_failure_reason: string | null
+  last_failure_at: string | null
+  paused_until: string | null
+  total_failures: number
   updated_at: string
 }
 
@@ -85,6 +93,7 @@ const DEFAULT_CONFIG: Omit<UserTokenConfig, 'id' | 'user_token_id' | 'updated_at
   rebalance_threshold: 10,
   use_twap: true,
   twap_threshold_usd: 50,
+  trading_route: 'auto',
 }
 
 const DEFAULT_FLYWHEEL_STATE: Omit<UserFlywheelState, 'id' | 'user_token_id' | 'updated_at'> = {
@@ -94,6 +103,12 @@ const DEFAULT_FLYWHEEL_STATE: Omit<UserFlywheelState, 'id' | 'user_token_id' | '
   sell_phase_token_snapshot: 0,
   sell_amount_per_tx: 0,
   last_trade_at: null,
+  // Failure tracking
+  consecutive_failures: 0,
+  last_failure_reason: null,
+  last_failure_at: null,
+  paused_until: null,
+  total_failures: 0,
 }
 
 /**
@@ -459,6 +474,8 @@ export async function getFlywheelState(userTokenId: string): Promise<UserFlywhee
     sell_count: Number(data.sell_count) || 0,
     sell_phase_token_snapshot: Number(data.sell_phase_token_snapshot) || 0,
     sell_amount_per_tx: Number(data.sell_amount_per_tx) || 0,
+    consecutive_failures: Number(data.consecutive_failures) || 0,
+    total_failures: Number(data.total_failures) || 0,
   } as UserFlywheelState
 }
 
