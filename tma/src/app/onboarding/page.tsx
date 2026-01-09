@@ -7,7 +7,7 @@ import { useTelegram } from '@/components/TelegramProvider';
 import { motion, AnimatePresence } from 'framer-motion';
 import { api } from '@/lib/api';
 
-type Step = 'welcome' | 'creating_wallets' | 'delegation' | 'complete';
+type Step = 'welcome' | 'creating_wallets' | 'delegate_dev' | 'delegate_ops' | 'registering' | 'complete';
 
 export default function OnboardingPage() {
     const router = useRouter();
@@ -26,7 +26,7 @@ export default function OnboardingPage() {
     // If user already has 2 wallets, skip to delegation
     useEffect(() => {
         if (ready && authenticated && wallets.length >= 2 && step === 'welcome') {
-            setStep('delegation');
+            setStep('delegate_dev');
         }
     }, [ready, authenticated, wallets.length, step]);
 
@@ -63,7 +63,7 @@ export default function OnboardingPage() {
                 console.log('[Onboarding] Ops wallet created:', opsWallet?.address);
             }
 
-            setStep('delegation');
+            setStep('delegate_dev');
         } catch (err: any) {
             console.error('[Onboarding] Wallet creation failed:', err);
             console.error('[Onboarding] Error details:', err?.message, err?.code, err?.cause);
@@ -74,37 +74,64 @@ export default function OnboardingPage() {
         }
     }
 
-    async function handleDelegate() {
+    async function handleDelegateDev() {
         hapticFeedback('medium');
         setError(null);
 
         try {
-            // Step 1: Delegate both wallets
-            console.log('[Onboarding] Starting delegation for wallets:', solanaWallets.map(w => w.address));
-            for (let i = 0; i < solanaWallets.length; i++) {
-                const wallet = solanaWallets[i];
-                console.log(`[Onboarding] Delegating wallet ${i + 1}:`, wallet.address);
-                try {
-                    await delegateWallet({
-                        address: wallet.address,
-                        chainType: 'solana',
-                    });
-                    console.log(`[Onboarding] Wallet ${i + 1} delegated successfully`);
-                } catch (delegateErr: any) {
-                    console.error(`[Onboarding] Delegation failed for wallet ${i + 1}:`, delegateErr);
-                    throw new Error(`Delegation failed: ${delegateErr?.message || 'Unknown error'}`);
-                }
+            const devWallet = solanaWallets[0];
+            if (!devWallet) {
+                throw new Error('Dev wallet not found');
             }
 
-            // Step 2: Get auth token
+            console.log('[Onboarding] Delegating dev wallet:', devWallet.address);
+            await delegateWallet({
+                address: devWallet.address,
+                chainType: 'solana',
+            });
+            console.log('[Onboarding] Dev wallet delegated successfully');
+
+            setStep('delegate_ops');
+        } catch (err: any) {
+            console.error('[Onboarding] Dev wallet delegation failed:', err);
+            setError(`Dev wallet delegation failed: ${err?.message || 'Unknown error'}`);
+        }
+    }
+
+    async function handleDelegateOps() {
+        hapticFeedback('medium');
+        setError(null);
+
+        try {
+            const opsWallet = solanaWallets[1];
+            if (!opsWallet) {
+                throw new Error('Ops wallet not found');
+            }
+
+            console.log('[Onboarding] Delegating ops wallet:', opsWallet.address);
+            await delegateWallet({
+                address: opsWallet.address,
+                chainType: 'solana',
+            });
+            console.log('[Onboarding] Ops wallet delegated successfully');
+
+            // Now register with backend
+            setStep('registering');
+            await completeRegistration();
+        } catch (err: any) {
+            console.error('[Onboarding] Ops wallet delegation failed:', err);
+            setError(`Ops wallet delegation failed: ${err?.message || 'Unknown error'}`);
+        }
+    }
+
+    async function completeRegistration() {
+        try {
             console.log('[Onboarding] Getting access token...');
             const authToken = await getAccessToken();
             if (!authToken) {
                 throw new Error('Failed to get auth token');
             }
-            console.log('[Onboarding] Got access token');
 
-            // Step 3: Register with backend
             console.log('[Onboarding] Registering with backend...');
             const payload = {
                 devWalletAddress: solanaWallets[0]?.address,
@@ -112,7 +139,6 @@ export default function OnboardingPage() {
                 telegramId: telegramUser?.id,
                 telegramUsername: telegramUser?.username,
             };
-            console.log('[Onboarding] Payload:', payload);
 
             const response = await api.post('/api/users/complete-onboarding', payload, {
                 headers: { Authorization: `Bearer ${authToken}` },
@@ -122,12 +148,12 @@ export default function OnboardingPage() {
             hapticFeedback('heavy');
             setStep('complete');
 
-            // Navigate to dashboard after brief delay
             setTimeout(() => router.replace('/dashboard'), 1500);
         } catch (err: any) {
-            console.error('[Onboarding] Setup failed:', err);
+            console.error('[Onboarding] Registration failed:', err);
             const errorMsg = err?.response?.data?.error || err?.message || 'Unknown error';
-            setError(`Failed: ${errorMsg}`);
+            setError(`Registration failed: ${errorMsg}`);
+            setStep('delegate_ops'); // Go back to retry
         }
     }
 
@@ -195,9 +221,9 @@ export default function OnboardingPage() {
                     </motion.div>
                 )}
 
-                {step === 'delegation' && (
+                {step === 'delegate_dev' && (
                     <motion.div
-                        key="delegation"
+                        key="delegate_dev"
                         initial={{ opacity: 0, y: 20 }}
                         animate={{ opacity: 1, y: 0 }}
                         exit={{ opacity: 0, y: -20 }}
@@ -205,41 +231,79 @@ export default function OnboardingPage() {
                     >
                         <div className="flex-1 flex flex-col items-center justify-center">
                             <div className="text-5xl mb-6">🔐</div>
-                            <h2 className="text-xl font-bold mb-3">Enable Automated Trading</h2>
+                            <h2 className="text-xl font-bold mb-3">Authorize Dev Wallet</h2>
                             <p className="text-gray-400 text-center mb-6 max-w-sm">
-                                Allow ClaudeWheel to execute trades on your behalf.
-                                Your keys stay secure with Privy.
+                                Step 1 of 2: Enable trading for your Dev wallet.
                             </p>
 
                             <div className="bg-gray-800/50 rounded-xl p-4 w-full mb-6">
-                                <p className="text-sm text-gray-400 mb-3">Your Wallets:</p>
-                                <div className="space-y-2">
-                                    <div>
-                                        <span className="text-xs text-gray-500">Dev Wallet</span>
-                                        <p className="text-green-400 font-mono text-sm truncate">
-                                            {solanaWallets[0]?.address}
-                                        </p>
-                                    </div>
-                                    <div>
-                                        <span className="text-xs text-gray-500">Ops Wallet</span>
-                                        <p className="text-green-400 font-mono text-sm truncate">
-                                            {solanaWallets[1]?.address}
-                                        </p>
-                                    </div>
-                                </div>
+                                <span className="text-xs text-gray-500">Dev Wallet</span>
+                                <p className="text-green-400 font-mono text-sm truncate">
+                                    {solanaWallets[0]?.address}
+                                </p>
                             </div>
                         </div>
 
                         <button
-                            onClick={handleDelegate}
+                            onClick={handleDelegateDev}
                             className="w-full bg-green-600 hover:bg-green-500 text-white py-4 rounded-xl font-medium text-lg"
                         >
-                            Authorize Trading
+                            Authorize Dev Wallet
                         </button>
 
                         {error && (
                             <p className="text-red-400 text-sm text-center mt-4">{error}</p>
                         )}
+                    </motion.div>
+                )}
+
+                {step === 'delegate_ops' && (
+                    <motion.div
+                        key="delegate_ops"
+                        initial={{ opacity: 0, y: 20 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: -20 }}
+                        className="flex-1 flex flex-col"
+                    >
+                        <div className="flex-1 flex flex-col items-center justify-center">
+                            <div className="text-5xl mb-6">🔐</div>
+                            <h2 className="text-xl font-bold mb-3">Authorize Ops Wallet</h2>
+                            <p className="text-gray-400 text-center mb-6 max-w-sm">
+                                Step 2 of 2: Enable trading for your Ops wallet.
+                            </p>
+
+                            <div className="bg-gray-800/50 rounded-xl p-4 w-full mb-6">
+                                <span className="text-xs text-gray-500">Ops Wallet</span>
+                                <p className="text-green-400 font-mono text-sm truncate">
+                                    {solanaWallets[1]?.address}
+                                </p>
+                            </div>
+                        </div>
+
+                        <button
+                            onClick={handleDelegateOps}
+                            className="w-full bg-green-600 hover:bg-green-500 text-white py-4 rounded-xl font-medium text-lg"
+                        >
+                            Authorize Ops Wallet
+                        </button>
+
+                        {error && (
+                            <p className="text-red-400 text-sm text-center mt-4">{error}</p>
+                        )}
+                    </motion.div>
+                )}
+
+                {step === 'registering' && (
+                    <motion.div
+                        key="registering"
+                        initial={{ opacity: 0, y: 20 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: -20 }}
+                        className="flex-1 flex flex-col items-center justify-center text-center"
+                    >
+                        <div className="animate-spin w-12 h-12 border-3 border-green-500 border-t-transparent rounded-full mb-6" />
+                        <h2 className="text-xl font-medium mb-2">Completing Setup</h2>
+                        <p className="text-gray-400">Registering with backend...</p>
                     </motion.div>
                 )}
 
