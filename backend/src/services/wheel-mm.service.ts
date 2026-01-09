@@ -10,7 +10,6 @@ import { supabase } from '../config/database'
 import { getConnection, getBalance, getTokenBalance, getDevWallet, getOpsWallet } from '../config/solana'
 import { env } from '../config/env'
 import { bagsFmService } from './bags-fm'
-import { jupiterService } from './jupiter.service'
 import { loggers } from '../utils/logger'
 import { sendVersionedTransactionWithRetry } from '../utils/transaction'
 import { loadFlywheelState, saveFlywheelState, FlywheelState } from '../config/database'
@@ -133,22 +132,23 @@ class WheelMMService {
         buyAmount,
         buyCount: state.buy_count,
         maxBuys: BUYS_PER_CYCLE,
-      }, 'WHEEL: Executing BUY')
+      }, 'WHEEL: Executing BUY via Bags.fm')
 
-      // Get quote from Jupiter (WHEEL is graduated)
-      const quote = await jupiterService.getTradeQuote(
+      // Get quote from Bags.fm (WHEEL graduated to Meteora, routed through Bags.fm)
+      const quote = await bagsFmService.getTradeQuote(
         SOL_MINT,
         WHEEL_TOKEN_MINT,
         lamports,
+        'buy',
         SLIPPAGE_BPS
       )
 
       if (!quote?.rawQuoteResponse) {
-        loggers.flywheel.error('WHEEL: Failed to get Jupiter quote for buy')
+        loggers.flywheel.error('WHEEL: Failed to get Bags.fm quote for buy')
         return { success: false, tradeType: 'buy', amount: buyAmount, error: 'Failed to get quote' }
       }
 
-      // Execute swap
+      // Execute swap via Bags.fm
       const signature = await this.executeSwap(connection, wallet, quote.rawQuoteResponse)
 
       if (!signature) {
@@ -218,22 +218,23 @@ class WheelMMService {
         sellAmount,
         sellCount: state.sell_count,
         maxSells: SELLS_PER_CYCLE,
-      }, 'WHEEL: Executing SELL')
+      }, 'WHEEL: Executing SELL via Bags.fm')
 
-      // Get quote from Jupiter
-      const quote = await jupiterService.getTradeQuote(
+      // Get quote from Bags.fm
+      const quote = await bagsFmService.getTradeQuote(
         WHEEL_TOKEN_MINT,
         SOL_MINT,
         tokenUnits,
+        'sell',
         SLIPPAGE_BPS
       )
 
       if (!quote?.rawQuoteResponse) {
-        loggers.flywheel.error('WHEEL: Failed to get Jupiter quote for sell')
+        loggers.flywheel.error('WHEEL: Failed to get Bags.fm quote for sell')
         return { success: false, tradeType: 'sell', amount: sellAmount, error: 'Failed to get quote' }
       }
 
-      // Execute swap
+      // Execute swap via Bags.fm
       const signature = await this.executeSwap(connection, wallet, quote.rawQuoteResponse)
 
       if (!signature) {
@@ -265,7 +266,7 @@ class WheelMMService {
   }
 
   /**
-   * Execute a swap using Jupiter
+   * Execute a swap using Bags.fm
    */
   private async executeSwap(
     connection: Connection,
@@ -275,13 +276,13 @@ class WheelMMService {
     if (!wallet) return null
 
     try {
-      const swapData = await jupiterService.generateSwapTransaction(
+      const swapData = await bagsFmService.generateSwapTransaction(
         wallet.publicKey.toString(),
         quoteResponse
       )
 
       if (!swapData) {
-        loggers.flywheel.error('WHEEL: Failed to get swap transaction')
+        loggers.flywheel.error('WHEEL: Failed to get swap transaction from Bags.fm')
         return null
       }
 
