@@ -287,8 +287,8 @@ class WheelMMService {
         return null
       }
 
-      // Deserialize the transaction - try VersionedTransaction first, fall back to legacy
-      const txBuffer = Buffer.from(swapData.transaction, 'base64')
+      // Deserialize the transaction - Bags.fm returns Base58 encoded transactions
+      const txBuffer = bs58.decode(swapData.transaction)
       let signature: string
 
       try {
