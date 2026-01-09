@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { usePrivy, useSolanaWallets, useDelegatedActions, type WalletWithMetadata } from '@privy-io/react-auth';
+import { usePrivy, useSolanaWallets, useHeadlessDelegatedActions, type WalletWithMetadata } from '@privy-io/react-auth';
 import { useTelegram } from '@/components/TelegramProvider';
 import { motion, AnimatePresence } from 'framer-motion';
 import { api } from '@/lib/api';
@@ -13,7 +13,8 @@ export default function OnboardingPage() {
     const router = useRouter();
     const { ready, authenticated, getAccessToken, user } = usePrivy();
     const { wallets, createWallet } = useSolanaWallets();
-    const { delegateWallet } = useDelegatedActions();
+    // Use headless delegation - no popup, works better in Telegram webview
+    const { delegateWallet } = useHeadlessDelegatedActions();
     const { user: telegramUser, hapticFeedback } = useTelegram();
 
     const [step, setStep] = useState<Step>('welcome');
