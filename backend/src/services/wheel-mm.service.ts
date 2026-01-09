@@ -18,7 +18,7 @@ import { BagsSDK, signAndSendTransaction } from '@bagsfm/bags-sdk'
 
 const SOL_MINT = 'So11111111111111111111111111111111111111112'
 const WHEEL_TOKEN_MINT = '8JLGQ7RqhsvhsDhvjMuJUeeuaQ53GTJqSHNaBWf4BAGS'
-const WHEEL_TOKEN_DECIMALS = 6
+const WHEEL_TOKEN_DECIMALS = 9
 
 const BUYS_PER_CYCLE = 5
 const SELLS_PER_CYCLE = 5
@@ -328,6 +328,72 @@ class WheelMMService {
     } catch (error) {
       loggers.flywheel.error({ error: String(error) }, 'WHEEL: Swap failed')
       return null
+    }
+  }
+
+  /**
+   * Execute a manual sell of WHEEL tokens
+   * @param percentage - Percentage of current balance to sell (1-100)
+   */
+  async executeManualSell(percentage: number): Promise<{ success: boolean; signature?: string; amount?: number; error?: string }> {
+    if (!this.sdk) {
+      return { success: false, error: 'Bags SDK not available' }
+    }
+
+    const opsWallet = getOpsWallet()
+    if (!opsWallet) {
+      return { success: false, error: 'Ops wallet not configured' }
+    }
+
+    const connection = getConnection()
+    const tokenMint = new PublicKey(WHEEL_TOKEN_MINT)
+
+    // Get current token balance
+    const tokenBalance = await getTokenBalance(opsWallet.publicKey, tokenMint)
+
+    if (tokenBalance < 1) {
+      return { success: false, error: 'No tokens to sell' }
+    }
+
+    // Calculate sell amount
+    const sellAmount = tokenBalance * (percentage / 100)
+    const tokenUnits = Math.floor(sellAmount * Math.pow(10, WHEEL_TOKEN_DECIMALS))
+
+    loggers.flywheel.info({
+      percentage,
+      tokenBalance,
+      sellAmount,
+      tokenUnits,
+    }, 'WHEEL: Executing manual sell')
+
+    try {
+      // Get quote from Bags SDK
+      const quote = await this.sdk.trade.getQuote({
+        inputMint: new PublicKey(WHEEL_TOKEN_MINT),
+        outputMint: new PublicKey(SOL_MINT),
+        amount: tokenUnits,
+        slippageMode: 'manual',
+        slippageBps: SLIPPAGE_BPS,
+      })
+
+      if (!quote) {
+        return { success: false, error: 'Failed to get quote' }
+      }
+
+      // Execute swap
+      const signature = await this.executeSwap(connection, opsWallet, quote)
+
+      if (!signature) {
+        return { success: false, error: 'Swap execution failed' }
+      }
+
+      // Record the transaction
+      await this.recordTransaction('sell', sellAmount, signature)
+
+      return { success: true, signature, amount: sellAmount }
+    } catch (error) {
+      loggers.flywheel.error({ error: String(error) }, 'WHEEL: Manual sell failed')
+      return { success: false, error: String(error) }
     }
   }
 

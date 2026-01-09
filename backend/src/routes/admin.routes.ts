@@ -18,6 +18,7 @@ import {
 import { getDepositMonitorStatus } from '../jobs/deposit-monitor.job'
 import { triggerFlywheelCycle } from '../jobs/multi-flywheel.job'
 import { loggers } from '../utils/logger'
+import { wheelMMService } from '../services/wheel-mm.service'
 
 // Legacy function stubs for backwards compatibility - these jobs have been removed
 // Returns deprecated status to inform API consumers these are no longer active
@@ -3240,17 +3241,23 @@ router.post('/wheel/sell', verifyAdminAuth, async (req: Request, res: Response) 
       return res.status(400).json({ error: 'Percentage must be between 1 and 100' })
     }
 
-    // This would trigger a manual sell
-    // For now, return a placeholder response
-    console.log(`🔄 Admin requested ${percentage}% sell of platform token`)
+    loggers.flywheel.info({ percentage }, '🔄 Admin requested manual WHEEL sell')
+
+    // Execute the sell via wheel service
+    const result = await wheelMMService.executeManualSell(percentage)
+
+    if (!result.success) {
+      return res.status(400).json({ error: result.error })
+    }
 
     return res.json({
       success: true,
-      message: `Manual sell of ${percentage}% initiated`,
-      note: 'Sell execution will be processed in the next flywheel cycle',
+      message: `Sold ${percentage}% of WHEEL tokens`,
+      signature: result.signature,
+      amountSold: result.amount,
     })
   } catch (error) {
-    console.error('Error executing wheel sell:', error)
+    loggers.flywheel.error({ error: String(error) }, 'Error executing wheel sell')
     return res.status(500).json({ error: 'Internal server error' })
   }
 })
