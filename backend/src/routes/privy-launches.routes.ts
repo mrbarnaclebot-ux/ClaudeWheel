@@ -118,8 +118,8 @@ router.post('/', async (req: PrivyRequest, res: Response) => {
       })
     }
 
-    const devWallet = wallets.find((w: any) => w.wallet_type === 'dev')
-    const opsWallet = wallets.find((w: any) => w.wallet_type === 'ops')
+    const devWallet = wallets.find((w: any) => w.walletType === 'dev' || w.wallet_type === 'dev')
+    const opsWallet = wallets.find((w: any) => w.walletType === 'ops' || w.wallet_type === 'ops')
 
     if (!devWallet || !opsWallet) {
       return res.status(400).json({
