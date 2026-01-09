@@ -135,5 +135,5 @@ dist
 .yarn/install-state.gz
 .pnp.*
 
-# Claude Code settings (may contain API keys)
-.claude/
+# Claude Code MCP settings (may contain API keys)
+.mcp.json
