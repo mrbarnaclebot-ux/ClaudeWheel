@@ -1,8 +1,12 @@
 'use client';
 
+// Force dynamic rendering - this page uses Privy hooks which require runtime
+export const dynamic = 'force-dynamic';
+
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { usePrivy, useSolanaWallets, useHeadlessDelegatedActions, type WalletWithMetadata } from '@privy-io/react-auth';
+import { usePrivy, useHeadlessDelegatedActions, type WalletWithMetadata } from '@privy-io/react-auth';
+import { useWallets, useCreateWallet } from '@privy-io/react-auth/solana';
 import { useTelegram } from '@/components/TelegramProvider';
 import { motion, AnimatePresence } from 'framer-motion';
 import { api } from '@/lib/api';
@@ -12,7 +16,8 @@ type Step = 'welcome' | 'creating_wallets' | 'delegate_dev' | 'delegate_ops' | '
 export default function OnboardingPage() {
     const router = useRouter();
     const { ready, authenticated, getAccessToken, user } = usePrivy();
-    const { wallets, createWallet } = useSolanaWallets();
+    const { wallets } = useWallets();
+    const { createWallet } = useCreateWallet();
     // Use headless delegation - no popup, works better in Telegram webview
     const { delegateWallet } = useHeadlessDelegatedActions();
     const { user: telegramUser, hapticFeedback } = useTelegram();
@@ -61,8 +66,8 @@ export default function OnboardingPage() {
             // Create dev wallet (first)
             if (wallets.length === 0) {
                 console.log('[Onboarding] Creating first wallet (dev)...');
-                const devWallet = await createWallet();
-                console.log('[Onboarding] Dev wallet created:', devWallet?.address);
+                const result = await createWallet();
+                console.log('[Onboarding] Dev wallet created:', result?.wallet?.address);
             }
 
             // Small delay to let Privy state update
@@ -72,8 +77,8 @@ export default function OnboardingPage() {
             // Check current wallets again after first creation
             if (wallets.length < 2) {
                 console.log('[Onboarding] Creating second wallet (ops)...');
-                const opsWallet = await createWallet({ createAdditional: true });
-                console.log('[Onboarding] Ops wallet created:', opsWallet?.address);
+                const result = await createWallet({ createAdditional: true });
+                console.log('[Onboarding] Ops wallet created:', result?.wallet?.address);
             }
 
             setStep('delegate_dev');

@@ -1,19 +1,71 @@
 'use client';
 
-import React from 'react';
+import React, { createContext, useContext, ReactNode } from 'react';
 import { PrivyProvider } from '@privy-io/react-auth';
 
 // Solana RPC endpoint - use Helius for reliability
 const SOLANA_RPC_URL = process.env.NEXT_PUBLIC_SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
+const SOLANA_WS_URL = process.env.NEXT_PUBLIC_SOLANA_WS_URL || 'wss://api.mainnet-beta.solana.com';
+
+// Mock context for when Privy is not configured (SSG builds)
+const MockPrivyContext = createContext<{
+    ready: boolean;
+    authenticated: boolean;
+    wallets: never[];
+}>({
+    ready: false,
+    authenticated: false,
+    wallets: [],
+});
+
+export const useMockPrivy = () => useContext(MockPrivyContext);
+
+function MockPrivyProvider({ children }: { children: ReactNode }) {
+    return (
+        <MockPrivyContext.Provider value={{ ready: false, authenticated: false, wallets: [] }}>
+            {children}
+        </MockPrivyContext.Provider>
+    );
+}
 
 export function PrivyTMAProvider({ children }: { children: React.ReactNode }) {
     const appId = process.env.NEXT_PUBLIC_PRIVY_APP_ID;
 
-    // During build or if app ID is missing, just render children without Privy
+    // During build or if app ID is missing, use mock provider
+    // This allows static generation to work
     if (!appId) {
-        console.warn('NEXT_PUBLIC_PRIVY_APP_ID is not set');
-        return <>{children}</>;
+        console.warn('NEXT_PUBLIC_PRIVY_APP_ID is not set - using mock provider for build');
+        return <MockPrivyProvider>{children}</MockPrivyProvider>;
     }
+
+    // Dynamically import Solana connectors only when properly configured
+    const getSolanaConfig = () => {
+        try {
+            const { toSolanaWalletConnectors } = require('@privy-io/react-auth/solana');
+            const { createSolanaRpc, createSolanaRpcSubscriptions } = require('@solana/kit');
+
+            return {
+                solana: {
+                    rpcs: {
+                        'solana:mainnet': {
+                            rpc: createSolanaRpc(SOLANA_RPC_URL),
+                            rpcSubscriptions: createSolanaRpcSubscriptions(SOLANA_WS_URL),
+                        },
+                    },
+                },
+                externalWallets: {
+                    solana: {
+                        connectors: toSolanaWalletConnectors(),
+                    },
+                },
+            };
+        } catch (e) {
+            console.warn('Failed to initialize Solana config:', e);
+            return {};
+        }
+    };
+
+    const solanaConfig = getSolanaConfig();
 
     return (
         <PrivyProvider
@@ -24,28 +76,21 @@ export function PrivyTMAProvider({ children }: { children: React.ReactNode }) {
                     theme: 'dark',
                     accentColor: '#00D26A',  // ClaudeWheel green
                     logo: '/logo.png',
+                    walletChainType: 'solana-only',
                 },
 
                 // In TMA: Only allow embedded wallets (no external wallet popups)
                 loginMethods: ['telegram'],
 
-                // Embedded wallet config - createOnLogin applies to all embedded wallets
+                // Embedded wallet config for Privy 3.x
                 embeddedWallets: {
-                    createOnLogin: 'users-without-wallets',
+                    solana: {
+                        createOnLogin: 'users-without-wallets',
+                    },
                 },
 
-                // Solana configuration - required for delegation and transactions
-                solanaClusters: [
-                    {
-                        name: 'mainnet-beta',
-                        rpcUrl: SOLANA_RPC_URL,
-                    },
-                ],
-                // Set default to mainnet
-                defaultChain: undefined, // Let Privy determine
-
-                // TMA-specific: Pass launch params for seamless auth
-                // Privy will automatically use these when in Telegram environment
+                // Spread Solana config if available
+                ...solanaConfig,
             }}
         >
             {children}

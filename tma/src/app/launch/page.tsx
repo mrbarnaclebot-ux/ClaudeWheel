@@ -1,8 +1,12 @@
 'use client';
 
+// Force dynamic rendering - this page uses Privy hooks which require runtime
+export const dynamic = 'force-dynamic';
+
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { usePrivy, useSolanaWallets } from '@privy-io/react-auth';
+import { usePrivy } from '@privy-io/react-auth';
+import { useWallets } from '@privy-io/react-auth/solana';
 import { useTelegram } from '@/components/TelegramProvider';
 import { api } from '@/lib/api';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -29,7 +33,7 @@ interface PendingLaunch {
 export default function LaunchPage() {
     const router = useRouter();
     const { getAccessToken } = usePrivy();
-    const { wallets } = useSolanaWallets();
+    const { wallets } = useWallets();
     const { hapticFeedback } = useTelegram();
 
     const [step, setStep] = useState<LaunchStep>('details');

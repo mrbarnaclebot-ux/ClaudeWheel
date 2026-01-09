@@ -1,9 +1,9 @@
-import { useSolanaWallets } from '@privy-io/react-auth';
+import { useWallets } from '@privy-io/react-auth/solana';
 
 export function useUserWallets() {
-    const { wallets } = useSolanaWallets();
+    const { wallets } = useWallets();
 
-    // useSolanaWallets already returns only Solana wallets, no need to filter
+    // useWallets from solana entrypoint returns only Solana wallets
     return {
         devWallet: wallets[0] || null,
         opsWallet: wallets[1] || null,

@@ -1,7 +1,11 @@
 'use client';
 
+// Force dynamic rendering - this page uses Privy hooks which require runtime
+export const dynamic = 'force-dynamic';
+
 import { useQuery } from '@tanstack/react-query';
-import { usePrivy, useSolanaWallets } from '@privy-io/react-auth';
+import { usePrivy } from '@privy-io/react-auth';
+import { useWallets } from '@privy-io/react-auth/solana';
 import { useTelegram } from '@/components/TelegramProvider';
 import { api } from '@/lib/api';
 import Link from 'next/link';
@@ -25,7 +29,7 @@ interface Token {
 
 export default function DashboardPage() {
     const { getAccessToken } = usePrivy();
-    const { wallets } = useSolanaWallets();
+    const { wallets } = useWallets();
     const { user: telegramUser, hapticFeedback } = useTelegram();
 
     // useSolanaWallets already returns only Solana wallets
