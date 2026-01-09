@@ -2202,8 +2202,13 @@ export async function startTelegramBot(): Promise<void> {
  */
 export function stopTelegramBot(): void {
   if (bot) {
-    bot.stop('SIGTERM')
-    loggers.telegram.info('Telegram bot stopped')
+    try {
+      bot.stop('SIGTERM')
+      loggers.telegram.info('Telegram bot stopped')
+    } catch (error) {
+      // Bot might not be running (e.g., using webhook mode or already stopped)
+      loggers.telegram.debug({ error: String(error) }, 'Bot stop called but bot was not running')
+    }
   }
 }
 

@@ -103,7 +103,12 @@ class BagsFmService {
       }
 
       const url = `${BAGS_API_BASE}${endpoint}`
-      loggers.bags.debug({ method: options.method || 'GET', endpoint }, 'Bags.fm API request')
+      loggers.bags.debug({
+        method: options.method || 'GET',
+        endpoint,
+        hasApiKey: !!this.apiKey,
+        url,
+      }, 'Bags.fm API request')
 
       const response = await fetch(url, {
         ...options,
