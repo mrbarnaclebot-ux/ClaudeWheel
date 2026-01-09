@@ -52,6 +52,8 @@ export const loggers = {
   refund: createLogger('refund'),
   token: createLogger('token'),
   alerts: createLogger('alerts'),
+  privy: createLogger('privy'),
+  notification: createLogger('notification'),
 }
 
 // Utility for logging transaction details

@@ -4,9 +4,10 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { Keypair, PublicKey, VersionedTransaction, Connection, Transaction, SystemProgram, LAMPORTS_PER_SOL } from '@solana/web3.js'
-import { sendAndConfirmTransactionWithRetry, sendVersionedTransactionWithRetry } from '../utils/transaction'
+import { sendAndConfirmTransactionWithRetry, sendVersionedTransactionWithRetry, sendTransactionWithPrivySigning } from '../utils/transaction'
 import bs58 from 'bs58'
 import { supabase } from '../config/database'
+import { prisma, isPrismaConfigured } from '../config/prisma'
 import { getConnection, getBalance, getTokenBalance, getOpsWallet } from '../config/solana'
 import { env } from '../config/env'
 import { bagsFmService } from './bags-fm'
@@ -24,7 +25,13 @@ import {
   getFlywheelState,
   updateFlywheelState,
   updateGraduationStatus,
+  // Privy-specific imports
+  PrivyTokenWithConfig,
+  getPrivyTokensForFlywheel,
+  getPrivyFlywheelState,
+  updatePrivyFlywheelState,
 } from './user-token.service'
+import { privyService } from './privy.service'
 
 // ═══════════════════════════════════════════════════════════════════════════
 // TYPES
@@ -1425,6 +1432,666 @@ class MultiUserMMService {
 
   isJobRunning(): boolean {
     return this.isRunning
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // PRIVY TOKEN HANDLING
+  // For tokens registered via Privy (TMA/embedded wallets)
+  // Uses delegated signing instead of encrypted keypairs
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * Run flywheel cycle for all Privy user tokens
+   */
+  async runPrivyFlywheelCycle(maxTradesPerMinute: number = 30): Promise<FlywheelCycleResult> {
+    if (this.isRunning) {
+      loggers.flywheel.warn('Flywheel cycle already in progress, skipping Privy tokens')
+      return {
+        totalTokensProcessed: 0,
+        tradesExecuted: 0,
+        tradesFailed: 0,
+        results: [],
+        startedAt: new Date().toISOString(),
+        completedAt: new Date().toISOString(),
+      }
+    }
+
+    this.isRunning = true
+    const startedAt = new Date().toISOString()
+    const results: TradeResult[] = []
+
+    loggers.flywheel.info('Starting Privy flywheel cycle')
+
+    try {
+      // Reset rate limit counter if new minute
+      const currentMinute = Math.floor(Date.now() / 60000)
+      if (currentMinute !== this.lastTradeMinute) {
+        this.tradesThisMinute = 0
+        this.lastTradeMinute = currentMinute
+      }
+
+      // Get all active Privy flywheel tokens
+      const privyTokens = await getPrivyTokensForFlywheel()
+      loggers.flywheel.info({ tokenCount: privyTokens.length }, 'Found Privy tokens with active flywheels')
+
+      for (const privyToken of privyTokens) {
+        // Check rate limit
+        if (this.tradesThisMinute >= maxTradesPerMinute) {
+          loggers.flywheel.warn({ maxTradesPerMinute }, 'Rate limit reached, pausing until next cycle')
+          break
+        }
+
+        try {
+          const result = await this.processPrivyToken(privyToken)
+          if (result) {
+            results.push(result)
+            if (result.success) {
+              this.tradesThisMinute++
+            }
+          }
+
+          // Small delay between tokens
+          await this.sleep(500)
+        } catch (error: any) {
+          loggers.flywheel.error({
+            tokenSymbol: privyToken.token_symbol,
+            tokenMint: privyToken.token_mint_address,
+            error: String(error),
+          }, 'Unexpected error processing Privy token')
+          results.push({
+            userTokenId: privyToken.id,
+            tokenMint: privyToken.token_mint_address,
+            tokenSymbol: privyToken.token_symbol,
+            tradeType: 'buy',
+            success: false,
+            amount: 0,
+            error: error.message,
+          })
+        }
+      }
+    } finally {
+      this.isRunning = false
+      this.lastRunAt = new Date()
+    }
+
+    const completedAt = new Date().toISOString()
+    const tradesExecuted = results.filter(r => r.success).length
+
+    loggers.flywheel.info({ tradesExecuted, totalTrades: results.length }, 'Privy flywheel cycle completed')
+
+    return {
+      totalTokensProcessed: results.length,
+      tradesExecuted,
+      tradesFailed: results.filter(r => !r.success).length,
+      results,
+      startedAt,
+      completedAt,
+    }
+  }
+
+  /**
+   * Process a single Privy token's flywheel
+   */
+  private async processPrivyToken(token: PrivyTokenWithConfig): Promise<TradeResult | null> {
+    const baseResult = {
+      userTokenId: token.id,
+      tokenMint: token.token_mint_address,
+      tokenSymbol: token.token_symbol,
+    }
+
+    const connection = getConnection()
+    const config = token.privy_token_config
+
+    // Get or initialize flywheel state
+    let state = token.privy_flywheel_state || await getPrivyFlywheelState(token.id)
+    if (!state) {
+      // Initialize state if not exists
+      if (isPrismaConfigured()) {
+        await prisma.privyFlywheelState.create({
+          data: {
+            privyTokenId: token.id,
+            cyclePhase: 'buy',
+            buyCount: 0,
+            sellCount: 0,
+            consecutiveFailures: 0,
+            totalFailures: 0,
+          },
+        })
+      }
+      state = await getPrivyFlywheelState(token.id)
+    }
+
+    if (!state) {
+      return { ...baseResult, tradeType: 'buy', success: false, amount: 0, error: 'Failed to get flywheel state' }
+    }
+
+    // Check if flywheel is paused due to repeated failures
+    if (await this.isPrivyFlywheelPaused(state, token.id)) {
+      const pausedUntil = state.paused_until ? new Date(state.paused_until).toLocaleTimeString() : 'unknown'
+      loggers.flywheel.info({
+        tokenSymbol: token.token_symbol,
+        pausedUntil,
+        consecutiveFailures: state.consecutive_failures,
+        lastFailureReason: state.last_failure_reason,
+      }, 'Privy flywheel paused due to repeated failures, skipping')
+      return null
+    }
+
+    // Determine trading route (auto-detect based on graduation)
+    const tradingRoute = this.getPrivyTradingRoute(token, config)
+    loggers.flywheel.debug({
+      tokenSymbol: token.token_symbol,
+      tradingRoute,
+      isGraduated: token.is_graduated,
+      configRoute: config.trading_route,
+    }, 'Privy token using trading route')
+
+    // Collect fees from dev wallet to ops wallet
+    await this.collectPrivyFees(token, connection)
+
+    // Get ops wallet address for trading
+    const opsWalletAddress = token.ops_wallet?.wallet_address
+    if (!opsWalletAddress) {
+      return { ...baseResult, tradeType: 'buy', success: false, amount: 0, error: 'Ops wallet not found' }
+    }
+
+    // Use simple algorithm for now (can expand to smart/rebalance later)
+    return this.runPrivySimpleAlgorithm(token, config, state, opsWalletAddress, connection, baseResult, tradingRoute)
+  }
+
+  /**
+   * Check if Privy flywheel is paused due to repeated failures
+   */
+  private async isPrivyFlywheelPaused(state: UserFlywheelState, tokenId: string): Promise<boolean> {
+    if (!state.paused_until) return false
+
+    const pausedUntil = new Date(state.paused_until).getTime()
+    const now = Date.now()
+
+    if (now < pausedUntil) {
+      return true
+    }
+
+    // Pause period has expired, reset it
+    await this.clearPrivyPauseState(tokenId)
+    return false
+  }
+
+  /**
+   * Clear Privy pause state
+   */
+  private async clearPrivyPauseState(tokenId: string): Promise<void> {
+    if (!isPrismaConfigured()) return
+
+    try {
+      await prisma.privyFlywheelState.update({
+        where: { privyTokenId: tokenId },
+        data: {
+          pausedUntil: null,
+          consecutiveFailures: 0,
+        },
+      })
+
+      loggers.flywheel.info({ tokenId }, 'Privy flywheel pause period expired, resuming')
+    } catch (error) {
+      loggers.flywheel.warn({ tokenId, error: String(error) }, 'Failed to clear Privy pause state')
+    }
+  }
+
+  /**
+   * Determine trading route for Privy token
+   */
+  private getPrivyTradingRoute(token: PrivyTokenWithConfig, config: UserTokenConfig): 'bags' | 'jupiter' {
+    if (config.trading_route === 'bags') return 'bags'
+    if (config.trading_route === 'jupiter') return 'jupiter'
+    return token.is_graduated ? 'jupiter' : 'bags'
+  }
+
+  /**
+   * Collect fees from Privy dev wallet to ops wallet using Privy signing
+   */
+  private async collectPrivyFees(
+    token: PrivyTokenWithConfig,
+    connection: Connection
+  ): Promise<{ collected: boolean; amount: number; signature?: string }> {
+    try {
+      const devWalletAddress = token.dev_wallet?.wallet_address
+      const opsWalletAddress = token.ops_wallet?.wallet_address
+
+      if (!devWalletAddress || !opsWalletAddress) {
+        loggers.flywheel.warn({ tokenSymbol: token.token_symbol }, 'Missing wallet addresses for Privy fee collection')
+        return { collected: false, amount: 0 }
+      }
+
+      // Get dev wallet SOL balance
+      const devPubkey = new PublicKey(devWalletAddress)
+      const devBalance = await getBalance(devPubkey)
+      loggers.flywheel.debug({ tokenSymbol: token.token_symbol, devBalance, devWallet: devWalletAddress }, 'Privy dev wallet balance')
+
+      // Calculate transfer amount (keep minimum reserve)
+      const transferAmount = devBalance - DEV_WALLET_MIN_RESERVE_SOL
+
+      if (transferAmount < MIN_FEE_THRESHOLD_SOL) {
+        loggers.flywheel.debug({ tokenSymbol: token.token_symbol, devBalance }, 'Privy dev wallet balance too low for fee collection')
+        return { collected: false, amount: 0 }
+      }
+
+      // Calculate platform fee (10%)
+      const platformFeePercent = env.platformFeePercentage || 10
+      const platformFeeSol = transferAmount * (platformFeePercent / 100)
+      const userAmountSol = transferAmount - platformFeeSol
+
+      loggers.flywheel.info({ tokenSymbol: token.token_symbol, transferAmount, platformFeePercent }, 'Collecting Privy fees')
+
+      // Get platform ops wallet (WHEEL)
+      const platformOpsWallet = getOpsWallet()
+
+      // Transfer 1: Platform fee to WHEEL ops wallet (10%)
+      if (platformOpsWallet && platformFeeSol > 0.001) {
+        const platformTx = new Transaction().add(
+          SystemProgram.transfer({
+            fromPubkey: devPubkey,
+            toPubkey: platformOpsWallet.publicKey,
+            lamports: Math.floor(platformFeeSol * LAMPORTS_PER_SOL),
+          })
+        )
+        platformTx.feePayer = devPubkey
+
+        const platformResult = await sendTransactionWithPrivySigning(
+          connection,
+          platformTx,
+          devWalletAddress,
+          { commitment: 'confirmed', logContext: { service: 'flywheel', type: 'privy-platform-fee', tokenSymbol: token.token_symbol } }
+        )
+
+        if (platformResult.success) {
+          loggers.flywheel.info({ tokenSymbol: token.token_symbol, platformFeeSol, signature: platformResult.signature }, 'Privy platform fee transferred')
+        } else {
+          loggers.flywheel.error({ tokenSymbol: token.token_symbol, error: platformResult.error }, 'Privy platform fee transfer failed')
+        }
+      }
+
+      // Transfer 2: Remaining to user's ops wallet (90%)
+      if (userAmountSol > 0.001) {
+        const userOpsPubkey = new PublicKey(opsWalletAddress)
+        const userTx = new Transaction().add(
+          SystemProgram.transfer({
+            fromPubkey: devPubkey,
+            toPubkey: userOpsPubkey,
+            lamports: Math.floor(userAmountSol * LAMPORTS_PER_SOL),
+          })
+        )
+        userTx.feePayer = devPubkey
+
+        const userResult = await sendTransactionWithPrivySigning(
+          connection,
+          userTx,
+          devWalletAddress,
+          { commitment: 'confirmed', logContext: { service: 'flywheel', type: 'privy-user-portion', tokenSymbol: token.token_symbol } }
+        )
+
+        if (userResult.success) {
+          loggers.flywheel.info({ tokenSymbol: token.token_symbol, userAmountSol, signature: userResult.signature }, 'Privy user portion transferred')
+          await this.recordPrivyTransaction(token.id, 'transfer', userAmountSol, userResult.signature!)
+          return { collected: true, amount: transferAmount, signature: userResult.signature }
+        } else {
+          loggers.flywheel.error({ tokenSymbol: token.token_symbol, error: userResult.error }, 'Privy user portion transfer failed')
+        }
+      }
+
+      return { collected: false, amount: 0 }
+    } catch (error: any) {
+      loggers.flywheel.error({ tokenSymbol: token.token_symbol, error: String(error) }, 'Privy fee collection failed')
+      return { collected: false, amount: 0 }
+    }
+  }
+
+  /**
+   * Simple algorithm for Privy tokens: 5 buys then 5 sells
+   */
+  private async runPrivySimpleAlgorithm(
+    token: PrivyTokenWithConfig,
+    config: UserTokenConfig,
+    state: UserFlywheelState,
+    opsWalletAddress: string,
+    connection: Connection,
+    baseResult: { userTokenId: string; tokenMint: string; tokenSymbol: string },
+    tradingRoute: 'bags' | 'jupiter' = 'bags'
+  ): Promise<TradeResult | null> {
+    const tokenMint = new PublicKey(token.token_mint_address)
+    const opsWalletPubkey = new PublicKey(opsWalletAddress)
+
+    if (state.cycle_phase === 'buy') {
+      // Check SOL balance
+      const solBalance = await getBalance(opsWalletPubkey)
+      const minRequired = config.min_buy_amount_sol + 0.01
+
+      if (solBalance < minRequired) {
+        const message = `Insufficient SOL for buy (have ${solBalance.toFixed(4)}, need ${minRequired.toFixed(4)})`
+        loggers.flywheel.info({ tokenSymbol: token.token_symbol, solBalance, minRequired }, 'Insufficient SOL for Privy buy')
+        await this.updatePrivyFlywheelCheck(token.id, 'insufficient_sol')
+        return null
+      }
+
+      // Random amount within bounds
+      const buyAmount = this.randomBetween(config.min_buy_amount_sol, config.max_buy_amount_sol)
+      const lamports = Math.floor(buyAmount * 1e9)
+
+      loggers.flywheel.info({
+        tokenSymbol: token.token_symbol,
+        buyAmount,
+        buyCount: state.buy_count,
+        maxBuys: BUYS_PER_CYCLE,
+        route: tradingRoute,
+      }, 'Executing Privy BUY')
+
+      // Get quote
+      const quote = await this.getTradeQuote(
+        tradingRoute,
+        SOL_MINT,
+        token.token_mint_address,
+        lamports,
+        'buy',
+        config.slippage_bps
+      )
+
+      if (!quote?.rawQuoteResponse) {
+        const errorMsg = `Failed to get ${tradingRoute} quote`
+        await this.recordPrivyFailure(token.id, errorMsg)
+        return { ...baseResult, tradeType: 'buy', success: false, amount: buyAmount, error: errorMsg }
+      }
+
+      const signature = await this.executeSwapWithPrivySigning(connection, opsWalletAddress, quote.rawQuoteResponse, tradingRoute)
+
+      if (!signature) {
+        const errorMsg = `${tradingRoute} swap failed`
+        await this.recordPrivyFailure(token.id, errorMsg)
+        return { ...baseResult, tradeType: 'buy', success: false, amount: buyAmount, error: errorMsg }
+      }
+
+      // Clear failures on success
+      await this.clearPrivyFailures(token.id)
+
+      // Update state
+      const newBuyCount = state.buy_count + 1
+      const shouldSwitchToSell = newBuyCount >= BUYS_PER_CYCLE
+
+      // If switching to sell, snapshot the token balance
+      let tokenSnapshot = state.sell_phase_token_snapshot
+      let sellPerTx = state.sell_amount_per_tx
+
+      if (shouldSwitchToSell) {
+        const tokenBalance = await getTokenBalance(opsWalletPubkey, tokenMint)
+        tokenSnapshot = tokenBalance
+        sellPerTx = tokenBalance / SELLS_PER_CYCLE
+      }
+
+      await updatePrivyFlywheelState(token.id, {
+        cycle_phase: shouldSwitchToSell ? 'sell' : 'buy',
+        buy_count: shouldSwitchToSell ? 0 : newBuyCount,
+        sell_count: 0,
+        sell_phase_token_snapshot: tokenSnapshot,
+        sell_amount_per_tx: sellPerTx,
+        last_trade_at: new Date().toISOString(),
+      })
+
+      await this.recordPrivyTransaction(token.id, 'buy', buyAmount, signature)
+      await this.updatePrivyFlywheelCheck(token.id, 'traded')
+
+      return { ...baseResult, tradeType: 'buy', success: true, amount: buyAmount, signature }
+
+    } else {
+      // SELL phase
+      const sellAmount = state.sell_amount_per_tx
+
+      if (sellAmount <= 0) {
+        loggers.flywheel.info({ tokenSymbol: token.token_symbol }, 'No tokens to sell, switching to buy phase')
+        await this.updatePrivyFlywheelCheck(token.id, 'no_tokens')
+        await updatePrivyFlywheelState(token.id, { cycle_phase: 'buy', sell_count: 0 })
+        return null
+      }
+
+      // Check token balance
+      const tokenBalance = await getTokenBalance(opsWalletPubkey, tokenMint)
+      const actualSellAmount = Math.min(sellAmount, tokenBalance)
+
+      if (actualSellAmount < 1) {
+        loggers.flywheel.info({ tokenSymbol: token.token_symbol, tokenBalance }, 'Insufficient tokens for sell, switching to buy phase')
+        await this.updatePrivyFlywheelCheck(token.id, 'insufficient_tokens')
+        await updatePrivyFlywheelState(token.id, { cycle_phase: 'buy', sell_count: 0 })
+        return null
+      }
+
+      const tokenUnits = Math.floor(actualSellAmount * Math.pow(10, token.token_decimals))
+
+      loggers.flywheel.info({
+        tokenSymbol: token.token_symbol,
+        sellAmount: actualSellAmount,
+        sellCount: state.sell_count,
+        maxSells: SELLS_PER_CYCLE,
+        route: tradingRoute,
+      }, 'Executing Privy SELL')
+
+      const quote = await this.getTradeQuote(
+        tradingRoute,
+        token.token_mint_address,
+        SOL_MINT,
+        tokenUnits,
+        'sell',
+        config.slippage_bps
+      )
+
+      if (!quote?.rawQuoteResponse) {
+        const errorMsg = `Failed to get ${tradingRoute} quote`
+        await this.recordPrivyFailure(token.id, errorMsg)
+        return { ...baseResult, tradeType: 'sell', success: false, amount: actualSellAmount, error: errorMsg }
+      }
+
+      const signature = await this.executeSwapWithPrivySigning(connection, opsWalletAddress, quote.rawQuoteResponse, tradingRoute)
+
+      if (!signature) {
+        const errorMsg = `${tradingRoute} swap failed`
+        await this.recordPrivyFailure(token.id, errorMsg)
+        return { ...baseResult, tradeType: 'sell', success: false, amount: actualSellAmount, error: errorMsg }
+      }
+
+      // Clear failures on success
+      await this.clearPrivyFailures(token.id)
+
+      // Update state
+      const newSellCount = state.sell_count + 1
+      const shouldSwitchToBuy = newSellCount >= SELLS_PER_CYCLE
+
+      await updatePrivyFlywheelState(token.id, {
+        cycle_phase: shouldSwitchToBuy ? 'buy' : 'sell',
+        buy_count: 0,
+        sell_count: shouldSwitchToBuy ? 0 : newSellCount,
+        last_trade_at: new Date().toISOString(),
+      })
+
+      await this.recordPrivyTransaction(token.id, 'sell', actualSellAmount, signature)
+      await this.updatePrivyFlywheelCheck(token.id, 'traded')
+
+      return { ...baseResult, tradeType: 'sell', success: true, amount: actualSellAmount, signature }
+    }
+  }
+
+  /**
+   * Execute swap with Privy delegated signing
+   */
+  private async executeSwapWithPrivySigning(
+    connection: Connection,
+    walletAddress: string,
+    quoteResponse: unknown,
+    route: 'bags' | 'jupiter'
+  ): Promise<string | null> {
+    const swapData = await this.generateSwapTx(route, walletAddress, quoteResponse)
+
+    if (!swapData) {
+      loggers.flywheel.error({ route }, 'Failed to get swap transaction for Privy signing')
+      return null
+    }
+
+    // Deserialize the transaction
+    let transaction: VersionedTransaction
+    try {
+      if (route === 'jupiter') {
+        const txBuffer = Buffer.from(swapData.transaction, 'base64')
+        transaction = VersionedTransaction.deserialize(txBuffer)
+      } else {
+        const txBuffer = bs58.decode(swapData.transaction)
+        transaction = VersionedTransaction.deserialize(txBuffer)
+      }
+    } catch (error) {
+      loggers.flywheel.error({ route, error: String(error) }, 'Failed to deserialize transaction for Privy signing')
+      return null
+    }
+
+    // Use Privy to sign and send
+    const signature = await privyService.signAndSendSolanaTransaction(walletAddress, transaction)
+
+    if (!signature) {
+      loggers.flywheel.error({ route, walletAddress }, 'Privy signing failed')
+      return null
+    }
+
+    // Wait for confirmation
+    try {
+      const latestBlockhash = await connection.getLatestBlockhash('confirmed')
+      const confirmation = await connection.confirmTransaction({
+        signature,
+        blockhash: latestBlockhash.blockhash,
+        lastValidBlockHeight: latestBlockhash.lastValidBlockHeight,
+      }, 'confirmed')
+
+      if (confirmation.value.err) {
+        loggers.flywheel.error({ route, signature, error: confirmation.value.err }, 'Privy transaction failed')
+        return null
+      }
+    } catch (error) {
+      loggers.flywheel.warn({ route, signature, error: String(error) }, 'Could not confirm Privy transaction, continuing anyway')
+    }
+
+    loggers.flywheel.info({ route, signature }, 'Privy swap executed successfully')
+    return signature
+  }
+
+  /**
+   * Record Privy failure
+   */
+  private async recordPrivyFailure(tokenId: string, reason: string): Promise<void> {
+    if (!isPrismaConfigured()) return
+
+    try {
+      // Get current failure count
+      const currentState = await prisma.privyFlywheelState.findUnique({
+        where: { privyTokenId: tokenId },
+        select: { consecutiveFailures: true, totalFailures: true },
+      })
+
+      const consecutiveFailures = (currentState?.consecutiveFailures || 0) + 1
+      const totalFailures = (currentState?.totalFailures || 0) + 1
+
+      const updates: {
+        consecutiveFailures: number
+        totalFailures: number
+        lastFailureReason: string
+        lastFailureAt: Date
+        pausedUntil?: Date
+      } = {
+        consecutiveFailures,
+        totalFailures,
+        lastFailureReason: reason,
+        lastFailureAt: new Date(),
+      }
+
+      if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+        const pauseUntil = new Date(Date.now() + PAUSE_DURATION_MINUTES * 60 * 1000)
+        updates.pausedUntil = pauseUntil
+
+        loggers.flywheel.warn({
+          tokenId,
+          consecutiveFailures,
+          pauseUntil: pauseUntil.toISOString(),
+          reason,
+        }, 'Pausing Privy flywheel due to repeated failures')
+      }
+
+      await prisma.privyFlywheelState.update({
+        where: { privyTokenId: tokenId },
+        data: updates,
+      })
+    } catch (error) {
+      loggers.flywheel.error({ tokenId, error: String(error) }, 'Failed to record Privy failure')
+    }
+  }
+
+  /**
+   * Clear Privy failure count after successful trade
+   */
+  private async clearPrivyFailures(tokenId: string): Promise<void> {
+    if (!isPrismaConfigured()) return
+
+    try {
+      await prisma.privyFlywheelState.update({
+        where: { privyTokenId: tokenId },
+        data: {
+          consecutiveFailures: 0,
+          lastFailureReason: null,
+          pausedUntil: null,
+        },
+      })
+    } catch (error) {
+      loggers.flywheel.warn({ tokenId, error: String(error) }, 'Failed to clear Privy failures')
+    }
+  }
+
+  /**
+   * Record Privy transaction
+   */
+  private async recordPrivyTransaction(
+    privyTokenId: string,
+    type: 'buy' | 'sell' | 'transfer',
+    amount: number,
+    signature: string
+  ): Promise<void> {
+    if (!isPrismaConfigured()) return
+
+    try {
+      await prisma.privyTransaction.create({
+        data: {
+          privyTokenId,
+          type,
+          amount,
+          signature,
+          status: 'confirmed',
+        },
+      })
+    } catch (error: any) {
+      loggers.flywheel.error({ type, error: String(error) }, 'Failed to record Privy transaction')
+    }
+  }
+
+  /**
+   * Update Privy flywheel check status
+   */
+  private async updatePrivyFlywheelCheck(
+    privyTokenId: string,
+    checkResult: string
+  ): Promise<void> {
+    if (!isPrismaConfigured()) return
+
+    try {
+      await prisma.privyFlywheelState.update({
+        where: { privyTokenId },
+        data: {
+          lastCheckedAt: new Date(),
+          lastCheckResult: checkResult,
+        },
+      })
+    } catch {
+      // Silently fail
+    }
   }
 }
 

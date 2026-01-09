@@ -1,4 +1,5 @@
 import { supabase } from '../config/database'
+import { prisma, isPrismaConfigured } from '../config/prisma'
 import { encrypt, decrypt, validateEncryptedKey, EncryptedData } from './encryption.service'
 import { Keypair } from '@solana/web3.js'
 import bs58 from 'bs58'
@@ -848,4 +849,406 @@ export async function reactivateSuspendedToken(
     loggers.user.error({ error: String(error), userTokenId }, 'Token reactivation failed')
     return null
   }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PRIVY-SPECIFIC METHODS
+// For tokens registered via Privy (TMA/embedded wallets)
+// No decryption needed - Privy handles signing
+// Uses Prisma instead of Supabase
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Privy token with config and wallet info
+ */
+export interface PrivyTokenWithConfig {
+  id: string
+  privy_user_id: string
+  token_mint_address: string
+  token_symbol: string
+  token_name: string | null
+  token_image: string | null
+  token_decimals: number
+  is_active: boolean
+  is_graduated: boolean
+  created_at: string
+  updated_at: string
+  // Joined wallet addresses
+  dev_wallet: { id: string; wallet_address: string }
+  ops_wallet: { id: string; wallet_address: string }
+  // Joined config
+  privy_token_config: UserTokenConfig
+  // Joined flywheel state (optional)
+  privy_flywheel_state?: UserFlywheelState
+}
+
+/**
+ * Map Prisma token result to PrivyTokenWithConfig interface
+ */
+function mapPrismaTokenToPrivyTokenWithConfig(token: any): PrivyTokenWithConfig {
+  return {
+    id: token.id,
+    privy_user_id: token.privyUserId,
+    token_mint_address: token.tokenMintAddress,
+    token_symbol: token.tokenSymbol,
+    token_name: token.tokenName,
+    token_image: token.tokenImage,
+    token_decimals: token.tokenDecimals,
+    is_active: token.isActive,
+    is_graduated: token.isGraduated,
+    created_at: token.createdAt.toISOString(),
+    updated_at: token.updatedAt.toISOString(),
+    dev_wallet: {
+      id: token.devWallet.id,
+      wallet_address: token.devWallet.walletAddress,
+    },
+    ops_wallet: {
+      id: token.opsWallet.id,
+      wallet_address: token.opsWallet.walletAddress,
+    },
+    privy_token_config: token.config ? {
+      id: token.config.id,
+      user_token_id: token.config.privyTokenId,
+      flywheel_active: token.config.flywheelActive,
+      market_making_enabled: token.config.marketMakingEnabled,
+      auto_claim_enabled: token.config.autoClaimEnabled,
+      fee_threshold_sol: Number(token.config.feeThresholdSol),
+      min_buy_amount_sol: Number(token.config.minBuyAmountSol),
+      max_buy_amount_sol: Number(token.config.maxBuyAmountSol),
+      max_sell_amount_tokens: Number(token.config.maxSellAmountTokens),
+      buy_interval_minutes: token.config.buyIntervalMinutes,
+      slippage_bps: token.config.slippageBps,
+      algorithm_mode: token.config.algorithmMode as 'simple' | 'smart' | 'rebalance',
+      target_sol_allocation: token.config.targetSolAllocation,
+      target_token_allocation: token.config.targetTokenAllocation,
+      rebalance_threshold: token.config.rebalanceThreshold,
+      use_twap: token.config.useTwap,
+      twap_threshold_usd: Number(token.config.twapThresholdUsd),
+      trading_route: token.config.tradingRoute as 'bags' | 'jupiter' | 'auto',
+      updated_at: token.config.updatedAt.toISOString(),
+    } : undefined as any,
+    privy_flywheel_state: token.flywheelState ? {
+      id: token.flywheelState.id,
+      user_token_id: token.flywheelState.privyTokenId,
+      cycle_phase: token.flywheelState.cyclePhase as 'buy' | 'sell',
+      buy_count: token.flywheelState.buyCount,
+      sell_count: token.flywheelState.sellCount,
+      sell_phase_token_snapshot: Number(token.flywheelState.sellPhaseTokenSnapshot),
+      sell_amount_per_tx: Number(token.flywheelState.sellAmountPerTx),
+      last_trade_at: token.flywheelState.lastTradeAt?.toISOString() || null,
+      consecutive_failures: token.flywheelState.consecutiveFailures,
+      last_failure_reason: token.flywheelState.lastFailureReason,
+      last_failure_at: token.flywheelState.lastFailureAt?.toISOString() || null,
+      paused_until: token.flywheelState.pausedUntil?.toISOString() || null,
+      total_failures: token.flywheelState.totalFailures,
+      updated_at: token.flywheelState.updatedAt.toISOString(),
+    } : undefined,
+  }
+}
+
+/**
+ * Get active Privy tokens with flywheel enabled
+ */
+export async function getPrivyTokensForFlywheel(): Promise<PrivyTokenWithConfig[]> {
+  if (!isPrismaConfigured()) {
+    return []
+  }
+
+  try {
+    const tokens = await prisma.privyUserToken.findMany({
+      where: {
+        isActive: true,
+        config: {
+          flywheelActive: true,
+        },
+      },
+      include: {
+        devWallet: true,
+        opsWallet: true,
+        config: true,
+        flywheelState: true,
+      },
+    })
+
+    return tokens.map(mapPrismaTokenToPrivyTokenWithConfig)
+  } catch (error) {
+    loggers.user.error({ error: String(error) }, 'Failed to get Privy tokens for flywheel')
+    return []
+  }
+}
+
+/**
+ * Get active Privy tokens with auto-claim enabled
+ */
+export async function getPrivyTokensForAutoClaim(): Promise<PrivyTokenWithConfig[]> {
+  if (!isPrismaConfigured()) {
+    return []
+  }
+
+  try {
+    const tokens = await prisma.privyUserToken.findMany({
+      where: {
+        isActive: true,
+        config: {
+          autoClaimEnabled: true,
+        },
+      },
+      include: {
+        devWallet: true,
+        opsWallet: true,
+        config: true,
+      },
+    })
+
+    return tokens.map(mapPrismaTokenToPrivyTokenWithConfig)
+  } catch (error) {
+    loggers.user.error({ error: String(error) }, 'Failed to get Privy tokens for auto-claim')
+    return []
+  }
+}
+
+/**
+ * Get dev wallet address for a Privy token
+ * No decryption needed - just fetches the public address
+ */
+export async function getPrivyDevWalletAddress(privyTokenId: string): Promise<string | null> {
+  if (!isPrismaConfigured()) {
+    return null
+  }
+
+  try {
+    const token = await prisma.privyUserToken.findUnique({
+      where: { id: privyTokenId },
+      include: { devWallet: true },
+    })
+
+    if (!token) {
+      return null
+    }
+
+    return token.devWallet.walletAddress
+  } catch (error) {
+    loggers.user.error({ error: String(error), privyTokenId }, 'Failed to get Privy dev wallet address')
+    return null
+  }
+}
+
+/**
+ * Get ops wallet address for a Privy token
+ * No decryption needed - just fetches the public address
+ */
+export async function getPrivyOpsWalletAddress(privyTokenId: string): Promise<string | null> {
+  if (!isPrismaConfigured()) {
+    return null
+  }
+
+  try {
+    const token = await prisma.privyUserToken.findUnique({
+      where: { id: privyTokenId },
+      include: { opsWallet: true },
+    })
+
+    if (!token) {
+      return null
+    }
+
+    return token.opsWallet.walletAddress
+  } catch (error) {
+    loggers.user.error({ error: String(error), privyTokenId }, 'Failed to get Privy ops wallet address')
+    return null
+  }
+}
+
+/**
+ * Get flywheel state for a Privy token
+ */
+export async function getPrivyFlywheelState(privyTokenId: string): Promise<UserFlywheelState | null> {
+  if (!isPrismaConfigured()) {
+    return null
+  }
+
+  try {
+    const state = await prisma.privyFlywheelState.findUnique({
+      where: { privyTokenId },
+    })
+
+    if (!state) {
+      return null
+    }
+
+    // Map Prisma model to UserFlywheelState interface
+    return {
+      id: state.id,
+      user_token_id: state.privyTokenId,
+      cycle_phase: state.cyclePhase as 'buy' | 'sell',
+      buy_count: state.buyCount,
+      sell_count: state.sellCount,
+      sell_phase_token_snapshot: Number(state.sellPhaseTokenSnapshot),
+      sell_amount_per_tx: Number(state.sellAmountPerTx),
+      last_trade_at: state.lastTradeAt?.toISOString() || null,
+      consecutive_failures: state.consecutiveFailures,
+      last_failure_reason: state.lastFailureReason,
+      last_failure_at: state.lastFailureAt?.toISOString() || null,
+      paused_until: state.pausedUntil?.toISOString() || null,
+      total_failures: state.totalFailures,
+      updated_at: state.updatedAt.toISOString(),
+    }
+  } catch (error) {
+    loggers.user.error({ error: String(error), privyTokenId }, 'Failed to get Privy flywheel state')
+    return null
+  }
+}
+
+/**
+ * Update flywheel state for a Privy token
+ */
+export async function updatePrivyFlywheelState(
+  privyTokenId: string,
+  updates: Partial<Omit<UserFlywheelState, 'id' | 'user_token_id' | 'updated_at'>>
+): Promise<boolean> {
+  if (!isPrismaConfigured()) {
+    return false
+  }
+
+  try {
+    // Map snake_case interface fields to camelCase Prisma fields
+    const prismaUpdates: any = {}
+
+    if (updates.cycle_phase !== undefined) prismaUpdates.cyclePhase = updates.cycle_phase
+    if (updates.buy_count !== undefined) prismaUpdates.buyCount = updates.buy_count
+    if (updates.sell_count !== undefined) prismaUpdates.sellCount = updates.sell_count
+    if (updates.sell_phase_token_snapshot !== undefined) prismaUpdates.sellPhaseTokenSnapshot = updates.sell_phase_token_snapshot
+    if (updates.sell_amount_per_tx !== undefined) prismaUpdates.sellAmountPerTx = updates.sell_amount_per_tx
+    if (updates.last_trade_at !== undefined) prismaUpdates.lastTradeAt = updates.last_trade_at ? new Date(updates.last_trade_at) : null
+    if (updates.consecutive_failures !== undefined) prismaUpdates.consecutiveFailures = updates.consecutive_failures
+    if (updates.last_failure_reason !== undefined) prismaUpdates.lastFailureReason = updates.last_failure_reason
+    if (updates.last_failure_at !== undefined) prismaUpdates.lastFailureAt = updates.last_failure_at ? new Date(updates.last_failure_at) : null
+    if (updates.paused_until !== undefined) prismaUpdates.pausedUntil = updates.paused_until ? new Date(updates.paused_until) : null
+    if (updates.total_failures !== undefined) prismaUpdates.totalFailures = updates.total_failures
+
+    await prisma.privyFlywheelState.update({
+      where: { privyTokenId },
+      data: prismaUpdates,
+    })
+
+    return true
+  } catch (error) {
+    loggers.user.error({ error: String(error), privyTokenId }, 'Failed to update Privy flywheel state')
+    return false
+  }
+}
+
+/**
+ * Get token config for a Privy token
+ */
+export async function getPrivyTokenConfig(privyTokenId: string): Promise<UserTokenConfig | null> {
+  if (!supabase) {
+    return null
+  }
+
+  const { data, error } = await supabase
+    .from('privy_token_config')
+    .select('*')
+    .eq('privy_token_id', privyTokenId)
+    .single()
+
+  if (error) {
+    if (error.code !== 'PGRST116') {
+      loggers.user.error({ error: error.message, privyTokenId }, 'Failed to get Privy token config')
+    }
+    return null
+  }
+
+  // Map privy_token_id to user_token_id for interface compatibility
+  return {
+    ...data,
+    user_token_id: data.privy_token_id,
+  } as UserTokenConfig
+}
+
+/**
+ * Update token config for a Privy token
+ */
+export async function updatePrivyTokenConfig(
+  privyTokenId: string,
+  updates: Partial<Omit<UserTokenConfig, 'id' | 'user_token_id' | 'updated_at'>>
+): Promise<UserTokenConfig | null> {
+  if (!supabase) {
+    return null
+  }
+
+  const { data, error } = await supabase
+    .from('privy_token_config')
+    .update(updates)
+    .eq('privy_token_id', privyTokenId)
+    .select()
+    .single()
+
+  if (error) {
+    loggers.user.error({ error: error.message, privyTokenId }, 'Failed to update Privy token config')
+    return null
+  }
+
+  return {
+    ...data,
+    user_token_id: data.privy_token_id,
+  } as UserTokenConfig
+}
+
+/**
+ * Get a specific Privy token by ID with all related data
+ */
+export async function getPrivyToken(privyTokenId: string): Promise<PrivyTokenWithConfig | null> {
+  if (!supabase) {
+    return null
+  }
+
+  const { data, error } = await supabase
+    .from('privy_user_tokens')
+    .select(`
+      *,
+      privy_token_config(*),
+      privy_flywheel_state(*),
+      dev_wallet:privy_wallets!dev_wallet_id(id, wallet_address),
+      ops_wallet:privy_wallets!ops_wallet_id(id, wallet_address)
+    `)
+    .eq('id', privyTokenId)
+    .single()
+
+  if (error) {
+    if (error.code !== 'PGRST116') {
+      loggers.user.error({ error: error.message, privyTokenId }, 'Failed to get Privy token')
+    }
+    return null
+  }
+
+  return data as PrivyTokenWithConfig
+}
+
+/**
+ * Get all Privy tokens for a user
+ */
+export async function getPrivyUserTokens(privyUserId: string): Promise<PrivyTokenWithConfig[]> {
+  if (!supabase) {
+    return []
+  }
+
+  const { data, error } = await supabase
+    .from('privy_user_tokens')
+    .select(`
+      *,
+      privy_token_config(*),
+      privy_flywheel_state(*),
+      dev_wallet:privy_wallets!dev_wallet_id(id, wallet_address),
+      ops_wallet:privy_wallets!ops_wallet_id(id, wallet_address)
+    `)
+    .eq('privy_user_id', privyUserId)
+    .order('created_at', { ascending: false })
+
+  if (error) {
+    loggers.user.error({ error: error.message, privyUserId }, 'Failed to get Privy user tokens')
+    return []
+  }
+
+  return data as PrivyTokenWithConfig[]
 }

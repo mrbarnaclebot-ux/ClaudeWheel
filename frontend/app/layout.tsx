@@ -1,6 +1,7 @@
 import type { Metadata } from 'next'
 import './globals.css'
 import { WalletProvider } from './providers/WalletProvider'
+import { PrivyProvider } from './providers/PrivyProvider'
 import { AuthProvider } from './providers/AuthProvider'
 
 export const metadata: Metadata = {
@@ -29,13 +30,15 @@ export default function RootLayout({
         {/* Grid pattern background */}
         <div className="fixed inset-0 bg-grid pointer-events-none opacity-50" />
 
-        {/* Main content with Wallet and Auth Providers */}
+        {/* Main content with Wallet (for admin), Privy and Auth Providers */}
         <WalletProvider>
-          <AuthProvider>
-            <div className="relative z-10">
-              {children}
-            </div>
-          </AuthProvider>
+          <PrivyProvider>
+            <AuthProvider>
+              <div className="relative z-10">
+                {children}
+              </div>
+            </AuthProvider>
+          </PrivyProvider>
         </WalletProvider>
       </body>
     </html>

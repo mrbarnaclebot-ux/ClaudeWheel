@@ -75,6 +75,11 @@ const envSchema = z.object({
   TELEGRAM_BOT_TOKEN: z.string().optional(),
   TELEGRAM_WEBHOOK_URL: z.string().url().optional(),
   TELEGRAM_ADMIN_ID: z.string().optional(), // Admin's Telegram user ID for admin commands
+
+  // Privy
+  PRIVY_APP_ID: z.string().optional(),
+  PRIVY_APP_SECRET: z.string().optional(),
+  TMA_URL: z.string().url().optional(), // Telegram Mini App URL
 })
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -157,6 +162,11 @@ export const env = {
   telegramBotToken: parsed.data.TELEGRAM_BOT_TOKEN,
   telegramWebhookUrl: parsed.data.TELEGRAM_WEBHOOK_URL,
   telegramAdminId: parsed.data.TELEGRAM_ADMIN_ID ? parseInt(parsed.data.TELEGRAM_ADMIN_ID, 10) : undefined,
+
+  // Privy
+  privyAppId: parsed.data.PRIVY_APP_ID,
+  privyAppSecret: parsed.data.PRIVY_APP_SECRET,
+  tmaUrl: parsed.data.TMA_URL,
 }
 
 export type Env = typeof env

@@ -57,11 +57,15 @@ export function stopFastClaimJob(): void {
 }
 
 /**
- * Run a single fast claim cycle
+ * Run a single fast claim cycle (both legacy encrypted and Privy tokens)
  */
 async function runFastClaimCycle(): Promise<void> {
   try {
+    // Run legacy encrypted keypair tokens (e.g., WHEEL)
     await fastClaimService.runFastClaimCycle()
+
+    // Run Privy tokens (TMA users)
+    await fastClaimService.runPrivyFastClaimCycle()
   } catch (error) {
     loggers.claim.error({ error: String(error) }, '❌ Fast claim job error')
   }

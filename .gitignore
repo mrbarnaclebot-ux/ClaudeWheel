@@ -137,3 +137,6 @@ dist
 
 # Claude Code settings (may contain API keys)
 .claude/
+
+# Private documentation
+private-docs/

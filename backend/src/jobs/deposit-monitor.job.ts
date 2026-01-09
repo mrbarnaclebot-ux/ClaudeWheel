@@ -7,6 +7,7 @@ import cron from 'node-cron'
 import { loggers } from '../utils/logger'
 import { PublicKey } from '@solana/web3.js'
 import { supabase } from '../config/database'
+import { prisma, isPrismaConfigured, type PrivyPendingLaunch as PrismaPrivyPendingLaunch, type PrivyWallet } from '../config/prisma'
 import { getConnection, getBalance } from '../config/solana'
 import { tokenLauncherService } from '../services/token-launcher'
 import { executeRefund, findOriginalFunder } from '../services/refund.service'
@@ -645,10 +646,12 @@ export function startDepositMonitorJob(): void {
 
   jobTask = cron.schedule(CHECK_INTERVAL, async () => {
     await checkPendingLaunches()
+    await checkPrivyPendingLaunches() // Also check Privy pending launches
   })
 
   // Run immediately on start
   checkPendingLaunches()
+  checkPrivyPendingLaunches()
 }
 
 /**
@@ -670,4 +673,424 @@ export function getDepositMonitorStatus(): { running: boolean; isProcessing: boo
     running: jobTask !== null,
     isProcessing: isRunning,
   }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PRIVY PENDING LAUNCHES
+// For tokens launched via TMA with Privy embedded wallets
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Prisma PrivyPendingLaunch with relations
+type PrivyPendingLaunchWithRelations = PrismaPrivyPendingLaunch & {
+  devWallet: PrivyWallet
+  opsWallet: PrivyWallet
+  user: { telegramId: bigint | null }
+}
+
+let isPrivyRunning = false
+
+/**
+ * Check all Privy pending launches for deposits
+ */
+async function checkPrivyPendingLaunches(): Promise<void> {
+  if (isPrivyRunning) {
+    return
+  }
+
+  if (!isPrismaConfigured()) {
+    return
+  }
+
+  isPrivyRunning = true
+
+  try {
+    // Get all Privy pending launches awaiting deposit using Prisma
+    const pendingLaunches = await prisma.privyPendingLaunch.findMany({
+      where: {
+        status: 'awaiting_deposit',
+        expiresAt: { lt: new Date(Date.now() + 24 * 60 * 60 * 1000) },
+      },
+      include: {
+        devWallet: true,
+        opsWallet: true,
+        user: { select: { telegramId: true } },
+      },
+    })
+
+    if (!pendingLaunches || pendingLaunches.length === 0) {
+      return
+    }
+
+    loggers.deposit.info({ count: pendingLaunches.length }, '📡 Checking Privy pending token launches...')
+
+    for (const launch of pendingLaunches) {
+      try {
+        // Check if expired
+        if (launch.expiresAt < new Date()) {
+          await handlePrivyExpiredLaunch(launch)
+          continue
+        }
+
+        // Check balance of dev wallet
+        const devWalletAddress = launch.devWallet?.walletAddress
+        if (!devWalletAddress) {
+          loggers.deposit.warn({ launchId: launch.id }, 'Privy launch missing dev wallet')
+          continue
+        }
+
+        const devWalletPubkey = new PublicKey(devWalletAddress)
+        const balance = await getBalance(devWalletPubkey)
+
+        if (balance >= MIN_DEPOSIT_SOL) {
+          loggers.deposit.info({ tokenSymbol: launch.tokenSymbol, balance }, '💰 Privy deposit detected')
+
+          // Atomic update with optimistic locking using Prisma
+          // updateMany returns count, so we check if any rows were updated
+          const updateResult = await prisma.privyPendingLaunch.updateMany({
+            where: {
+              id: launch.id,
+              status: 'awaiting_deposit', // Only update if still awaiting
+            },
+            data: {
+              minDepositSol: balance, // Store the received deposit amount
+              status: 'launching',
+              updatedAt: new Date(),
+            },
+          })
+
+          if (updateResult.count === 0) {
+            loggers.deposit.info({ launchId: launch.id }, '⏭️ Privy launch already being processed')
+            continue
+          }
+
+          // Log audit event to Supabase (audit_log is still in Supabase)
+          const db = requireSupabase()
+          await db.from('audit_log').insert({
+            event_type: 'privy_deposit_received',
+            details: {
+              privy_launch_id: launch.id,
+              amount_sol: balance,
+              dev_wallet: devWalletAddress,
+              telegram_id: launch.user?.telegramId ? Number(launch.user.telegramId) : null,
+            },
+          })
+
+          // Trigger token launch with Privy signing
+          await triggerPrivyTokenLaunch(launch, balance)
+        }
+      } catch (error) {
+        loggers.deposit.error({ launchId: launch.id, error: String(error) }, 'Error checking Privy launch')
+      }
+    }
+  } catch (error) {
+    loggers.deposit.error({ error: String(error) }, 'Error in Privy deposit monitor')
+  } finally {
+    isPrivyRunning = false
+  }
+}
+
+/**
+ * Handle expired Privy pending launch
+ */
+async function handlePrivyExpiredLaunch(launch: PrivyPendingLaunchWithRelations): Promise<void> {
+  loggers.deposit.info({ tokenSymbol: launch.tokenSymbol }, '⏰ Privy launch expired')
+
+  const devWalletAddress = launch.devWallet?.walletAddress
+  if (!devWalletAddress) return
+
+  const devWalletPubkey = new PublicKey(devWalletAddress)
+  const balance = await getBalance(devWalletPubkey)
+
+  // Update using Prisma
+  await prisma.privyPendingLaunch.update({
+    where: { id: launch.id },
+    data: {
+      status: 'expired',
+      minDepositSol: balance, // Store the balance at expiry
+      lastError: balance > 0.001 ? `Expired with ${balance} SOL` : 'No deposit received',
+      updatedAt: new Date(),
+    },
+  })
+
+  // Log audit event to Supabase (audit_log is still in Supabase)
+  const db = requireSupabase()
+  await db.from('audit_log').insert({
+    event_type: 'privy_launch_expired',
+    details: {
+      privy_launch_id: launch.id,
+      balance_sol: balance,
+      telegram_id: launch.user?.telegramId ? Number(launch.user.telegramId) : null,
+    },
+  })
+
+  // Notify user via Telegram
+  if (launch.user?.telegramId) {
+    await notifyUser(
+      Number(launch.user.telegramId),
+      `⏰ Your ${launch.tokenSymbol} launch has expired.\n\n${balance > 0.001 ? `Balance: ${balance.toFixed(4)} SOL` : 'No deposit was received.'}\n\nUse the TMA app to start a new launch.`
+    )
+  }
+}
+
+/**
+ * Trigger Privy token launch on Bags.fm
+ * Uses Privy delegated signing instead of encrypted keys
+ */
+async function triggerPrivyTokenLaunch(launch: PrivyPendingLaunchWithRelations, depositAmount: number): Promise<void> {
+  try {
+    loggers.deposit.info({ tokenSymbol: launch.tokenSymbol }, '🚀 Launching Privy token on Bags.fm...')
+
+    const devWalletAddress = launch.devWallet?.walletAddress
+
+    // Notify user that launch is starting
+    if (launch.user?.telegramId) {
+      await notifyUser(
+        Number(launch.user.telegramId),
+        `💰 *Deposit Detected!*\n\nReceived: ${depositAmount.toFixed(4)} SOL\nLaunching your token on Bags.fm...`
+      )
+    }
+
+    // Call token launcher service with Privy signing
+    const result = await tokenLauncherService.launchTokenWithPrivySigning({
+      tokenName: launch.tokenName,
+      tokenSymbol: launch.tokenSymbol,
+      tokenDescription: launch.tokenDescription || '',
+      tokenImageUrl: launch.tokenImageUrl || '',
+      twitterUrl: launch.twitterUrl || undefined,
+      telegramUrl: launch.telegramUrl || undefined,
+      websiteUrl: launch.websiteUrl || undefined,
+      discordUrl: launch.discordUrl || undefined,
+      devWalletAddress: devWalletAddress!,
+    })
+
+    if (result.success && result.tokenMint) {
+      await handlePrivySuccessfulLaunch(launch, result.tokenMint)
+    } else {
+      await handlePrivyFailedLaunch(launch, result.error || 'Unknown error')
+    }
+  } catch (error: any) {
+    loggers.deposit.error({ tokenSymbol: launch.tokenSymbol, error: String(error) }, 'Error launching Privy token')
+    await handlePrivyFailedLaunch(launch, error.message || 'Launch failed')
+  }
+}
+
+/**
+ * Handle successful Privy token launch
+ */
+async function handlePrivySuccessfulLaunch(launch: PrivyPendingLaunchWithRelations, tokenMint: string): Promise<void> {
+  loggers.deposit.info({ tokenSymbol: launch.tokenSymbol, tokenMint }, '✅ Successfully launched Privy token')
+
+  try {
+    // Update pending launch status using Prisma
+    await prisma.privyPendingLaunch.update({
+      where: { id: launch.id },
+      data: {
+        status: 'completed',
+        tokenMintAddress: tokenMint,
+        launchedAt: new Date(),
+        updatedAt: new Date(),
+      },
+    })
+
+    // Create privy_user_tokens record using Prisma
+    const userToken = await prisma.privyUserToken.create({
+      data: {
+        privyUserId: launch.privyUserId,
+        devWalletId: launch.devWalletId,
+        opsWalletId: launch.opsWalletId,
+        tokenMintAddress: tokenMint,
+        tokenSymbol: launch.tokenSymbol,
+        tokenName: launch.tokenName,
+        tokenDecimals: 9, // Bags.fm default
+        isActive: true,
+        isGraduated: false,
+        launchedViaTelegram: true,
+      },
+    })
+
+    loggers.deposit.info({ userTokenId: userToken.id }, '📝 Created privy_user_tokens record')
+
+    // Create config with flywheel enabled using Prisma
+    try {
+      await prisma.privyTokenConfig.create({
+        data: {
+          privyTokenId: userToken.id,
+          flywheelActive: true,
+          autoClaimEnabled: true,
+          algorithmMode: 'simple',
+          minBuyAmountSol: 0.01,
+          maxBuyAmountSol: 0.05,
+          slippageBps: 300,
+          tradingRoute: 'auto',
+        },
+      })
+      loggers.deposit.info({ userTokenId: userToken.id }, '⚙️ Created privy_token_config')
+    } catch (configError: any) {
+      loggers.deposit.error({ error: configError.message }, 'Failed to create privy_token_config')
+    }
+
+    // Create flywheel state using Prisma
+    try {
+      await prisma.privyFlywheelState.create({
+        data: {
+          privyTokenId: userToken.id,
+          cyclePhase: 'buy',
+          buyCount: 0,
+          sellCount: 0,
+          consecutiveFailures: 0,
+          totalFailures: 0,
+        },
+      })
+      loggers.deposit.info({ userTokenId: userToken.id }, '🔄 Created privy_flywheel_state')
+    } catch (stateError: any) {
+      loggers.deposit.error({ error: stateError.message }, 'Failed to create privy_flywheel_state')
+    }
+
+    // Log audit event to Supabase (audit_log is still in Supabase)
+    const db = requireSupabase()
+    await db.from('audit_log').insert({
+      event_type: 'privy_launch_completed',
+      details: {
+        privy_launch_id: launch.id,
+        privy_token_id: userToken.id,
+        token_mint: tokenMint,
+        token_symbol: launch.tokenSymbol,
+        telegram_id: launch.user?.telegramId ? Number(launch.user.telegramId) : null,
+      },
+    })
+
+    // Notify user
+    if (launch.user?.telegramId) {
+      await notifyUser(
+        Number(launch.user.telegramId),
+        `🎉 *TOKEN LAUNCHED SUCCESSFULLY!*
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+*${launch.tokenName} (${launch.tokenSymbol})*
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Mint: \`${tokenMint}\`
+
+🔗 *View on Bags.fm:*
+bags.fm/token/${tokenMint}
+
+✅ Flywheel: ENABLED
+✅ Auto-Claim: ACTIVE
+✅ Algorithm: Simple mode
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+💸 *Fee Split*
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Trading fees collected automatically:
+├ 90% → Your Ops Wallet
+└ 10% → Claude Wheel (platform fee)
+
+Your token is live! Check the TMA app for status.`
+      )
+    }
+  } catch (dbError: any) {
+    loggers.deposit.error({ error: dbError.message, tokenMint }, 'Database error after Privy token launch')
+
+    if (launch.user?.telegramId) {
+      await notifyUser(
+        Number(launch.user.telegramId),
+        `🎉 *TOKEN LAUNCHED ON BAGS.FM!*
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+*${launch.tokenName} (${launch.tokenSymbol})*
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Mint: \`${tokenMint}\`
+
+🔗 *View on Bags.fm:*
+bags.fm/token/${tokenMint}
+
+⚠️ *Note:* There was an issue registering your token. Please use the TMA app to register it manually.`
+      )
+    }
+  }
+}
+
+/**
+ * Handle failed Privy token launch
+ */
+async function handlePrivyFailedLaunch(launch: PrivyPendingLaunchWithRelations, errorMessage: string): Promise<void> {
+  loggers.deposit.error({ tokenSymbol: launch.tokenSymbol, errorMessage }, '❌ Failed to launch Privy token')
+
+  const newRetryCount = (launch.retryCount || 0) + 1
+  const maxRetries = 3
+
+  if (newRetryCount < maxRetries) {
+    // Update using Prisma for retry
+    await prisma.privyPendingLaunch.update({
+      where: { id: launch.id },
+      data: {
+        status: 'awaiting_deposit',
+        retryCount: newRetryCount,
+        lastError: errorMessage,
+        updatedAt: new Date(),
+      },
+    })
+
+    if (launch.user?.telegramId) {
+      await notifyUser(
+        Number(launch.user.telegramId),
+        `⚠️ Launch attempt ${newRetryCount} failed for ${launch.tokenSymbol}.\n\nError: ${errorMessage}\n\nRetrying automatically...`
+      )
+    }
+  } else {
+    // Update using Prisma for final failure
+    await prisma.privyPendingLaunch.update({
+      where: { id: launch.id },
+      data: {
+        status: 'failed',
+        retryCount: newRetryCount,
+        lastError: `Max retries reached. Last error: ${errorMessage}`,
+        updatedAt: new Date(),
+      },
+    })
+
+    // Log audit event to Supabase (audit_log is still in Supabase)
+    const db = requireSupabase()
+    await db.from('audit_log').insert({
+      event_type: 'privy_launch_failed',
+      details: {
+        privy_launch_id: launch.id,
+        error: errorMessage,
+        retry_count: newRetryCount,
+        telegram_id: launch.user?.telegramId ? Number(launch.user.telegramId) : null,
+      },
+    })
+
+    if (launch.user?.telegramId) {
+      await notifyUser(
+        Number(launch.user.telegramId),
+        `❌ *Launch Failed*
+
+Your ${launch.tokenSymbol} launch could not be completed after ${maxRetries} attempts.
+
+Error: ${errorMessage}
+
+Please check the TMA app for more details.`
+      )
+    }
+  }
+}
+
+/**
+ * Start both deposit monitor jobs (legacy + Privy)
+ */
+export function startAllDepositMonitorJobs(): void {
+  startDepositMonitorJob()
+
+  // Run Privy check alongside the regular one
+  loggers.deposit.info('🔄 Starting Privy deposit monitor (piggybacks on main job)')
+}
+
+/**
+ * Run a single check of Privy pending launches (for manual trigger)
+ */
+export async function runPrivyDepositCheck(): Promise<void> {
+  await checkPrivyPendingLaunches()
 }

@@ -5,6 +5,68 @@
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3002'
 
+// Axios-style API helper for Privy integration
+interface RequestConfig {
+  headers?: Record<string, string>
+}
+
+interface ApiResponseData<T = any> {
+  data: T
+  status: number
+}
+
+export const api = {
+  async get<T = any>(url: string, config?: RequestConfig): Promise<ApiResponseData<T>> {
+    const response = await fetch(`${API_BASE_URL}${url}`, {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+        ...config?.headers,
+      },
+    })
+    const data = await response.json()
+    return { data, status: response.status }
+  },
+
+  async post<T = any>(url: string, body?: any, config?: RequestConfig): Promise<ApiResponseData<T>> {
+    const response = await fetch(`${API_BASE_URL}${url}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...config?.headers,
+      },
+      body: body ? JSON.stringify(body) : undefined,
+    })
+    const data = await response.json()
+    return { data, status: response.status }
+  },
+
+  async put<T = any>(url: string, body?: any, config?: RequestConfig): Promise<ApiResponseData<T>> {
+    const response = await fetch(`${API_BASE_URL}${url}`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        ...config?.headers,
+      },
+      body: body ? JSON.stringify(body) : undefined,
+    })
+    const data = await response.json()
+    return { data, status: response.status }
+  },
+
+  async delete<T = any>(url: string, config?: RequestConfig): Promise<ApiResponseData<T>> {
+    const response = await fetch(`${API_BASE_URL}${url}`, {
+      method: 'DELETE',
+      headers: {
+        'Content-Type': 'application/json',
+        ...config?.headers,
+      },
+    })
+    const data = await response.json()
+    return { data, status: response.status }
+  },
+}
+
 export interface WalletBalance {
   wallet_type: 'dev' | 'ops'
   address: string

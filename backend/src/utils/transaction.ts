@@ -12,6 +12,7 @@ import {
   TransactionConfirmationStrategy,
 } from '@solana/web3.js'
 import { loggers } from './logger'
+import { privyService } from '../services/privy.service'
 
 // ═══════════════════════════════════════════════════════════════════════════
 // TYPES
@@ -371,6 +372,257 @@ export async function sendSerializedTransactionWithRetry(
     attempts,
     error: errorMessage,
   }, 'Serialized transaction failed')
+
+  return {
+    success: false,
+    error: errorMessage,
+    attempts,
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PRIVY DELEGATED SIGNING FUNCTIONS
+// For transactions signed via Privy's server-side wallet API
+// ═══════════════════════════════════════════════════════════════════════════
+
+export interface PrivyTransactionOptions {
+  /** Maximum number of retry attempts (default: 3) */
+  maxRetries?: number
+  /** Delay between retries in ms (default: exponential backoff) */
+  retryDelayMs?: number[]
+  /** Commitment level for confirmation (default: 'confirmed') */
+  commitment?: 'processed' | 'confirmed' | 'finalized'
+  /** Log context for debugging */
+  logContext?: Record<string, unknown>
+}
+
+/**
+ * Send a transaction using Privy delegated signing
+ * Works with both legacy and versioned transactions
+ */
+export async function sendTransactionWithPrivySigning(
+  connection: Connection,
+  transaction: Transaction | VersionedTransaction,
+  walletAddress: string,
+  options: PrivyTransactionOptions = {}
+): Promise<TransactionResult> {
+  const {
+    maxRetries = 3,
+    retryDelayMs = [2000, 5000, 10000],
+    commitment = 'confirmed',
+    logContext = {},
+  } = options
+
+  let lastError: Error | null = null
+  let attempts = 0
+
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    attempts++
+    try {
+      // For legacy transactions, get fresh blockhash
+      if (transaction instanceof Transaction) {
+        const latestBlockhash = await connection.getLatestBlockhash(commitment)
+        transaction.recentBlockhash = latestBlockhash.blockhash
+        // Note: feePayer should already be set by caller
+      }
+
+      // Use Privy to sign and send
+      const signature = await privyService.signAndSendSolanaTransaction(
+        walletAddress,
+        transaction
+      )
+
+      if (!signature) {
+        throw new Error('Privy signing failed - no signature returned')
+      }
+
+      loggers.solana.debug({
+        ...logContext,
+        signature,
+        walletAddress,
+        attempt: attempt + 1,
+      }, 'Privy transaction sent, awaiting confirmation')
+
+      // Confirm transaction
+      const latestBlockhash = await connection.getLatestBlockhash(commitment)
+      const confirmationStrategy: TransactionConfirmationStrategy = {
+        signature,
+        blockhash: latestBlockhash.blockhash,
+        lastValidBlockHeight: latestBlockhash.lastValidBlockHeight,
+      }
+
+      const confirmation = await connection.confirmTransaction(
+        confirmationStrategy,
+        commitment
+      )
+
+      if (confirmation.value.err) {
+        throw new Error(`Transaction failed: ${JSON.stringify(confirmation.value.err)}`)
+      }
+
+      loggers.solana.info({
+        ...logContext,
+        signature,
+        walletAddress,
+        attempts,
+      }, 'Privy transaction confirmed')
+
+      return {
+        success: true,
+        signature,
+        attempts,
+      }
+    } catch (error) {
+      lastError = error as Error
+
+      const errorMessage = error instanceof Error ? error.message : String(error)
+      const isRetryable = isRetryableError(errorMessage)
+
+      loggers.solana.warn({
+        ...logContext,
+        walletAddress,
+        attempt: attempt + 1,
+        maxRetries,
+        error: errorMessage,
+        isRetryable,
+      }, 'Privy transaction attempt failed')
+
+      if (!isRetryable || attempt >= maxRetries - 1) {
+        break
+      }
+
+      const delay = retryDelayMs[attempt] || retryDelayMs[retryDelayMs.length - 1]
+      await sleep(delay)
+    }
+  }
+
+  const errorMessage = lastError?.message || 'Privy transaction failed after max retries'
+  loggers.solana.error({
+    ...logContext,
+    walletAddress,
+    attempts,
+    error: errorMessage,
+  }, 'Privy transaction failed')
+
+  return {
+    success: false,
+    error: errorMessage,
+    attempts,
+  }
+}
+
+/**
+ * Send a pre-serialized transaction (base64 encoded) using Privy delegated signing
+ * Automatically detects versioned vs legacy transaction format
+ */
+export async function sendSerializedTransactionWithPrivySigning(
+  connection: Connection,
+  serializedTx: string,
+  walletAddress: string,
+  options: PrivyTransactionOptions = {}
+): Promise<TransactionResult> {
+  const {
+    maxRetries = 3,
+    retryDelayMs = [2000, 5000, 10000],
+    commitment = 'confirmed',
+    logContext = {},
+  } = options
+
+  let lastError: Error | null = null
+  let attempts = 0
+
+  const txBuffer = Buffer.from(serializedTx, 'base64')
+
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    attempts++
+    try {
+      let transaction: Transaction | VersionedTransaction
+
+      // Try to deserialize as versioned transaction first
+      try {
+        transaction = VersionedTransaction.deserialize(txBuffer)
+      } catch {
+        // Fall back to legacy transaction
+        transaction = Transaction.from(txBuffer)
+      }
+
+      // Use Privy to sign and send
+      const signature = await privyService.signAndSendSolanaTransaction(
+        walletAddress,
+        transaction
+      )
+
+      if (!signature) {
+        throw new Error('Privy signing failed - no signature returned')
+      }
+
+      loggers.solana.debug({
+        ...logContext,
+        signature,
+        walletAddress,
+        attempt: attempt + 1,
+      }, 'Privy serialized transaction sent, awaiting confirmation')
+
+      // Confirm transaction
+      const latestBlockhash = await connection.getLatestBlockhash(commitment)
+      const confirmationStrategy: TransactionConfirmationStrategy = {
+        signature,
+        blockhash: latestBlockhash.blockhash,
+        lastValidBlockHeight: latestBlockhash.lastValidBlockHeight,
+      }
+
+      const confirmation = await connection.confirmTransaction(
+        confirmationStrategy,
+        commitment
+      )
+
+      if (confirmation.value.err) {
+        throw new Error(`Transaction failed: ${JSON.stringify(confirmation.value.err)}`)
+      }
+
+      loggers.solana.info({
+        ...logContext,
+        signature,
+        walletAddress,
+        attempts,
+      }, 'Privy serialized transaction confirmed')
+
+      return {
+        success: true,
+        signature,
+        attempts,
+      }
+    } catch (error) {
+      lastError = error as Error
+
+      const errorMessage = error instanceof Error ? error.message : String(error)
+      const isRetryable = isRetryableError(errorMessage)
+
+      loggers.solana.warn({
+        ...logContext,
+        walletAddress,
+        attempt: attempt + 1,
+        maxRetries,
+        error: errorMessage,
+        isRetryable,
+      }, 'Privy serialized transaction attempt failed')
+
+      if (!isRetryable || attempt >= maxRetries - 1) {
+        break
+      }
+
+      const delay = retryDelayMs[attempt] || retryDelayMs[retryDelayMs.length - 1]
+      await sleep(delay)
+    }
+  }
+
+  const errorMessage = lastError?.message || 'Privy serialized transaction failed after max retries'
+  loggers.solana.error({
+    ...logContext,
+    walletAddress,
+    attempts,
+    error: errorMessage,
+  }, 'Privy serialized transaction failed')
 
   return {
     success: false,

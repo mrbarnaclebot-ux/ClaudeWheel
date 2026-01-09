@@ -1,8 +1,13 @@
 // ═══════════════════════════════════════════════════════════════════════════
 // BAGS.FM API SERVICE
 // Integration with Bags.fm token launchpad for fee tracking and claiming
+// Uses official Bags SDK for trading operations
 // ═══════════════════════════════════════════════════════════════════════════
 
+import { PublicKey } from '@solana/web3.js'
+import { BagsSDK } from '@bagsfm/bags-sdk'
+import bs58 from 'bs58'
+import { getConnection } from '../config/solana'
 import { loggers } from '../utils/logger'
 
 const BAGS_API_BASE = 'https://public-api-v2.bags.fm/api/v1'
@@ -89,9 +94,23 @@ export interface SwapTransaction {
 
 class BagsFmService {
   private apiKey: string | null = null
+  private sdk: BagsSDK | null = null
 
   setApiKey(key: string) {
     this.apiKey = key
+    this.initSdk()
+  }
+
+  private initSdk(): void {
+    if (this.apiKey) {
+      try {
+        const connection = getConnection()
+        this.sdk = new BagsSDK(this.apiKey, connection, 'confirmed')
+        loggers.bags.info('Bags SDK initialized successfully')
+      } catch (error) {
+        loggers.bags.error({ error: String(error) }, 'Failed to initialize Bags SDK')
+      }
+    }
   }
 
   private async fetch<T>(endpoint: string, options: RequestInit = {}): Promise<T | null> {
@@ -415,7 +434,7 @@ class BagsFmService {
   }
 
   /**
-   * Get a trade quote
+   * Get a trade quote using the official Bags SDK
    * Note: side is determined by inputMint/outputMint (SOL→token = buy, token→SOL = sell)
    */
   async getTradeQuote(
@@ -438,8 +457,49 @@ class BagsFmService {
       return null
     }
 
-    // GET request with query params (API does not support POST for quote)
-    // Must include slippageMode='manual' when providing slippageBps (per API v2 docs)
+    loggers.bags.info({
+      inputMint,
+      outputMint,
+      amount: amountInt,
+      slippageBps,
+      side: _side,
+      usingSdk: !!this.sdk,
+    }, 'Requesting trade quote from Bags.fm')
+
+    // Use SDK if available (preferred method)
+    if (this.sdk) {
+      try {
+        const quoteResponse = await this.sdk.trade.getQuote({
+          inputMint: new PublicKey(inputMint),
+          outputMint: new PublicKey(outputMint),
+          amount: amountInt,
+          slippageMode: 'manual',
+          slippageBps,
+        })
+
+        loggers.bags.info({
+          inAmount: quoteResponse.inAmount,
+          outAmount: quoteResponse.outAmount,
+          priceImpactPct: quoteResponse.priceImpactPct,
+        }, 'SDK quote received')
+
+        return {
+          rawQuoteResponse: quoteResponse as unknown as RawQuoteResponse,
+          inputMint: quoteResponse.inputMint,
+          outputMint: quoteResponse.outputMint,
+          inputAmount: parseInt(quoteResponse.inAmount) || amountInt,
+          outputAmount: parseInt(quoteResponse.outAmount) || 0,
+          priceImpact: parseFloat(quoteResponse.priceImpactPct) || 0,
+          fee: quoteResponse.platformFee?.amount ? parseInt(quoteResponse.platformFee.amount) : 0,
+        }
+      } catch (error: any) {
+        loggers.bags.error({ error: String(error), errorMessage: error.message }, 'SDK quote failed')
+        // Fall through to REST API fallback
+      }
+    }
+
+    // Fallback to REST API
+    loggers.bags.warn('Falling back to REST API for quote')
     const params = new URLSearchParams({
       inputMint,
       outputMint,
@@ -447,15 +507,6 @@ class BagsFmService {
       slippageMode: 'manual',
       slippageBps: slippageBps.toString(),
     })
-
-    loggers.bags.info({
-      inputMint,
-      outputMint,
-      amount: amountInt,
-      slippageBps,
-      side: _side,
-      fullUrl: `${BAGS_API_BASE}/trade/quote?${params}`,
-    }, 'Requesting trade quote from Bags.fm')
 
     const data = await this.fetch<any>(`/trade/quote?${params}`)
 
@@ -473,13 +524,43 @@ class BagsFmService {
   }
 
   /**
-   * Generate a swap transaction for bonding curve trades
+   * Generate a swap transaction for bonding curve trades using SDK
    * Requires the full quote response from getTradeQuote()
    */
   async generateSwapTransaction(
     walletAddress: string,
     quoteResponse: RawQuoteResponse
   ): Promise<SwapTransaction | null> {
+    loggers.bags.info({ walletAddress, usingSdk: !!this.sdk }, 'Generating swap transaction')
+
+    // Use SDK if available (preferred method)
+    if (this.sdk) {
+      try {
+        const result = await this.sdk.trade.createSwapTransaction({
+          quoteResponse: quoteResponse as any, // SDK expects full TradeQuoteResponse
+          userPublicKey: new PublicKey(walletAddress),
+        })
+
+        // SDK returns a VersionedTransaction, serialize to bs58 for compatibility
+        const serializedTx = bs58.encode(result.transaction.serialize())
+
+        loggers.bags.info({
+          lastValidBlockHeight: result.lastValidBlockHeight,
+          computeUnitLimit: result.computeUnitLimit,
+        }, 'SDK swap transaction created')
+
+        return {
+          transaction: serializedTx,
+          lastValidBlockHeight: result.lastValidBlockHeight,
+        }
+      } catch (error: any) {
+        loggers.bags.error({ error: String(error), errorMessage: error.message }, 'SDK swap transaction failed')
+        // Fall through to REST API fallback
+      }
+    }
+
+    // Fallback to REST API
+    loggers.bags.warn('Falling back to REST API for swap transaction')
     const data = await this.fetch<any>('/trade/swap', {
       method: 'POST',
       body: JSON.stringify({

@@ -9,6 +9,7 @@ import { env } from '../config/env'
 import { getConnection } from '../config/solana'
 import { decrypt } from './encryption.service'
 import { loggers } from '../utils/logger'
+import { privyService } from './privy.service'
 
 // Import Bags SDK
 import { BagsSDK, signAndSendTransaction } from '@bagsfm/bags-sdk'
@@ -39,6 +40,19 @@ export interface LaunchResult {
   tokenMint?: string
   transactionSignature?: string
   error?: string
+}
+
+// Simplified params for Privy launch (no encrypted keys needed)
+export interface PrivyLaunchTokenParams {
+  tokenName: string
+  tokenSymbol: string
+  tokenDescription: string
+  tokenImageUrl: string
+  twitterUrl?: string
+  telegramUrl?: string
+  websiteUrl?: string
+  discordUrl?: string
+  devWalletAddress: string  // Just the public address - signing is via Privy
 }
 
 class TokenLauncherService {
@@ -183,6 +197,125 @@ class TokenLauncherService {
       }
     } catch (error: any) {
       loggers.token.error({ error: String(error) }, 'Token launch failed')
+      return {
+        success: false,
+        error: error.message || 'Unknown error during token launch',
+      }
+    }
+  }
+
+  /**
+   * Launch a new token on Bags.fm using Privy delegated signing
+   * Same flow as launchToken but uses Privy API for transaction signing
+   */
+  async launchTokenWithPrivySigning(params: PrivyLaunchTokenParams): Promise<LaunchResult> {
+    if (!this.apiKey || !this.sdk) {
+      return {
+        success: false,
+        error: 'Bags.fm API key not configured (set BAGS_FM_API_KEY)',
+      }
+    }
+
+    try {
+      loggers.token.info({ tokenName: params.tokenName, tokenSymbol: params.tokenSymbol }, 'Launching token with Privy signing')
+
+      const devWalletPubkey = new PublicKey(params.devWalletAddress)
+      const connection = getConnection()
+      const commitment = this.sdk.state.getCommitment()
+
+      // Step 1: Create token info and metadata
+      loggers.token.info('Creating token info and metadata')
+      const tokenInfoResponse = await this.sdk.tokenLaunch.createTokenInfoAndMetadata({
+        imageUrl: params.tokenImageUrl,
+        name: params.tokenName,
+        description: params.tokenDescription,
+        symbol: params.tokenSymbol.toUpperCase().replace('$', ''),
+        twitter: params.twitterUrl,
+        website: params.websiteUrl,
+        telegram: params.telegramUrl,
+      })
+
+      loggers.token.info({ tokenMint: tokenInfoResponse.tokenMint, metadataUri: tokenInfoResponse.tokenMetadata }, 'Token info created')
+
+      const tokenMint = new PublicKey(tokenInfoResponse.tokenMint)
+
+      // Step 2: Create fee share config
+      loggers.token.info('Creating fee share config')
+      const feeClaimers = [
+        {
+          user: devWalletPubkey,
+          userBps: 10000, // 100% of fees to creator
+        },
+      ]
+
+      loggers.token.debug({ creatorWallet: params.devWalletAddress }, 'Fee sharing: 100% to creator')
+
+      const configResult = await this.sdk.config.createBagsFeeShareConfig({
+        payer: devWalletPubkey,
+        baseMint: tokenMint,
+        feeClaimers,
+      })
+
+      // Sign and send config transactions using Privy
+      if (configResult.transactions && configResult.transactions.length > 0) {
+        loggers.token.debug({ transactionCount: configResult.transactions.length }, 'Signing config transactions with Privy')
+        for (const tx of configResult.transactions) {
+          const signature = await privyService.signAndSendSolanaTransaction(params.devWalletAddress, tx)
+          if (!signature) {
+            throw new Error('Privy signing failed for config transaction')
+          }
+          // Wait for confirmation
+          await connection.confirmTransaction(signature, commitment)
+        }
+      }
+
+      // Handle bundles if returned
+      if (configResult.bundles && configResult.bundles.length > 0) {
+        loggers.token.debug({ bundleCount: configResult.bundles.length }, 'Processing bundles with Privy')
+        for (const bundle of configResult.bundles) {
+          for (const tx of bundle) {
+            const signature = await privyService.signAndSendSolanaTransaction(params.devWalletAddress, tx)
+            if (!signature) {
+              throw new Error('Privy signing failed for bundle transaction')
+            }
+            await connection.confirmTransaction(signature, commitment)
+          }
+        }
+      }
+
+      const configKey = configResult.meteoraConfigKey
+      loggers.token.debug({ configKey: configKey.toString() }, 'Config key generated')
+
+      // Step 3: Create launch transaction
+      loggers.token.info('Creating launch transaction')
+      const launchTransaction = await this.sdk.tokenLaunch.createLaunchTransaction({
+        metadataUrl: tokenInfoResponse.tokenMetadata,
+        tokenMint: tokenMint,
+        launchWallet: devWalletPubkey,
+        initialBuyLamports: 0,
+        configKey: configKey,
+      })
+
+      // Step 4 & 5: Sign and broadcast using Privy
+      loggers.token.info('Signing and broadcasting transaction with Privy')
+      const signature = await privyService.signAndSendSolanaTransaction(params.devWalletAddress, launchTransaction)
+
+      if (!signature) {
+        throw new Error('Privy signing failed for launch transaction')
+      }
+
+      // Confirm the transaction
+      await connection.confirmTransaction(signature, commitment)
+
+      loggers.token.info({ tokenMint: tokenInfoResponse.tokenMint, signature, url: `https://bags.fm/${tokenInfoResponse.tokenMint}` }, 'Token launched successfully with Privy signing')
+
+      return {
+        success: true,
+        tokenMint: tokenInfoResponse.tokenMint,
+        transactionSignature: signature,
+      }
+    } catch (error: any) {
+      loggers.token.error({ error: String(error) }, 'Token launch with Privy signing failed')
       return {
         success: false,
         error: error.message || 'Unknown error during token launch',

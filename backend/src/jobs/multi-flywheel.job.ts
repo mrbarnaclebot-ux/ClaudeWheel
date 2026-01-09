@@ -48,12 +48,17 @@ export function stopMultiUserFlywheelJob(): void {
 }
 
 /**
- * Run a single flywheel cycle
+ * Run a single flywheel cycle (both legacy encrypted and Privy tokens)
  */
 async function runFlywheelCycle(maxTradesPerMinute: number): Promise<void> {
   try {
     loggers.flywheel.info({ maxTradesPerMinute }, '⏰ Multi-user flywheel job triggered')
+
+    // Run legacy encrypted keypair tokens (e.g., WHEEL)
     await multiUserMMService.runFlywheelCycle(maxTradesPerMinute)
+
+    // Run Privy tokens (TMA users)
+    await multiUserMMService.runPrivyFlywheelCycle(maxTradesPerMinute)
   } catch (error) {
     loggers.flywheel.error({ error: String(error) }, '❌ Multi-user flywheel job failed')
   }

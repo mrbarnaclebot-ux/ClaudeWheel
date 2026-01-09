@@ -2,15 +2,19 @@ import express from 'express'
 import cors from 'cors'
 import { env } from './config/env'
 import { loggers } from './utils/logger'
-import { startMultiUserFlywheelJob, getMultiUserFlywheelJobStatus } from './jobs/multi-flywheel.job'
-import { startFastClaimJob, stopFastClaimJob, getFastClaimJobStatus } from './jobs/fast-claim.job'
+import { startMultiUserFlywheelJob } from './jobs/multi-flywheel.job'
+import { startFastClaimJob, stopFastClaimJob } from './jobs/fast-claim.job'
 import { startBalanceUpdateJob, stopBalanceUpdateJob } from './jobs/balance-update.job'
-import { startWheelFlywheelJob, getWheelFlywheelJobStatus } from './jobs/wheel-flywheel.job'
+import { startWheelFlywheelJob } from './jobs/wheel-flywheel.job'
 import statusRoutes from './routes/status.routes'
 import adminRoutes from './routes/admin.routes'
 import bagsRoutes from './routes/bags.routes'
 import authRoutes from './routes/auth.routes'
 import userTokenRoutes from './routes/user-token.routes'
+import privyAuthRoutes from './routes/privy-auth.routes'
+import privyTokensRoutes from './routes/privy-tokens.routes'
+import privyLaunchesRoutes from './routes/privy-launches.routes'
+import privyUsersRoutes from './routes/privy-users.routes'
 import { bagsFmService } from './services/bags-fm'
 import { isEncryptionConfigured } from './services/encryption.service'
 import { startTelegramBot, stopTelegramBot, getTelegramWebhookMiddleware } from './telegram/bot'
@@ -35,6 +39,12 @@ app.use('/api/bags', bagsRoutes)
 app.use('/api/auth', authRoutes)
 app.use('/api/user', userTokenRoutes)
 
+// Privy Routes (TMA & Web)
+app.use('/api/privy', privyAuthRoutes)
+app.use('/api/privy/tokens', privyTokensRoutes)
+app.use('/api/privy/launches', privyLaunchesRoutes)
+app.use('/api/users', privyUsersRoutes)
+
 // Telegram webhook (for production)
 const telegramWebhook = getTelegramWebhookMiddleware()
 if (telegramWebhook) {
@@ -42,7 +52,7 @@ if (telegramWebhook) {
 }
 
 // Root endpoint
-app.get('/', (req, res) => {
+app.get('/', (_req, res) => {
   res.json({
     name: 'Claude Flywheel Backend',
     version: '1.0.0',
@@ -80,6 +90,23 @@ app.get('/', (req, res) => {
       telegram: {
         webhook: '/telegram/webhook (POST)',
         note: 'Use Telegram bot @ClaudeWheelBot for token launch and management',
+      },
+      privy: {
+        verify: '/api/privy/verify (POST)',
+        status: '/api/privy/status (GET)',
+        tokens: '/api/privy/tokens (GET/POST)',
+        token: '/api/privy/tokens/:id (GET/DELETE)',
+        tokenConfig: '/api/privy/tokens/:id/config (PUT)',
+        launches: '/api/privy/launches (POST)',
+        pendingLaunch: '/api/privy/launches/pending (GET)',
+        launchHistory: '/api/privy/launches/history (GET)',
+        cancelLaunch: '/api/privy/launches/:id (DELETE)',
+      },
+      users: {
+        completeOnboarding: '/api/users/complete-onboarding (POST)',
+        profile: '/api/users/profile (GET/PUT)',
+        onboardingStatus: '/api/users/onboarding-status (GET)',
+        updateDelegation: '/api/users/update-delegation (POST)',
       },
     },
   })
