@@ -147,15 +147,57 @@ export async function fetchPlatformStats(
   return result.success ? result.data ?? null : null
 }
 
+interface SystemStatusApiResponse {
+  checks: Array<{
+    name: string
+    status: 'connected' | 'disconnected' | 'not_configured'
+    message: string
+    latency?: number
+  }>
+  environment: {
+    nodeEnv: string
+    port: number
+    solanaRpcUrl: string
+    jupiterApiUrl: string
+    marketMakingEnabled: boolean
+    minFeeThresholdSol: number
+    maxBuyAmountSol: number
+  }
+  uptime: number
+  memory: {
+    heapUsed: number
+    heapTotal: number
+  }
+}
+
 export async function fetchSystemStatus(signal?: AbortSignal): Promise<SystemStatus | null> {
   const requestKey = 'systemStatus'
   const controller = signal ? undefined : getAbortController(requestKey)
 
-  const result = await adminFetch<SystemStatus>(
+  const result = await adminFetch<SystemStatusApiResponse>(
     `${API_BASE_URL}/api/status/system`,
     { signal: signal ?? controller?.signal, requestKey }
   )
-  return result.success ? result.data ?? null : null
+
+  if (!result.success || !result.data) return null
+
+  // Transform API response to match SystemStatus type
+  const data = result.data
+  const supabaseCheck = data.checks.find(c => c.name === 'Supabase')
+  const rpcCheck = data.checks.find(c => c.name === 'Solana RPC')
+
+  return {
+    rpcConnection: rpcCheck?.status === 'connected',
+    databaseConnection: supabaseCheck?.status === 'connected',
+    memoryUsage: data.memory ? {
+      heapUsed: data.memory.heapUsed * 1024 * 1024, // Convert MB back to bytes
+      heapTotal: data.memory.heapTotal * 1024 * 1024,
+      percentage: (data.memory.heapUsed / data.memory.heapTotal) * 100,
+    } : undefined,
+    uptime: data.uptime,
+    environment: data.environment,
+    version: '1.0.0', // Backend doesn't return version, use default
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
