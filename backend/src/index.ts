@@ -5,6 +5,7 @@ import { loggers } from './utils/logger'
 import { startMultiUserFlywheelJob, getMultiUserFlywheelJobStatus } from './jobs/multi-flywheel.job'
 import { startFastClaimJob, stopFastClaimJob, getFastClaimJobStatus } from './jobs/fast-claim.job'
 import { startBalanceUpdateJob, stopBalanceUpdateJob } from './jobs/balance-update.job'
+import { startWheelFlywheelJob, getWheelFlywheelJobStatus } from './jobs/wheel-flywheel.job'
 import statusRoutes from './routes/status.routes'
 import adminRoutes from './routes/admin.routes'
 import bagsRoutes from './routes/bags.routes'
@@ -139,6 +140,13 @@ async function initializeServices() {
       startBalanceUpdateJob()
     } else {
       loggers.server.info('Balance update job disabled via BALANCE_UPDATE_JOB_ENABLED=false')
+    }
+
+    // Start WHEEL token flywheel job (platform token - claims + market making)
+    if (process.env.WHEEL_FLYWHEEL_ENABLED !== 'false') {
+      startWheelFlywheelJob()
+    } else {
+      loggers.server.info('WHEEL flywheel job disabled via WHEEL_FLYWHEEL_ENABLED=false')
     }
   }
 
