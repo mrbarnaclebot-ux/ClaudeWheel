@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { usePrivy, useSolanaWallets, useDelegatedActions } from '@privy-io/react-auth';
+import { usePrivy, useSolanaWallets, useDelegatedActions, type WalletWithMetadata } from '@privy-io/react-auth';
 import { useTelegram } from '@/components/TelegramProvider';
 import { motion, AnimatePresence } from 'framer-motion';
 import { api } from '@/lib/api';
@@ -11,7 +11,7 @@ type Step = 'welcome' | 'creating_wallets' | 'delegate_dev' | 'delegate_ops' | '
 
 export default function OnboardingPage() {
     const router = useRouter();
-    const { ready, authenticated, getAccessToken } = usePrivy();
+    const { ready, authenticated, getAccessToken, user } = usePrivy();
     const { wallets, createWallet } = useSolanaWallets();
     const { delegateWallet } = useDelegatedActions();
     const { user: telegramUser, hapticFeedback } = useTelegram();
@@ -19,9 +19,21 @@ export default function OnboardingPage() {
     const [step, setStep] = useState<Step>('welcome');
     const [error, setError] = useState<string | null>(null);
     const [isCreating, setIsCreating] = useState(false);
+    const [debugInfo, setDebugInfo] = useState<string | null>(null);
 
     // useSolanaWallets already returns only Solana wallets
     const solanaWallets = wallets;
+
+    // Helper to check if a wallet is already delegated via user.linkedAccounts
+    const isWalletDelegated = (walletAddress: string): boolean => {
+        if (!user?.linkedAccounts) return false;
+        return user.linkedAccounts.some(
+            (account): account is WalletWithMetadata =>
+                account.type === 'wallet' &&
+                (account as WalletWithMetadata).address === walletAddress &&
+                (account as WalletWithMetadata).delegated === true
+        );
+    };
 
     // If user already has 2 wallets, skip to delegation
     useEffect(() => {
@@ -77,6 +89,7 @@ export default function OnboardingPage() {
     async function handleDelegateDev() {
         hapticFeedback('medium');
         setError(null);
+        setDebugInfo(null);
 
         try {
             const devWallet = solanaWallets[0];
@@ -84,16 +97,48 @@ export default function OnboardingPage() {
                 throw new Error('Dev wallet not found');
             }
 
+            // Check if already delegated via user.linkedAccounts
+            const isDelegated = isWalletDelegated(devWallet.address);
+            const linkedAccountsInfo = user?.linkedAccounts?.filter(a => a.type === 'wallet').map(a => ({
+                address: (a as WalletWithMetadata).address?.slice(0, 8),
+                delegated: (a as WalletWithMetadata).delegated,
+                walletClientType: (a as WalletWithMetadata).walletClientType,
+            }));
+            const walletInfo = `Dev: ${devWallet.address.slice(0, 8)}... | delegated: ${isDelegated} | linkedWallets: ${JSON.stringify(linkedAccountsInfo)}`;
+            console.log('[Onboarding] Wallet info:', walletInfo);
+            setDebugInfo(walletInfo);
+
+            if (isDelegated) {
+                console.log('[Onboarding] Dev wallet already delegated, skipping...');
+                setStep('delegate_ops');
+                return;
+            }
+
             console.log('[Onboarding] Delegating dev wallet:', devWallet.address);
-            await delegateWallet({
+            console.log('[Onboarding] Wallet object:', JSON.stringify(devWallet, null, 2));
+
+            const result = await delegateWallet({
                 address: devWallet.address,
                 chainType: 'solana',
             });
+
+            console.log('[Onboarding] Delegation result:', result);
             console.log('[Onboarding] Dev wallet delegated successfully');
 
             setStep('delegate_ops');
         } catch (err: any) {
             console.error('[Onboarding] Dev wallet delegation failed:', err);
+            console.error('[Onboarding] Full error:', JSON.stringify(err, Object.getOwnPropertyNames(err), 2));
+
+            const errorDetails = {
+                message: err?.message,
+                code: err?.code,
+                name: err?.name,
+                cause: err?.cause,
+                stack: err?.stack?.split('\n')[0],
+            };
+
+            setDebugInfo(`Error: ${JSON.stringify(errorDetails)}`);
             setError(`Dev wallet delegation failed: ${err?.message || 'Unknown error'}`);
         }
     }
@@ -101,6 +146,7 @@ export default function OnboardingPage() {
     async function handleDelegateOps() {
         hapticFeedback('medium');
         setError(null);
+        setDebugInfo(null);
 
         try {
             const opsWallet = solanaWallets[1];
@@ -108,11 +154,33 @@ export default function OnboardingPage() {
                 throw new Error('Ops wallet not found');
             }
 
+            // Check if already delegated via user.linkedAccounts
+            const isDelegated = isWalletDelegated(opsWallet.address);
+            const linkedAccountsInfo = user?.linkedAccounts?.filter(a => a.type === 'wallet').map(a => ({
+                address: (a as WalletWithMetadata).address?.slice(0, 8),
+                delegated: (a as WalletWithMetadata).delegated,
+                walletClientType: (a as WalletWithMetadata).walletClientType,
+            }));
+            const walletInfo = `Ops: ${opsWallet.address.slice(0, 8)}... | delegated: ${isDelegated} | linkedWallets: ${JSON.stringify(linkedAccountsInfo)}`;
+            console.log('[Onboarding] Wallet info:', walletInfo);
+            setDebugInfo(walletInfo);
+
+            if (isDelegated) {
+                console.log('[Onboarding] Ops wallet already delegated, proceeding to registration...');
+                setStep('registering');
+                await completeRegistration();
+                return;
+            }
+
             console.log('[Onboarding] Delegating ops wallet:', opsWallet.address);
-            await delegateWallet({
+            console.log('[Onboarding] Wallet object:', JSON.stringify(opsWallet, null, 2));
+
+            const result = await delegateWallet({
                 address: opsWallet.address,
                 chainType: 'solana',
             });
+
+            console.log('[Onboarding] Delegation result:', result);
             console.log('[Onboarding] Ops wallet delegated successfully');
 
             // Now register with backend
@@ -120,6 +188,17 @@ export default function OnboardingPage() {
             await completeRegistration();
         } catch (err: any) {
             console.error('[Onboarding] Ops wallet delegation failed:', err);
+            console.error('[Onboarding] Full error:', JSON.stringify(err, Object.getOwnPropertyNames(err), 2));
+
+            const errorDetails = {
+                message: err?.message,
+                code: err?.code,
+                name: err?.name,
+                cause: err?.cause,
+                stack: err?.stack?.split('\n')[0],
+            };
+
+            setDebugInfo(`Error: ${JSON.stringify(errorDetails)}`);
             setError(`Ops wallet delegation failed: ${err?.message || 'Unknown error'}`);
         }
     }
@@ -254,6 +333,12 @@ export default function OnboardingPage() {
                         {error && (
                             <p className="text-red-400 text-sm text-center mt-4">{error}</p>
                         )}
+
+                        {debugInfo && (
+                            <div className="mt-4 p-3 bg-gray-900 rounded-lg">
+                                <p className="text-xs text-gray-500 font-mono break-all">{debugInfo}</p>
+                            </div>
+                        )}
                     </motion.div>
                 )}
 
@@ -289,6 +374,12 @@ export default function OnboardingPage() {
 
                         {error && (
                             <p className="text-red-400 text-sm text-center mt-4">{error}</p>
+                        )}
+
+                        {debugInfo && (
+                            <div className="mt-4 p-3 bg-gray-900 rounded-lg">
+                                <p className="text-xs text-gray-500 font-mono break-all">{debugInfo}</p>
+                            </div>
                         )}
                     </motion.div>
                 )}
