@@ -425,15 +425,37 @@ class BagsFmService {
     _side?: 'buy' | 'sell', // Kept for API compatibility but not sent to Bags.fm
     slippageBps: number = 300 // Default 3% slippage for bonding curve trades
   ): Promise<TradeQuote | null> {
+    // Validate amount - must be positive integer (lamports/smallest units)
+    if (!amount || amount <= 0 || !Number.isFinite(amount)) {
+      loggers.bags.error({ amount }, 'Invalid amount for trade quote - must be positive number')
+      return null
+    }
+
+    // Ensure amount is an integer (lamports)
+    const amountInt = Math.floor(amount)
+    if (amountInt < 1000) {
+      loggers.bags.error({ amount, amountInt }, 'Amount too small for trade quote - minimum ~1000 lamports')
+      return null
+    }
+
     // GET request with query params (API does not support POST for quote)
     // Must include slippageMode='manual' when providing slippageBps (per API v2 docs)
     const params = new URLSearchParams({
       inputMint,
       outputMint,
-      amount: amount.toString(),
+      amount: amountInt.toString(),
       slippageMode: 'manual',
       slippageBps: slippageBps.toString(),
     })
+
+    loggers.bags.info({
+      inputMint,
+      outputMint,
+      amount: amountInt,
+      slippageBps,
+      side: _side,
+      fullUrl: `${BAGS_API_BASE}/trade/quote?${params}`,
+    }, 'Requesting trade quote from Bags.fm')
 
     const data = await this.fetch<any>(`/trade/quote?${params}`)
 
