@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { usePrivy, useSolanaWallets, useDelegatedActions } from '@privy-io/react-auth';
 import { useTelegram } from '@/components/TelegramProvider';
@@ -11,38 +11,66 @@ type Step = 'welcome' | 'creating_wallets' | 'delegation' | 'complete';
 
 export default function OnboardingPage() {
     const router = useRouter();
-    const { getAccessToken } = usePrivy();
+    const { ready, authenticated, getAccessToken } = usePrivy();
     const { wallets, createWallet } = useSolanaWallets();
     const { delegateWallet } = useDelegatedActions();
     const { user: telegramUser, hapticFeedback } = useTelegram();
 
     const [step, setStep] = useState<Step>('welcome');
     const [error, setError] = useState<string | null>(null);
+    const [isCreating, setIsCreating] = useState(false);
 
     // useSolanaWallets already returns only Solana wallets
     const solanaWallets = wallets;
 
+    // If user already has 2 wallets, skip to delegation
+    useEffect(() => {
+        if (ready && authenticated && wallets.length >= 2 && step === 'welcome') {
+            setStep('delegation');
+        }
+    }, [ready, authenticated, wallets.length, step]);
+
     async function handleStart() {
+        if (!ready || !authenticated) {
+            setError('Please wait for authentication to complete.');
+            return;
+        }
+
+        if (isCreating) return; // Prevent double-clicks
+        setIsCreating(true);
         hapticFeedback('medium');
         setStep('creating_wallets');
         setError(null);
 
         try {
+            console.log('[Onboarding] Starting wallet creation, current wallets:', wallets.length);
+
             // Create dev wallet (first)
             if (wallets.length === 0) {
-                await createWallet();
+                console.log('[Onboarding] Creating first wallet (dev)...');
+                const devWallet = await createWallet();
+                console.log('[Onboarding] Dev wallet created:', devWallet?.address);
             }
 
+            // Small delay to let Privy state update
+            await new Promise(resolve => setTimeout(resolve, 500));
+
             // Create ops wallet (second)
-            // Note: createAdditional is passed to create additional wallets
+            // Check current wallets again after first creation
             if (wallets.length < 2) {
-                await createWallet({ createAdditional: true });
+                console.log('[Onboarding] Creating second wallet (ops)...');
+                const opsWallet = await createWallet({ createAdditional: true });
+                console.log('[Onboarding] Ops wallet created:', opsWallet?.address);
             }
 
             setStep('delegation');
-        } catch (err) {
-            setError('Failed to create wallets. Please try again.');
+        } catch (err: any) {
+            console.error('[Onboarding] Wallet creation failed:', err);
+            console.error('[Onboarding] Error details:', err?.message, err?.code, err?.cause);
+            setError(`Failed to create wallets: ${err?.message || 'Unknown error'}. Please try again.`);
             setStep('welcome');
+        } finally {
+            setIsCreating(false);
         }
     }
 
