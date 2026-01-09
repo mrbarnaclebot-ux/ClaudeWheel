@@ -3,7 +3,8 @@
 import { FC, ReactNode, useMemo, useState, useEffect } from 'react'
 import { ConnectionProvider, WalletProvider as SolanaWalletProvider } from '@solana/wallet-adapter-react'
 import { WalletModalProvider } from '@solana/wallet-adapter-react-ui'
-import { PhantomWalletAdapter, SolflareWalletAdapter } from '@solana/wallet-adapter-wallets'
+// Wallet Standard auto-detects installed wallets (Phantom, Solflare, etc.)
+// No need to explicitly import wallet adapters
 import { clusterApiUrl } from '@solana/web3.js'
 
 // Import wallet adapter styles
@@ -24,14 +25,9 @@ export const WalletProvider: FC<Props> = ({ children }) => {
   // Use mainnet
   const endpoint = useMemo(() => clusterApiUrl('mainnet-beta'), [])
 
-  // Supported wallets
-  const wallets = useMemo(
-    () => [
-      new PhantomWalletAdapter(),
-      new SolflareWalletAdapter(),
-    ],
-    []
-  )
+  // Wallet Standard auto-detects installed wallets (Phantom, Solflare, etc.)
+  // Empty array lets the adapter use Wallet Standard for auto-detection
+  const wallets = useMemo(() => [], [])
 
   // Always render the wallet context to prevent "WalletContext not found" errors
   // Only auto-connect and render real children when mounted on client

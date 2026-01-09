@@ -71,6 +71,11 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const checkExistingUser = async () => {
     if (!walletAddress) return
 
+    // Skip user check for admin routes - admin has its own auth system
+    if (typeof window !== 'undefined' && window.location.pathname.startsWith('/admin')) {
+      return
+    }
+
     setIsLoading(true)
     try {
       const existingUser = await getCurrentUser(walletAddress)
