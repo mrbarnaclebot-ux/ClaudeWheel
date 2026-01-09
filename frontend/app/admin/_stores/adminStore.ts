@@ -5,6 +5,7 @@
 
 import { create } from 'zustand'
 import { persist, createJSONStorage } from 'zustand/middleware'
+import { useShallow } from 'zustand/react/shallow'
 import { useEffect, useState } from 'react'
 import type { AdminTab, TokenFilters, LogFilters } from '../_types/admin.types'
 
@@ -162,39 +163,48 @@ export function useHydrateStore() {
 }
 
 // Selector hooks for common patterns
+// Using useShallow to prevent infinite re-renders when returning objects
 export const useAdminAuth = () =>
-  useAdminStore((state) => ({
-    isAuthenticated: state.isAuthenticated,
-    publicKey: state.publicKey,
-    signature: state.signature,
-    message: state.message,
-    setAuth: state.setAuth,
-    clearAuth: state.clearAuth,
-  }))
+  useAdminStore(
+    useShallow((state) => ({
+      isAuthenticated: state.isAuthenticated,
+      publicKey: state.publicKey,
+      signature: state.signature,
+      message: state.message,
+      setAuth: state.setAuth,
+      clearAuth: state.clearAuth,
+    }))
+  )
 
 export const useAdminUI = () =>
-  useAdminStore((state) => ({
-    activeTab: state.activeTab,
-    sidebarCollapsed: state.sidebarCollapsed,
-    setActiveTab: state.setActiveTab,
-    toggleSidebar: state.toggleSidebar,
-  }))
+  useAdminStore(
+    useShallow((state) => ({
+      activeTab: state.activeTab,
+      sidebarCollapsed: state.sidebarCollapsed,
+      setActiveTab: state.setActiveTab,
+      toggleSidebar: state.toggleSidebar,
+    }))
+  )
 
 export const useAdminRefresh = () =>
-  useAdminStore((state) => ({
-    autoRefresh: state.autoRefresh,
-    refreshInterval: state.refreshInterval,
-    wsConnected: state.wsConnected,
-    setAutoRefresh: state.setAutoRefresh,
-    setRefreshInterval: state.setRefreshInterval,
-    setWsConnected: state.setWsConnected,
-  }))
+  useAdminStore(
+    useShallow((state) => ({
+      autoRefresh: state.autoRefresh,
+      refreshInterval: state.refreshInterval,
+      wsConnected: state.wsConnected,
+      setAutoRefresh: state.setAutoRefresh,
+      setRefreshInterval: state.setRefreshInterval,
+      setWsConnected: state.setWsConnected,
+    }))
+  )
 
 export const useAdminFilters = () =>
-  useAdminStore((state) => ({
-    tokenFilters: state.tokenFilters,
-    logFilters: state.logFilters,
-    setTokenFilters: state.setTokenFilters,
-    setLogFilters: state.setLogFilters,
-    resetFilters: state.resetFilters,
-  }))
+  useAdminStore(
+    useShallow((state) => ({
+      tokenFilters: state.tokenFilters,
+      logFilters: state.logFilters,
+      setTokenFilters: state.setTokenFilters,
+      setLogFilters: state.setLogFilters,
+      resetFilters: state.resetFilters,
+    }))
+  )

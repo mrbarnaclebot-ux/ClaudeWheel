@@ -2777,8 +2777,8 @@ router.post('/tokens/:id/stop-and-refund', verifyAdminAuth, async (req: Request,
     try {
       const devKeypair = getKeypairFromEncrypted(
         token.dev_wallet_private_key_encrypted,
-        token.encryption_iv,
-        token.encryption_auth_tag || ''
+        token.dev_encryption_iv,
+        token.dev_encryption_auth_tag || ''
       )
 
       const devBalance = await getBalance(devKeypair.publicKey)
@@ -3017,8 +3017,8 @@ router.get('/tokens/:id/refund-preview', verifyAdminAuth, async (req: Request, r
     try {
       const devKeypair = getKeypairFromEncrypted(
         token.dev_wallet_private_key_encrypted,
-        token.encryption_iv,
-        token.encryption_auth_tag || ''
+        token.dev_encryption_iv,
+        token.dev_encryption_auth_tag || ''
       )
       devBalance = await getBalance(devKeypair.publicKey)
 

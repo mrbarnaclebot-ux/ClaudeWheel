@@ -48,18 +48,22 @@ function AdminLayoutContent({ children }: AdminLayoutProps) {
   }, [publicKey, signMessage, setAuth])
 
   // Clear auth when wallet disconnects
+  // Note: clearAuth is a stable store action, so we don't include it in deps
   useEffect(() => {
     if (!connected) {
       clearAuth()
     }
-  }, [connected, clearAuth])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connected])
 
   // Simulate WebSocket connection status (will be replaced with real WS later)
+  // Note: setWsConnected is a stable store action, so we don't include it in deps
   useEffect(() => {
     // For now, we'll just mark as "connected" if authenticated
     // This will be replaced with actual WebSocket connection status
     setWsConnected(isAuthenticated)
-  }, [isAuthenticated, setWsConnected])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAuthenticated])
 
   // NOW we can have early returns - after all hooks are called
 

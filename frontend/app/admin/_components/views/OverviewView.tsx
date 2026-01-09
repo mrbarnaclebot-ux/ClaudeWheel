@@ -75,37 +75,43 @@ export function OverviewView() {
                   </div>
 
                   {/* Memory Usage */}
+                  {systemStatus.memoryUsage && (
                   <div className="pt-2 border-t border-border-subtle/30">
                     <div className="flex items-center justify-between text-sm mb-1">
                       <span className="text-text-muted">Memory Usage</span>
                       <span className="font-mono text-text-primary">
-                        {systemStatus.memoryUsage.percentage.toFixed(1)}%
+                        {systemStatus.memoryUsage.percentage?.toFixed(1) ?? 0}%
                       </span>
                     </div>
                     <div className="h-2 bg-bg-secondary rounded-full overflow-hidden">
                       <div
                         className={`h-full rounded-full transition-all ${
-                          systemStatus.memoryUsage.percentage > 80
+                          (systemStatus.memoryUsage.percentage ?? 0) > 80
                             ? 'bg-error'
-                            : systemStatus.memoryUsage.percentage > 60
+                            : (systemStatus.memoryUsage.percentage ?? 0) > 60
                             ? 'bg-warning'
                             : 'bg-success'
                         }`}
-                        style={{ width: `${systemStatus.memoryUsage.percentage}%` }}
+                        style={{ width: `${systemStatus.memoryUsage.percentage ?? 0}%` }}
                       />
                     </div>
                     <div className="flex justify-between text-xs text-text-muted mt-1">
-                      <span>{(systemStatus.memoryUsage.heapUsed / 1024 / 1024).toFixed(0)} MB used</span>
-                      <span>{(systemStatus.memoryUsage.heapTotal / 1024 / 1024).toFixed(0)} MB total</span>
+                      <span>{((systemStatus.memoryUsage.heapUsed ?? 0) / 1024 / 1024).toFixed(0)} MB used</span>
+                      <span>{((systemStatus.memoryUsage.heapTotal ?? 0) / 1024 / 1024).toFixed(0)} MB total</span>
                     </div>
                   </div>
+                  )}
 
                   {/* Uptime & Environment */}
                   <div className="pt-2 border-t border-border-subtle/30 flex justify-between text-xs text-text-muted">
                     <span>
-                      Uptime: {Math.floor(systemStatus.uptime / 3600)}h {Math.floor((systemStatus.uptime % 3600) / 60)}m
+                      Uptime: {Math.floor((systemStatus.uptime ?? 0) / 3600)}h {Math.floor(((systemStatus.uptime ?? 0) % 3600) / 60)}m
                     </span>
-                    <span className="font-mono">{systemStatus.environment}</span>
+                    <span className="font-mono">
+                      {typeof systemStatus.environment === 'string'
+                        ? systemStatus.environment
+                        : systemStatus.environment?.nodeEnv ?? 'unknown'}
+                    </span>
                   </div>
                 </div>
               ) : (

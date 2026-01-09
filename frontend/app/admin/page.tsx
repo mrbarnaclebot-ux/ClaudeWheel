@@ -1,19 +1,38 @@
 'use client'
 
-import dynamic from 'next/dynamic'
+import { useState, useEffect, startTransition } from 'react'
 import { PanelSkeleton } from './_components/shared/LoadingSkeleton'
 
-// Dynamically import the admin panel content with SSR disabled
-// This prevents the wallet hook from being called during static generation
-const NewAdminContent = dynamic(() => import('./NewAdminContent'), {
-  ssr: false,
-  loading: () => (
+// Loading component for admin page
+function AdminLoading() {
+  return (
     <div className="min-h-screen bg-bg-primary flex items-center justify-center p-4">
       <PanelSkeleton />
     </div>
-  ),
-})
+  )
+}
 
 export default function AdminPage() {
-  return <NewAdminContent />
+  const [AdminContent, setAdminContent] = useState<React.ComponentType | null>(null)
+  const [mounted, setMounted] = useState(false)
+
+  // Only run on client side
+  useEffect(() => {
+    setMounted(true)
+
+    // Use startTransition to prevent React error #185
+    // This allows the lazy load to happen without blocking synchronous updates
+    startTransition(() => {
+      import('./NewAdminContent').then((mod) => {
+        setAdminContent(() => mod.default)
+      })
+    })
+  }, [])
+
+  // Show loading until mounted and component is loaded
+  if (!mounted || !AdminContent) {
+    return <AdminLoading />
+  }
+
+  return <AdminContent />
 }

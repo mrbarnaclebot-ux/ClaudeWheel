@@ -231,7 +231,7 @@ async function auditDatabase() {
 
       // Check for missing encryption data
       const missingEncryption = userTokens.filter(t =>
-        !t.dev_wallet_private_key_encrypted || !t.encryption_iv
+        !t.dev_wallet_private_key_encrypted || !t.dev_encryption_iv
       )
       if (missingEncryption.length > 0) {
         issues.push({

@@ -315,7 +315,7 @@ export async function getDecryptedDevWallet(userTokenId: string): Promise<Keypai
 
   const { data, error } = await supabase
     .from('user_tokens')
-    .select('dev_wallet_private_key_encrypted, encryption_iv, encryption_auth_tag')
+    .select('dev_wallet_private_key_encrypted, dev_encryption_iv, dev_encryption_auth_tag')
     .eq('id', userTokenId)
     .single()
 
@@ -327,8 +327,8 @@ export async function getDecryptedDevWallet(userTokenId: string): Promise<Keypai
   try {
     const decryptedKey = decrypt({
       ciphertext: data.dev_wallet_private_key_encrypted,
-      iv: data.encryption_iv,
-      authTag: data.encryption_auth_tag,
+      iv: data.dev_encryption_iv,
+      authTag: data.dev_encryption_auth_tag,
     })
 
     const secretKey = bs58.decode(decryptedKey)
@@ -681,8 +681,8 @@ export async function verifySuspendedTokenOwnership(
       .select(`
         dev_wallet_address,
         dev_wallet_private_key_encrypted,
-        encryption_iv,
-        encryption_auth_tag,
+        dev_encryption_iv,
+        dev_encryption_auth_tag,
         ops_wallet_address,
         ops_wallet_private_key_encrypted,
         ops_encryption_iv,

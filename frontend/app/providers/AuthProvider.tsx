@@ -42,6 +42,12 @@ interface AuthProviderProps {
   children: ReactNode
 }
 
+// Helper to check if current route is admin
+function isAdminPath(): boolean {
+  if (typeof window === 'undefined') return false
+  return window.location.pathname.startsWith('/admin')
+}
+
 export function AuthProvider({ children }: AuthProviderProps) {
   const { publicKey, signMessage, connected, disconnect } = useWallet()
   const [user, setUser] = useState<AuthUser | null>(null)
@@ -52,14 +58,18 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const walletAddress = publicKey?.toString()
 
   // Check if user is already authenticated when wallet connects
+  // Skip for admin routes - they use their own auth system
   useEffect(() => {
+    if (isAdminPath()) return
     if (walletAddress && !user) {
       checkExistingUser()
     }
   }, [walletAddress])
 
   // Clear user state when wallet disconnects
+  // Skip for admin routes
   useEffect(() => {
+    if (isAdminPath()) return
     if (!connected) {
       setUser(null)
       setTokens([])
@@ -70,11 +80,6 @@ export function AuthProvider({ children }: AuthProviderProps) {
   // Check if user already exists
   const checkExistingUser = async () => {
     if (!walletAddress) return
-
-    // Skip user check for admin routes - admin has its own auth system
-    if (typeof window !== 'undefined' && window.location.pathname.startsWith('/admin')) {
-      return
-    }
 
     setIsLoading(true)
     try {
