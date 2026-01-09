@@ -100,7 +100,7 @@ export function OverviewStats() {
             />
             <DataCard
               title="Total Deposits"
-              value={`${telegramStats.totalDeposits.toFixed(2)} SOL`}
+              value={`${(telegramStats.totalDeposits ?? 0).toFixed(2)} SOL`}
               icon={<span>💰</span>}
               variant="accent"
             />
