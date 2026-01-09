@@ -4,15 +4,13 @@
 // Uses environment wallet keys and old flywheel_state table
 // ═══════════════════════════════════════════════════════════════════════════
 
-import { PublicKey, VersionedTransaction, Transaction, Connection } from '@solana/web3.js'
-import bs58 from 'bs58'
+import { PublicKey, Connection, Keypair } from '@solana/web3.js'
 import { supabase } from '../config/database'
 import { getConnection, getBalance, getTokenBalance, getDevWallet, getOpsWallet } from '../config/solana'
 import { env } from '../config/env'
-import { bagsFmService } from './bags-fm'
 import { loggers } from '../utils/logger'
-import { sendVersionedTransactionWithRetry } from '../utils/transaction'
 import { loadFlywheelState, saveFlywheelState, FlywheelState } from '../config/database'
+import { BagsSDK, signAndSendTransaction } from '@bagsfm/bags-sdk'
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CONSTANTS
@@ -49,10 +47,28 @@ export interface WheelTradeResult {
 class WheelMMService {
   private isRunning = false
   private lastRunAt: Date | null = null
+  private sdk: BagsSDK | null = null
+
+  constructor() {
+    this.initSdk()
+  }
+
+  /**
+   * Initialize the Bags SDK
+   */
+  private initSdk(): void {
+    if (env.bagsFmApiKey) {
+      const connection = getConnection()
+      this.sdk = new BagsSDK(env.bagsFmApiKey, connection, 'confirmed')
+      loggers.flywheel.info('WHEEL: Bags SDK initialized')
+    } else {
+      loggers.flywheel.warn('WHEEL: Bags SDK not initialized - missing API key')
+    }
+  }
 
   /**
    * Run a single flywheel cycle for the WHEEL token
-   * Uses Jupiter since WHEEL is graduated
+   * Uses Bags SDK for trading
    */
   async runFlywheelCycle(): Promise<WheelTradeResult | null> {
     if (this.isRunning) {
@@ -65,6 +81,12 @@ class WheelMMService {
 
     try {
       loggers.flywheel.info('Starting WHEEL token flywheel cycle')
+
+      // Check SDK availability
+      if (!this.sdk) {
+        loggers.flywheel.error('WHEEL: Bags SDK not available')
+        return null
+      }
 
       // Get wallets from environment
       const opsWallet = getOpsWallet()
@@ -132,24 +154,24 @@ class WheelMMService {
         buyAmount,
         buyCount: state.buy_count,
         maxBuys: BUYS_PER_CYCLE,
-      }, 'WHEEL: Executing BUY via Bags.fm')
+      }, 'WHEEL: Executing BUY via Bags SDK')
 
-      // Get quote from Bags.fm (WHEEL graduated to Meteora, routed through Bags.fm)
-      const quote = await bagsFmService.getTradeQuote(
-        SOL_MINT,
-        WHEEL_TOKEN_MINT,
-        lamports,
-        'buy',
-        SLIPPAGE_BPS
-      )
+      // Get quote from Bags SDK
+      const quote = await this.sdk!.trade.getQuote({
+        inputMint: new PublicKey(SOL_MINT),
+        outputMint: new PublicKey(WHEEL_TOKEN_MINT),
+        amount: lamports,
+        slippageMode: 'manual',
+        slippageBps: SLIPPAGE_BPS,
+      })
 
-      if (!quote?.rawQuoteResponse) {
-        loggers.flywheel.error('WHEEL: Failed to get Bags.fm quote for buy')
+      if (!quote) {
+        loggers.flywheel.error('WHEEL: Failed to get Bags SDK quote for buy')
         return { success: false, tradeType: 'buy', amount: buyAmount, error: 'Failed to get quote' }
       }
 
-      // Execute swap via Bags.fm
-      const signature = await this.executeSwap(connection, wallet, quote.rawQuoteResponse)
+      // Execute swap via Bags SDK
+      const signature = await this.executeSwap(connection, wallet, quote)
 
       if (!signature) {
         return { success: false, tradeType: 'buy', amount: buyAmount, error: 'Swap failed' }
@@ -218,24 +240,24 @@ class WheelMMService {
         sellAmount,
         sellCount: state.sell_count,
         maxSells: SELLS_PER_CYCLE,
-      }, 'WHEEL: Executing SELL via Bags.fm')
+      }, 'WHEEL: Executing SELL via Bags SDK')
 
-      // Get quote from Bags.fm
-      const quote = await bagsFmService.getTradeQuote(
-        WHEEL_TOKEN_MINT,
-        SOL_MINT,
-        tokenUnits,
-        'sell',
-        SLIPPAGE_BPS
-      )
+      // Get quote from Bags SDK
+      const quote = await this.sdk!.trade.getQuote({
+        inputMint: new PublicKey(WHEEL_TOKEN_MINT),
+        outputMint: new PublicKey(SOL_MINT),
+        amount: tokenUnits,
+        slippageMode: 'manual',
+        slippageBps: SLIPPAGE_BPS,
+      })
 
-      if (!quote?.rawQuoteResponse) {
-        loggers.flywheel.error('WHEEL: Failed to get Bags.fm quote for sell')
+      if (!quote) {
+        loggers.flywheel.error('WHEEL: Failed to get Bags SDK quote for sell')
         return { success: false, tradeType: 'sell', amount: sellAmount, error: 'Failed to get quote' }
       }
 
-      // Execute swap via Bags.fm
-      const signature = await this.executeSwap(connection, wallet, quote.rawQuoteResponse)
+      // Execute swap via Bags SDK
+      const signature = await this.executeSwap(connection, wallet, quote)
 
       if (!signature) {
         return { success: false, tradeType: 'sell', amount: sellAmount, error: 'Swap failed' }
@@ -266,61 +288,42 @@ class WheelMMService {
   }
 
   /**
-   * Execute a swap using Bags.fm
-   * Handles both VersionedTransaction and legacy Transaction formats
+   * Execute a swap using Bags SDK
+   * Uses SDK's signAndSendTransaction for reliable transaction handling
    */
   private async executeSwap(
     connection: Connection,
-    wallet: ReturnType<typeof getOpsWallet>,
+    wallet: Keypair,
     quoteResponse: any
   ): Promise<string | null> {
-    if (!wallet) return null
+    if (!wallet || !this.sdk) return null
 
     try {
-      const swapData = await bagsFmService.generateSwapTransaction(
-        wallet.publicKey.toString(),
-        quoteResponse
-      )
+      // Create swap transaction using SDK
+      const swapResult = await this.sdk.trade.createSwapTransaction({
+        quoteResponse,
+        userPublicKey: wallet.publicKey,
+      })
 
-      if (!swapData) {
-        loggers.flywheel.error('WHEEL: Failed to get swap transaction from Bags.fm')
+      if (!swapResult || !swapResult.transaction) {
+        loggers.flywheel.error('WHEEL: Failed to create swap transaction via SDK')
         return null
       }
 
-      // Deserialize the transaction - Bags.fm returns Base58 encoded transactions
-      const txBuffer = bs58.decode(swapData.transaction)
-      let signature: string
+      loggers.flywheel.debug({
+        computeUnitLimit: swapResult.computeUnitLimit,
+        lastValidBlockHeight: swapResult.lastValidBlockHeight,
+      }, 'WHEEL: Swap transaction created')
 
-      try {
-        // Try VersionedTransaction first
-        const versionedTx = VersionedTransaction.deserialize(txBuffer)
-        versionedTx.sign([wallet])
-        signature = await connection.sendTransaction(versionedTx, {
-          skipPreflight: true,
-          maxRetries: 3,
-        })
-        loggers.flywheel.debug({ signature }, 'WHEEL: Sent versioned transaction')
-      } catch {
-        // Fall back to legacy Transaction
-        loggers.flywheel.debug('WHEEL: Falling back to legacy transaction format')
-        const legacyTx = Transaction.from(txBuffer)
-        legacyTx.sign(wallet)
-        signature = await connection.sendRawTransaction(legacyTx.serialize(), {
-          skipPreflight: true,
-          maxRetries: 3,
-        })
-        loggers.flywheel.debug({ signature }, 'WHEEL: Sent legacy transaction')
-      }
+      // Use SDK's signAndSendTransaction which handles encoding properly
+      const signature = await signAndSendTransaction(
+        connection,
+        'confirmed',
+        swapResult.transaction,
+        wallet
+      )
 
-      // Wait for confirmation
-      const latestBlockhash = await connection.getLatestBlockhash()
-      await connection.confirmTransaction({
-        signature,
-        blockhash: latestBlockhash.blockhash,
-        lastValidBlockHeight: latestBlockhash.lastValidBlockHeight,
-      })
-
-      loggers.flywheel.info({ signature }, 'WHEEL: Swap confirmed')
+      loggers.flywheel.info({ signature }, 'WHEEL: Swap confirmed via SDK')
       return signature
     } catch (error) {
       loggers.flywheel.error({ error: String(error) }, 'WHEEL: Swap failed')
