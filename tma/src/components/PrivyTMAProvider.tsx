@@ -3,6 +3,9 @@
 import React from 'react';
 import { PrivyProvider } from '@privy-io/react-auth';
 
+// Solana RPC endpoint - use Helius for reliability
+const SOLANA_RPC_URL = process.env.NEXT_PUBLIC_SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
+
 export function PrivyTMAProvider({ children }: { children: React.ReactNode }) {
     const appId = process.env.NEXT_PUBLIC_PRIVY_APP_ID;
 
@@ -30,6 +33,16 @@ export function PrivyTMAProvider({ children }: { children: React.ReactNode }) {
                 embeddedWallets: {
                     createOnLogin: 'users-without-wallets',
                 },
+
+                // Solana configuration - required for delegation and transactions
+                solanaClusters: [
+                    {
+                        name: 'mainnet-beta',
+                        rpcUrl: SOLANA_RPC_URL,
+                    },
+                ],
+                // Set default to mainnet
+                defaultChain: undefined, // Let Privy determine
 
                 // TMA-specific: Pass launch params for seamless auth
                 // Privy will automatically use these when in Telegram environment
