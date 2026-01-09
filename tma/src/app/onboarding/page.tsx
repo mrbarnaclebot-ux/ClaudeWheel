@@ -5,7 +5,7 @@ export const dynamic = 'force-dynamic';
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { usePrivy, useHeadlessDelegatedActions, type WalletWithMetadata } from '@privy-io/react-auth';
+import { usePrivy, useDelegatedActions, type WalletWithMetadata } from '@privy-io/react-auth';
 import { useWallets, useCreateWallet } from '@privy-io/react-auth/solana';
 import { useTelegram } from '@/components/TelegramProvider';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -18,8 +18,8 @@ export default function OnboardingPage() {
     const { ready, authenticated, getAccessToken, user } = usePrivy();
     const { wallets } = useWallets();
     const { createWallet } = useCreateWallet();
-    // Use headless delegation - no popup, works better in Telegram webview
-    const { delegateWallet } = useHeadlessDelegatedActions();
+    // Use regular delegation with popup - headless was hanging
+    const { delegateWallet } = useDelegatedActions();
     const { user: telegramUser, hapticFeedback } = useTelegram();
 
     const [step, setStep] = useState<Step>('welcome');
@@ -111,8 +111,15 @@ export default function OnboardingPage() {
                 address: (a as WalletWithMetadata).address?.slice(0, 8),
                 delegated: (a as WalletWithMetadata).delegated,
                 walletClientType: (a as WalletWithMetadata).walletClientType,
+                chainType: (a as any).chainType || 'unknown',
             }));
-            const walletInfo = `Dev: ${devWallet.address.slice(0, 8)}... | delegated: ${isDelegated} | linkedWallets: ${JSON.stringify(linkedAccountsInfo)}`;
+
+            // Check if there's an Ethereum wallet (known Privy bug with mixed chain wallets)
+            const hasEthWallet = user?.linkedAccounts?.some(a =>
+                a.type === 'wallet' && (a as WalletWithMetadata).address?.startsWith('0x')
+            );
+
+            const walletInfo = `Dev: ${devWallet.address.slice(0, 8)}...\ndelegated: ${isDelegated}\nhasEthWallet: ${hasEthWallet} (potential bug)\nlinkedWallets: ${JSON.stringify(linkedAccountsInfo, null, 1)}`;
             console.log('[Onboarding] Wallet info:', walletInfo);
             setDebugInfo(walletInfo);
 
@@ -122,16 +129,24 @@ export default function OnboardingPage() {
                 return;
             }
 
-            setDebugInfo(`${walletInfo}\n\nDelegating...`);
+            setDebugInfo(`${walletInfo}\n\nDelegating... (30s timeout)`);
             console.log('[Onboarding] Delegating dev wallet:', devWallet.address);
 
-            const result = await delegateWallet({
-                address: devWallet.address,
-                chainType: 'solana',
-            });
+            // Add timeout to prevent hanging forever
+            const timeoutPromise = new Promise((_, reject) =>
+                setTimeout(() => reject(new Error('Delegation timed out after 30 seconds')), 30000)
+            );
+
+            const result = await Promise.race([
+                delegateWallet({
+                    address: devWallet.address,
+                    chainType: 'solana',
+                }),
+                timeoutPromise,
+            ]);
 
             console.log('[Onboarding] Delegation result:', result);
-            setDebugInfo(`${walletInfo}\n\nDelegation result: ${JSON.stringify(result)}`);
+            setDebugInfo(`${walletInfo}\n\nDelegation succeeded!`);
 
             setStep('delegate_ops');
         } catch (err: any) {
