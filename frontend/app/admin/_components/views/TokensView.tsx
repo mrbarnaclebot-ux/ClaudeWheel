@@ -55,7 +55,7 @@ export function TokensView() {
             />
           ) : (
             <div className="w-8 h-8 rounded-full bg-accent-primary/20 flex items-center justify-center text-xs font-bold text-accent-primary">
-              {token.token_symbol.slice(0, 2)}
+              {(token.token_symbol ?? '??').slice(0, 2)}
             </div>
           )}
           <div>
@@ -268,7 +268,7 @@ function TokenDetailsModal({
               <img src={token.token_image} alt={token.token_symbol} className="w-12 h-12 rounded-full" />
             ) : (
               <div className="w-12 h-12 rounded-full bg-accent-primary/20 flex items-center justify-center text-lg font-bold text-accent-primary">
-                {token.token_symbol.slice(0, 2)}
+                {(token.token_symbol ?? '??').slice(0, 2)}
               </div>
             )}
             <div>

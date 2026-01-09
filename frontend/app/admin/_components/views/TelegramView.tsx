@@ -63,7 +63,7 @@ export function TelegramView() {
             <img src={launch.token_image_url} alt={launch.token_symbol} className="w-8 h-8 rounded-full" />
           ) : (
             <div className="w-8 h-8 rounded-full bg-accent-primary/20 flex items-center justify-center text-xs font-bold">
-              {launch.token_symbol.slice(0, 2)}
+              {(launch.token_symbol ?? '??').slice(0, 2)}
             </div>
           )}
           <div>
