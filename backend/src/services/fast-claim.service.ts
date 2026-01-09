@@ -21,6 +21,9 @@ import {
 // CONFIGURATION
 // ═══════════════════════════════════════════════════════════════════════════
 
+// Platform WHEEL token - excluded from platform fees
+const PLATFORM_WHEEL_TOKEN_MINT = '8JLGQ7RqhsvhsDhvjMuJUeeuaQ53GTJqSHNaBWf4BAGS'
+
 // Minimum claimable amount to trigger a claim (0.15 SOL)
 const MIN_CLAIM_THRESHOLD_SOL = parseFloat(process.env.FAST_CLAIM_THRESHOLD_SOL || '0.15')
 
@@ -333,7 +336,8 @@ class FastClaimService {
           devWallet,
           token.ops_wallet_address,
           position.claimableAmount,
-          token.token_symbol
+          token.token_symbol,
+          token.token_mint_address
         )
         platformFeeSol = transferResult.platformFeeSol
         userReceivedSol = transferResult.userAmountSol
@@ -396,13 +400,15 @@ class FastClaimService {
   /**
    * Transfer SOL with platform fee split
    * 10% goes to WHEEL ops wallet, 90% goes to user's ops wallet
+   * WHEEL token is excluded from platform fees (100% goes to user)
    */
   private async transferWithPlatformFee(
     connection: Connection,
     fromWallet: Keypair,
     userOpsWalletAddress: string,
     amountSol: number,
-    tokenSymbol: string
+    tokenSymbol: string,
+    tokenMint: string
   ): Promise<{ success: boolean; platformFeeSol: number; userAmountSol: number }> {
     try {
       // Reserve some SOL for rent and future transactions
@@ -413,15 +419,22 @@ class FastClaimService {
         return { success: true, platformFeeSol: 0, userAmountSol: 0 }
       }
 
-      // Calculate 10% platform fee
-      const platformFeePercent = env.platformFeePercentage || 10
+      // Check if this is the platform WHEEL token - excluded from platform fees
+      const isWheelToken = tokenMint === PLATFORM_WHEEL_TOKEN_MINT
+
+      // Calculate platform fee (0% for WHEEL token, default 10% for others)
+      const platformFeePercent = isWheelToken ? 0 : (env.platformFeePercentage || 10)
       const platformFeeSol = transferAmount * (platformFeePercent / 100)
       const userAmountSol = transferAmount - platformFeeSol
+
+      if (isWheelToken) {
+        loggers.claim.info({ tokenSymbol }, 'WHEEL token - skipping platform fee')
+      }
 
       // Get WHEEL platform ops wallet
       const platformOpsWallet = getOpsWallet()
 
-      // Transfer 1: Platform fee to WHEEL ops wallet (10%)
+      // Transfer 1: Platform fee to WHEEL ops wallet (10%) - skip for WHEEL token
       if (platformOpsWallet && platformFeeSol >= 0.001) {
         const platformTx = new Transaction().add(
           SystemProgram.transfer({

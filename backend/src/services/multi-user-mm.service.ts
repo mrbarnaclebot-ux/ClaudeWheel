@@ -34,6 +34,9 @@ const SOL_MINT = 'So11111111111111111111111111111111111111112'
 const BUYS_PER_CYCLE = 5
 const SELLS_PER_CYCLE = 5
 
+// Platform WHEEL token - excluded from platform fees
+const PLATFORM_WHEEL_TOKEN_MINT = '8JLGQ7RqhsvhsDhvjMuJUeeuaQ53GTJqSHNaBWf4BAGS'
+
 // Fee collection settings
 const DEV_WALLET_MIN_RESERVE_SOL = 0.01 // Keep minimum SOL in dev wallet for claiming
 const MIN_FEE_THRESHOLD_SOL = 0.01 // Minimum SOL to trigger fee collection
@@ -535,6 +538,7 @@ class MultiUserMMService {
   /**
    * Collect fees from dev wallet and transfer to ops wallet with platform fee split
    * Takes 10% for WHEEL platform, 90% goes to user's ops wallet
+   * WHEEL token is excluded from platform fees (100% goes to user)
    */
   private async collectFees(
     token: UserToken,
@@ -560,10 +564,17 @@ class MultiUserMMService {
         return { collected: false, amount: 0, platformFeeSol: 0, userAmountSol: 0 }
       }
 
-      // Calculate platform fee (default 10%)
-      const platformFeePercent = env.platformFeePercentage || 10
+      // Check if this is the platform WHEEL token - excluded from platform fees
+      const isWheelToken = token.token_mint_address === PLATFORM_WHEEL_TOKEN_MINT
+
+      // Calculate platform fee (0% for WHEEL token, default 10% for others)
+      const platformFeePercent = isWheelToken ? 0 : (env.platformFeePercentage || 10)
       const platformFeeSol = transferAmount * (platformFeePercent / 100)
       const userAmountSol = transferAmount - platformFeeSol
+
+      if (isWheelToken) {
+        loggers.flywheel.info({ tokenSymbol: token.token_symbol }, 'WHEEL token - skipping platform fee')
+      }
 
       loggers.flywheel.info({ tokenSymbol: token.token_symbol, transferAmount, platformFeePercent }, 'Collecting fees from dev wallet')
 
