@@ -79,32 +79,55 @@ export default function OnboardingPage() {
         setError(null);
 
         try {
-            // Delegate both wallets
-            for (const wallet of solanaWallets) {
-                await delegateWallet({
-                    address: wallet.address,
-                    chainType: 'solana',
-                });
+            // Step 1: Delegate both wallets
+            console.log('[Onboarding] Starting delegation for wallets:', solanaWallets.map(w => w.address));
+            for (let i = 0; i < solanaWallets.length; i++) {
+                const wallet = solanaWallets[i];
+                console.log(`[Onboarding] Delegating wallet ${i + 1}:`, wallet.address);
+                try {
+                    await delegateWallet({
+                        address: wallet.address,
+                        chainType: 'solana',
+                    });
+                    console.log(`[Onboarding] Wallet ${i + 1} delegated successfully`);
+                } catch (delegateErr: any) {
+                    console.error(`[Onboarding] Delegation failed for wallet ${i + 1}:`, delegateErr);
+                    throw new Error(`Delegation failed: ${delegateErr?.message || 'Unknown error'}`);
+                }
             }
 
-            // Register with backend
+            // Step 2: Get auth token
+            console.log('[Onboarding] Getting access token...');
             const authToken = await getAccessToken();
-            await api.post('/api/users/complete-onboarding', {
+            if (!authToken) {
+                throw new Error('Failed to get auth token');
+            }
+            console.log('[Onboarding] Got access token');
+
+            // Step 3: Register with backend
+            console.log('[Onboarding] Registering with backend...');
+            const payload = {
                 devWalletAddress: solanaWallets[0]?.address,
                 opsWalletAddress: solanaWallets[1]?.address,
                 telegramId: telegramUser?.id,
                 telegramUsername: telegramUser?.username,
-            }, {
+            };
+            console.log('[Onboarding] Payload:', payload);
+
+            const response = await api.post('/api/users/complete-onboarding', payload, {
                 headers: { Authorization: `Bearer ${authToken}` },
             });
+            console.log('[Onboarding] Backend response:', response.data);
 
             hapticFeedback('heavy');
             setStep('complete');
 
             // Navigate to dashboard after brief delay
             setTimeout(() => router.replace('/dashboard'), 1500);
-        } catch (err) {
-            setError('Failed to complete setup. Please try again.');
+        } catch (err: any) {
+            console.error('[Onboarding] Setup failed:', err);
+            const errorMsg = err?.response?.data?.error || err?.message || 'Unknown error';
+            setError(`Failed: ${errorMsg}`);
         }
     }
 
