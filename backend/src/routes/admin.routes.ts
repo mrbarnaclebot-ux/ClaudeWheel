@@ -5,6 +5,7 @@ import { supabase } from '../config/database'
 import { env } from '../config/env'
 import { marketMaker } from '../services/market-maker'
 import { walletMonitor } from '../services/wallet-monitor'
+import { bagsFmService } from '../services/bags-fm'
 import { getClaimJobStatus, restartClaimJob } from '../jobs/claim.job'
 import { getMultiUserFlywheelJobStatus, restartFlywheelJob } from '../jobs/multi-flywheel.job'
 import { getFastClaimJobStatus, triggerFastClaimCycle, restartFastClaimJob } from '../jobs/fast-claim.job'
@@ -3088,100 +3089,116 @@ router.get('/wheel', verifyAdminAuth, async (req: Request, res: Response) => {
       return res.status(500).json({ error: 'Database not configured' })
     }
 
-    // Get the platform token
-    const { data: platformToken, error: tokenError } = await supabase
-      .from('user_tokens')
-      .select(`
-        *,
-        user_token_config (*),
-        user_flywheel_state (*),
-        user_claim_history (amount_sol, platform_fee_sol, claimed_at)
-      `)
-      .eq('token_mint_address', PLATFORM_TOKEN_MINT)
+    // $WHEEL uses the original single-token flywheel system, not user_tokens
+    // Fetch from: config, wallet_balances, flywheel_state, fee_stats tables
+
+    // Get config from the original config table
+    const { data: config, error: configError } = await supabase
+      .from('config')
+      .select('*')
+      .eq('id', 'main')
       .single()
 
-    if (tokenError && tokenError.code !== 'PGRST116') {
-      console.error('Error fetching platform token:', tokenError)
-      return res.status(500).json({ error: 'Failed to fetch platform token' })
+    if (configError && configError.code !== 'PGRST116') {
+      console.error('Error fetching config:', configError)
     }
 
-    // Get wallet balances
-    let devWalletBalance = { sol: 0, token: 0 }
-    let opsWalletBalance = { sol: 0, token: 0 }
+    // Get wallet balances from wallet_balances table
+    const { data: walletBalances, error: balanceError } = await supabase
+      .from('wallet_balances')
+      .select('*')
 
-    if (platformToken) {
-      try {
-        const [devSol, opsSol] = await Promise.all([
-          getBalance(platformToken.dev_wallet_address),
-          getBalance(platformToken.ops_wallet_address),
-        ])
-        devWalletBalance.sol = devSol
-        opsWalletBalance.sol = opsSol
-      } catch (err) {
-        console.warn('Failed to fetch wallet balances:', err)
+    if (balanceError) {
+      console.error('Error fetching wallet balances:', balanceError)
+    }
+
+    const devWallet = walletBalances?.find(w => w.wallet_type === 'dev')
+    const opsWallet = walletBalances?.find(w => w.wallet_type === 'ops')
+
+    // Get flywheel state from flywheel_state table
+    const { data: flywheelState, error: stateError } = await supabase
+      .from('flywheel_state')
+      .select('*')
+      .eq('id', 'main')
+      .single()
+
+    if (stateError && stateError.code !== 'PGRST116') {
+      console.error('Error fetching flywheel state:', stateError)
+    }
+
+    // Get fee stats from fee_stats table
+    const { data: feeStats, error: feeError } = await supabase
+      .from('fee_stats')
+      .select('*')
+      .eq('id', 'main')
+      .single()
+
+    if (feeError && feeError.code !== 'PGRST116') {
+      console.error('Error fetching fee stats:', feeError)
+    }
+
+    // Fetch market data from DexScreener via Bags.fm service
+    let marketData = {
+      marketCap: 0,
+      volume24h: 0,
+      isGraduated: false,
+      bondingCurveProgress: 0,
+      holders: 0,
+    }
+
+    try {
+      const tokenInfo = await bagsFmService.getTokenCreatorInfo(PLATFORM_TOKEN_MINT)
+      if (tokenInfo) {
+        marketData = {
+          marketCap: tokenInfo.marketCap || 0,
+          volume24h: tokenInfo.volume24h || 0,
+          isGraduated: tokenInfo.isGraduated || false,
+          bondingCurveProgress: tokenInfo.bondingCurveProgress || 0,
+          holders: tokenInfo.holders || 0,
+        }
       }
+    } catch (error) {
+      console.warn('Failed to fetch market data for WHEEL:', error)
     }
-
-    // Calculate fee stats from claim history
-    let totalCollected = 0
-    let todayCollected = 0
-    let hourCollected = 0
-    const todayStart = new Date()
-    todayStart.setHours(0, 0, 0, 0)
-    const hourStart = new Date()
-    hourStart.setHours(hourStart.getHours(), 0, 0, 0)
-
-    if (platformToken?.user_claim_history) {
-      for (const claim of platformToken.user_claim_history) {
-        const amountSol = Number(claim.amount_sol) || 0
-        totalCollected += amountSol
-        const claimedAt = new Date(claim.claimed_at)
-        if (claimedAt >= todayStart) todayCollected += amountSol
-        if (claimedAt >= hourStart) hourCollected += amountSol
-      }
-    }
-
-    // Get flywheel state
-    const flywheelState = platformToken?.user_flywheel_state?.[0]
-    const config = platformToken?.user_token_config?.[0]
 
     return res.json({
       success: true,
       data: {
         tokenMint: PLATFORM_TOKEN_MINT,
-        symbol: platformToken?.token_symbol || '$WHEEL',
-        tokenName: platformToken?.token_name || 'Claude Wheel',
-        tokenImage: platformToken?.token_image,
+        symbol: '$WHEEL',
+        tokenName: 'Claude Wheel',
+        tokenImage: null,
         devWallet: {
-          address: platformToken?.dev_wallet_address || '',
-          solBalance: devWalletBalance.sol,
-          tokenBalance: devWalletBalance.token,
+          address: devWallet?.address || '',
+          solBalance: Number(devWallet?.sol_balance) || 0,
+          tokenBalance: Number(devWallet?.token_balance) || 0,
         },
         opsWallet: {
-          address: platformToken?.ops_wallet_address || '',
-          solBalance: opsWalletBalance.sol,
-          tokenBalance: opsWalletBalance.token,
+          address: opsWallet?.address || '',
+          solBalance: Number(opsWallet?.sol_balance) || 0,
+          tokenBalance: Number(opsWallet?.token_balance) || 0,
         },
         feeStats: {
-          totalCollected,
-          todayCollected,
-          hourCollected,
+          totalCollected: Number(feeStats?.total_collected) || 0,
+          todayCollected: Number(feeStats?.today_collected) || 0,
+          hourCollected: Number(feeStats?.hour_collected) || 0,
         },
         flywheelState: flywheelState ? {
-          phase: flywheelState.cycle_phase,
-          buyCount: flywheelState.buy_count,
-          sellCount: flywheelState.sell_count,
-          lastTradeAt: flywheelState.last_trade_at,
+          phase: flywheelState.cycle_phase || 'buy',
+          buyCount: Number(flywheelState.buy_count) || 0,
+          sellCount: Number(flywheelState.sell_count) || 0,
+          lastTradeAt: flywheelState.updated_at,
         } : null,
         config: config ? {
-          flywheelActive: config.flywheel_active,
-          algorithmMode: config.algorithm_mode,
-          minBuySol: config.min_buy_amount_sol,
-          maxBuySol: config.max_buy_amount_sol,
-          slippageBps: config.slippage_bps,
+          flywheelActive: config.flywheel_active ?? false,
+          algorithmMode: config.algorithm_mode || 'simple',
+          minBuySol: Number(config.min_buy_amount_sol) || 0.01,
+          maxBuySol: Number(config.max_buy_amount_sol) || 0.1,
+          slippageBps: Number(config.slippage_bps) || 100,
         } : null,
-        isActive: platformToken?.is_active || false,
-        createdAt: platformToken?.created_at,
+        marketData,
+        isActive: config?.flywheel_active ?? false,
+        createdAt: null,
       },
     })
   } catch (error) {

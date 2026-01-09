@@ -818,6 +818,13 @@ export interface WheelData {
     maxBuySol: number
     slippageBps: number
   } | null
+  marketData?: {
+    marketCap: number
+    volume24h: number
+    isGraduated: boolean
+    bondingCurveProgress: number
+    holders: number
+  }
   isActive: boolean
   createdAt: string
 }

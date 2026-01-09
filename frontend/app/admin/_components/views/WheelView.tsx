@@ -135,6 +135,45 @@ export function WheelView() {
         />
       </DataCardGrid>
 
+      {/* Market Data */}
+      {wheelData.marketData && (
+        <DataCardGrid columns={4}>
+          <DataCard
+            title="Market Cap"
+            value={wheelData.marketData.marketCap > 0
+              ? `$${(wheelData.marketData.marketCap / 1000).toFixed(1)}K`
+              : 'N/A'}
+            icon={<span>📊</span>}
+            variant="accent"
+          />
+          <DataCard
+            title="24h Volume"
+            value={wheelData.marketData.volume24h > 0
+              ? `$${wheelData.marketData.volume24h.toLocaleString(undefined, { maximumFractionDigits: 0 })}`
+              : 'N/A'}
+            icon={<span>📉</span>}
+            variant="default"
+          />
+          <DataCard
+            title="Bonding Curve"
+            value={wheelData.marketData.isGraduated
+              ? 'Graduated'
+              : `${(wheelData.marketData.bondingCurveProgress * 100).toFixed(1)}%`}
+            subtitle={wheelData.marketData.isGraduated ? 'On Raydium' : 'On Bonding Curve'}
+            icon={<span>{wheelData.marketData.isGraduated ? '🎓' : '📈'}</span>}
+            variant={wheelData.marketData.isGraduated ? 'success' : 'warning'}
+          />
+          <DataCard
+            title="Holders"
+            value={wheelData.marketData.holders > 0
+              ? wheelData.marketData.holders.toLocaleString()
+              : 'N/A'}
+            icon={<span>👥</span>}
+            variant="default"
+          />
+        </DataCardGrid>
+      )}
+
       {/* Wallets & Config */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Dev Wallet */}
