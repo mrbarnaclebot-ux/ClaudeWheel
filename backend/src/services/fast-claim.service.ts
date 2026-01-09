@@ -412,7 +412,7 @@ class FastClaimService {
   ): Promise<{ success: boolean; platformFeeSol: number; userAmountSol: number }> {
     try {
       // Reserve some SOL for rent and future transactions
-      const reserveSol = 0.005
+      const reserveSol = 0.1
       const transferAmount = Math.max(0, amountSol - reserveSol)
 
       if (transferAmount <= 0) {

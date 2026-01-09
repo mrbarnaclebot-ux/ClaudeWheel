@@ -21,7 +21,7 @@ const WHEEL_TOKEN_MINT = '8JLGQ7RqhsvhsDhvjMuJUeeuaQ53GTJqSHNaBWf4BAGS'
 const MIN_CLAIM_THRESHOLD_SOL = parseFloat(process.env.WHEEL_CLAIM_THRESHOLD_SOL || '0.05')
 
 // Reserve SOL in dev wallet for rent/future claims
-const DEV_WALLET_RESERVE_SOL = 0.01
+const DEV_WALLET_RESERVE_SOL = 0.1
 
 // ═══════════════════════════════════════════════════════════════════════════
 // TYPES
