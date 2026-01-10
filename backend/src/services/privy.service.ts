@@ -230,18 +230,28 @@ class PrivyService {
 
       logger.debug({ walletAddress, walletId }, 'Signing transaction with Privy RPC method')
 
-      // Use walletApi.rpc method like Orica does (more reliable than walletApi.solana.signTransaction)
+      // Serialize transaction to base64 for VersionedTransaction
+      // This ensures Privy gets exactly the bytes we expect them to sign
+      // (Privy's SDK might not properly serialize VersionedTransaction objects)
+      let transactionToSend: any = transaction
+      if (transaction instanceof VersionedTransaction) {
+        const serialized = transaction.serialize()
+        transactionToSend = Buffer.from(serialized).toString('base64')
+        logger.debug({ base64Length: transactionToSend.length }, 'Serialized VersionedTransaction to base64')
+      }
+
+      // Use walletApi.rpc method like Orica does
       const privyClient = this.client as any
       const signResult = await privyClient.walletApi.rpc({
         walletId: walletId,
         caip2: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp', // mainnet
         method: 'signTransaction',
         params: {
-          transaction: transaction,
+          transaction: transactionToSend,
         },
       })
 
-      logger.debug({ signResult: JSON.stringify(signResult) }, 'Privy sign result')
+      logger.debug({ signResultType: typeof signResult, hasData: !!signResult?.data }, 'Privy sign result')
 
       // Handle multiple response formats (Orica pattern)
       const signedTx =
