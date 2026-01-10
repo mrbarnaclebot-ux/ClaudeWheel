@@ -100,9 +100,43 @@ router.get('/', async (req: PrivyRequest, res: Response) => {
       orderBy: { createdAt: 'desc' },
     })
 
+    // Transform to snake_case for frontend compatibility
+    const transformedTokens = (tokens || []).map(token => ({
+      id: token.id,
+      token_mint: token.tokenMintAddress,
+      token_name: token.tokenName,
+      token_symbol: token.tokenSymbol,
+      token_image: token.tokenImage,
+      token_decimals: token.tokenDecimals,
+      is_active: token.isActive,
+      created_at: token.createdAt,
+      dev_wallet: token.devWallet ? {
+        address: token.devWallet.walletAddress,
+      } : null,
+      ops_wallet: token.opsWallet ? {
+        address: token.opsWallet.walletAddress,
+      } : null,
+      config: token.config ? {
+        flywheel_active: token.config.flywheelActive,
+        market_making_enabled: token.config.marketMakingEnabled,
+        auto_claim_enabled: token.config.autoClaimEnabled,
+        fee_threshold_sol: token.config.feeThresholdSol,
+        min_buy_amount_sol: token.config.minBuyAmountSol,
+        max_buy_amount_sol: token.config.maxBuyAmountSol,
+      } : null,
+      flywheel_state: token.flywheelState ? {
+        cycle_phase: token.flywheelState.cyclePhase,
+        buy_count: token.flywheelState.buyCount,
+        sell_count: token.flywheelState.sellCount,
+        last_trade_at: token.flywheelState.lastTradeAt,
+        consecutive_failures: token.flywheelState.consecutiveFailures,
+        paused_until: token.flywheelState.pausedUntil,
+      } : null,
+    }))
+
     res.json({
       success: true,
-      data: tokens || [],
+      tokens: transformedTokens,
     })
   } catch (error) {
     loggers.privy.error({ error: String(error) }, 'Error getting tokens')

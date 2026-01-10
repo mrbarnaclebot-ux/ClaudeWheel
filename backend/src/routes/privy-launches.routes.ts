@@ -190,6 +190,11 @@ const createLaunchSchema = z.object({
   website: z.string().url().optional().or(z.literal('')),
   discord: z.string().url().optional().or(z.literal('')),
   devBuy: z.number().min(0).max(10).optional(), // Optional dev buy in SOL (0-10)
+  // MM Config options
+  mmAlgorithm: z.enum(['simple', 'smart', 'rebalance']).optional().default('simple'),
+  mmMinBuySol: z.number().min(0.001).max(1).optional().default(0.01),
+  mmMaxBuySol: z.number().min(0.01).max(5).optional().default(0.05),
+  mmAutoClaimEnabled: z.boolean().optional().default(true),
 })
 
 // Base minimum deposit in SOL (launch cost)
@@ -219,7 +224,10 @@ router.post('/', async (req: PrivyRequest, res: Response) => {
       })
     }
 
-    const { name, symbol, description, imageUrl, twitter, telegram, website, discord, devBuy } = validation.data
+    const {
+      name, symbol, description, imageUrl, twitter, telegram, website, discord, devBuy,
+      mmAlgorithm, mmMinBuySol, mmMaxBuySol, mmAutoClaimEnabled
+    } = validation.data
 
     // Calculate minimum deposit: base (0.1) + dev buy amount
     const devBuySol = devBuy || 0
@@ -289,6 +297,11 @@ router.post('/', async (req: PrivyRequest, res: Response) => {
         minDepositSol: minDepositSol,
         devBuySol: devBuySol,
         expiresAt,
+        // MM Config
+        mmAlgorithm: mmAlgorithm || 'simple',
+        mmMinBuySol: mmMinBuySol || 0.01,
+        mmMaxBuySol: mmMaxBuySol || 0.05,
+        mmAutoClaimEnabled: mmAutoClaimEnabled ?? true,
       },
     })
 
@@ -457,10 +470,334 @@ router.get('/history', async (req: PrivyRequest, res: Response) => {
   }
 })
 
+// ═══════════════════════════════════════════════════════════════════════════
+// DEV BUY TOKEN ACTIONS
+// For tokens that were launched with devBuy - user can burn, sell, or transfer
+// NOTE: Must be defined before /:id to avoid route collision
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * POST /api/privy/launches/devbuy-action
+ * Perform action on dev-bought tokens: burn, sell, or transfer to ops
+ */
+router.post('/devbuy-action', async (req: PrivyRequest, res: Response) => {
+  try {
+    if (!isPrismaConfigured()) {
+      return res.status(503).json({
+        success: false,
+        error: 'Database not configured',
+      })
+    }
+
+    const { tokenId, action } = req.body
+
+    if (!tokenId || !action) {
+      return res.status(400).json({
+        success: false,
+        error: 'tokenId and action are required',
+      })
+    }
+
+    if (!['burn', 'sell', 'transfer'].includes(action)) {
+      return res.status(400).json({
+        success: false,
+        error: 'action must be burn, sell, or transfer',
+      })
+    }
+
+    // Get the token and verify ownership
+    const token = await prisma.privyUserToken.findFirst({
+      where: {
+        id: tokenId,
+        privyUserId: req.privyUserId,
+      },
+      include: {
+        devWallet: true,
+        opsWallet: true,
+      },
+    })
+
+    if (!token) {
+      return res.status(404).json({
+        success: false,
+        error: 'Token not found',
+      })
+    }
+
+    const devWalletAddress = token.devWallet?.walletAddress
+    const opsWalletAddress = token.opsWallet?.walletAddress
+
+    if (!devWalletAddress) {
+      return res.status(400).json({
+        success: false,
+        error: 'Dev wallet not found',
+      })
+    }
+
+    // Import Solana utilities
+    const { PublicKey, Transaction } = await import('@solana/web3.js')
+    const { getConnection, getTokenBalance } = await import('../config/solana')
+    const { sendTransactionWithPrivySigning } = await import('../utils/transaction')
+    const {
+      createTransferInstruction,
+      createBurnInstruction,
+      createAssociatedTokenAccountInstruction,
+      getAssociatedTokenAddress,
+      getAccount,
+      TOKEN_PROGRAM_ID,
+      ASSOCIATED_TOKEN_PROGRAM_ID,
+    } = await import('@solana/spl-token')
+
+    const connection = getConnection()
+    const devPubkey = new PublicKey(devWalletAddress)
+    const tokenMintPubkey = new PublicKey(token.tokenMintAddress)
+
+    // Get token balance in dev wallet
+    const tokenBalance = await getTokenBalance(devPubkey, tokenMintPubkey)
+
+    if (tokenBalance <= 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'No tokens in dev wallet',
+      })
+    }
+
+    const tokenUnits = Math.floor(tokenBalance * Math.pow(10, token.tokenDecimals))
+    let signature: string | undefined
+
+    if (action === 'burn') {
+      // Burn tokens using SPL burn instruction
+      const sourceAta = await getAssociatedTokenAddress(tokenMintPubkey, devPubkey)
+
+      // Create burn instruction
+      const burnIx = createBurnInstruction(
+        sourceAta,
+        tokenMintPubkey,
+        devPubkey,
+        tokenUnits,
+        [],
+        TOKEN_PROGRAM_ID
+      )
+
+      const tx = new Transaction().add(burnIx)
+      tx.feePayer = devPubkey
+
+      const result = await sendTransactionWithPrivySigning(connection, tx, devWalletAddress, {
+        logContext: { action: 'burn', tokenSymbol: token.tokenSymbol },
+      })
+
+      if (!result.success) {
+        return res.status(500).json({
+          success: false,
+          error: result.error || 'Burn transaction failed',
+        })
+      }
+      signature = result.signature
+
+      loggers.privy.info({ tokenSymbol: token.tokenSymbol, amount: tokenBalance, signature }, 'Dev buy tokens burned')
+
+    } else if (action === 'sell') {
+      // Get quote and sell via Bags/Jupiter
+      const { bagsFmService } = await import('../services/bags-fm')
+
+      // Get sell quote
+      const quote = await bagsFmService.getTradeQuote(
+        token.tokenMintAddress,
+        'So11111111111111111111111111111111111111112', // SOL
+        tokenUnits,
+        'sell',
+        300 // 3% slippage
+      )
+
+      if (!quote) {
+        return res.status(500).json({
+          success: false,
+          error: 'Failed to get sell quote',
+        })
+      }
+
+      // Execute swap using dev wallet
+      const swapResult = await bagsFmService.generateSwapTransaction(devWalletAddress, quote.rawQuoteResponse)
+
+      if (!swapResult) {
+        return res.status(500).json({
+          success: false,
+          error: 'Failed to get swap transaction',
+        })
+      }
+
+      // Deserialize and sign with Privy
+      const { VersionedTransaction } = await import('@solana/web3.js')
+      const txBuffer = Buffer.from(swapResult.transaction, 'base64')
+      const transaction = VersionedTransaction.deserialize(txBuffer)
+
+      const result = await sendTransactionWithPrivySigning(connection, transaction, devWalletAddress, {
+        logContext: { action: 'sell', tokenSymbol: token.tokenSymbol },
+      })
+
+      if (!result.success) {
+        return res.status(500).json({
+          success: false,
+          error: result.error || 'Sell transaction failed',
+        })
+      }
+      signature = result.signature
+
+      loggers.privy.info({ tokenSymbol: token.tokenSymbol, amount: tokenBalance, signature }, 'Dev buy tokens sold')
+
+    } else if (action === 'transfer') {
+      // Transfer to ops wallet
+      if (!opsWalletAddress) {
+        return res.status(400).json({
+          success: false,
+          error: 'Ops wallet not found',
+        })
+      }
+
+      const opsPubkey = new PublicKey(opsWalletAddress)
+      const sourceAta = await getAssociatedTokenAddress(tokenMintPubkey, devPubkey)
+      const destAta = await getAssociatedTokenAddress(tokenMintPubkey, opsPubkey)
+
+      const tx = new Transaction()
+
+      // Check if destination ATA exists, create if not
+      try {
+        await getAccount(connection, destAta)
+      } catch {
+        // ATA doesn't exist, add create instruction
+        tx.add(
+          createAssociatedTokenAccountInstruction(
+            devPubkey, // payer
+            destAta, // ata
+            opsPubkey, // owner
+            tokenMintPubkey, // mint
+            TOKEN_PROGRAM_ID,
+            ASSOCIATED_TOKEN_PROGRAM_ID
+          )
+        )
+      }
+
+      // Create transfer instruction
+      const transferIx = createTransferInstruction(
+        sourceAta,
+        destAta,
+        devPubkey,
+        tokenUnits,
+        [],
+        TOKEN_PROGRAM_ID
+      )
+
+      tx.add(transferIx)
+      tx.feePayer = devPubkey
+
+      const result = await sendTransactionWithPrivySigning(connection, tx, devWalletAddress, {
+        logContext: { action: 'transfer', tokenSymbol: token.tokenSymbol },
+      })
+
+      if (!result.success) {
+        return res.status(500).json({
+          success: false,
+          error: result.error || 'Transfer transaction failed',
+        })
+      }
+      signature = result.signature
+
+      loggers.privy.info({ tokenSymbol: token.tokenSymbol, amount: tokenBalance, signature }, 'Dev buy tokens transferred to ops')
+    }
+
+    return res.json({
+      success: true,
+      data: {
+        action,
+        amount: tokenBalance,
+        signature,
+      },
+      message: `Successfully ${action === 'burn' ? 'burned' : action === 'sell' ? 'sold' : 'transferred'} ${tokenBalance} ${token.tokenSymbol}`,
+    })
+  } catch (error) {
+    loggers.privy.error({ error: String(error) }, 'Error executing devbuy action')
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to execute action',
+    })
+  }
+})
+
+/**
+ * GET /api/privy/launches/devbuy-balance/:tokenId
+ * Get dev wallet token balance for devbuy actions
+ */
+router.get('/devbuy-balance/:tokenId', async (req: PrivyRequest, res: Response) => {
+  try {
+    if (!isPrismaConfigured()) {
+      return res.status(503).json({
+        success: false,
+        error: 'Database not configured',
+      })
+    }
+
+    const { tokenId } = req.params
+
+    // Get the token and verify ownership
+    const token = await prisma.privyUserToken.findFirst({
+      where: {
+        id: tokenId,
+        privyUserId: req.privyUserId,
+      },
+      include: {
+        devWallet: true,
+      },
+    })
+
+    if (!token) {
+      return res.status(404).json({
+        success: false,
+        error: 'Token not found',
+      })
+    }
+
+    const devWalletAddress = token.devWallet?.walletAddress
+    if (!devWalletAddress) {
+      return res.status(400).json({
+        success: false,
+        error: 'Dev wallet not found',
+      })
+    }
+
+    // Get token balance
+    const { PublicKey } = await import('@solana/web3.js')
+    const { getTokenBalance } = await import('../config/solana')
+
+    const devPubkey = new PublicKey(devWalletAddress)
+    const tokenMintPubkey = new PublicKey(token.tokenMintAddress)
+    const tokenBalance = await getTokenBalance(devPubkey, tokenMintPubkey)
+
+    return res.json({
+      success: true,
+      data: {
+        tokenId,
+        tokenSymbol: token.tokenSymbol,
+        balance: tokenBalance,
+        devWalletAddress,
+      },
+    })
+  } catch (error) {
+    loggers.privy.error({ error: String(error) }, 'Error getting devbuy balance')
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to get balance',
+    })
+  }
+})
+
+// ═══════════════════════════════════════════════════════════════════════════
+// LAUNCH STATUS ROUTES (must be after specific routes to avoid collision)
+// ═══════════════════════════════════════════════════════════════════════════
+
 /**
  * GET /api/privy/launches/:id
  * Get launch status by ID
- * NOTE: This must be defined after /pending and /history to avoid route collision
+ * NOTE: This must be defined after /pending, /history, and /devbuy-* to avoid route collision
  */
 router.get('/:id', async (req: PrivyRequest, res: Response) => {
   try {

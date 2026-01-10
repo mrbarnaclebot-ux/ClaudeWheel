@@ -996,21 +996,26 @@ async function handlePrivySuccessfulLaunch(launch: PrivyPendingLaunchWithRelatio
 
     loggers.deposit.info({ userTokenId: userToken.id }, '📝 Created privy_user_tokens record')
 
-    // Create config with flywheel enabled using Prisma
+    // Create config with flywheel enabled using stored MM preferences from launch
     try {
       await prisma.privyTokenConfig.create({
         data: {
           privyTokenId: userToken.id,
           flywheelActive: true,
-          autoClaimEnabled: true,
-          algorithmMode: 'simple',
-          minBuyAmountSol: 0.01,
-          maxBuyAmountSol: 0.05,
+          autoClaimEnabled: launch.mmAutoClaimEnabled ?? true,
+          algorithmMode: launch.mmAlgorithm || 'simple',
+          minBuyAmountSol: Number(launch.mmMinBuySol) || 0.01,
+          maxBuyAmountSol: Number(launch.mmMaxBuySol) || 0.05,
           slippageBps: 300,
           tradingRoute: 'auto',
         },
       })
-      loggers.deposit.info({ userTokenId: userToken.id }, '⚙️ Created privy_token_config')
+      loggers.deposit.info({
+        userTokenId: userToken.id,
+        algorithm: launch.mmAlgorithm,
+        minBuy: Number(launch.mmMinBuySol),
+        maxBuy: Number(launch.mmMaxBuySol),
+      }, '⚙️ Created privy_token_config with user MM preferences')
     } catch (configError: any) {
       loggers.deposit.error({ error: configError.message }, 'Failed to create privy_token_config')
     }

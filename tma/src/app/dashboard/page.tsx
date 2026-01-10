@@ -106,14 +106,13 @@ export default function DashboardPage() {
                     <div className="text-2xl mb-1">🚀</div>
                     <div className="font-medium">Launch Token</div>
                 </Link>
-                <Link
-                    href="/register"
-                    onClick={handleLinkClick}
-                    className="bg-gray-800 hover:bg-gray-700 rounded-xl p-4 text-center transition-colors"
+                <div
+                    className="bg-gray-800/50 rounded-xl p-4 text-center opacity-50 cursor-not-allowed"
                 >
                     <div className="text-2xl mb-1">📝</div>
-                    <div className="font-medium">Register Token</div>
-                </Link>
+                    <div className="font-medium text-gray-400">Register Token</div>
+                    <div className="text-xs text-gray-500">Coming Soon</div>
+                </div>
             </div>
 
             {/* Stats Summary */}

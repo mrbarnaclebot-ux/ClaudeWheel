@@ -188,6 +188,12 @@ model PrivyPendingLaunch {
   createdAt        DateTime  @default(now()) @map("created_at")
   updatedAt        DateTime  @updatedAt @map("updated_at")
 
+  // MM Config - user-selected market making preferences
+  mmAlgorithm      String    @default("simple") @map("mm_algorithm") // simple, smart, rebalance
+  mmMinBuySol      Decimal   @default(0.01) @map("mm_min_buy_sol") @db.Decimal(20, 9)
+  mmMaxBuySol      Decimal   @default(0.05) @map("mm_max_buy_sol") @db.Decimal(20, 9)
+  mmAutoClaimEnabled Boolean @default(true) @map("mm_auto_claim_enabled")
+
   user      PrivyUser   @relation(fields: [privyUserId], references: [privyUserId])
   devWallet PrivyWallet @relation("DevWalletLaunch", fields: [devWalletId], references: [id])
   opsWallet PrivyWallet @relation("OpsWalletLaunch", fields: [opsWalletId], references: [id])

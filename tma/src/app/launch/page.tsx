@@ -19,6 +19,11 @@ interface TokenData {
     telegram?: string;
     website?: string;
     devBuy?: number;
+    // MM Config
+    mmAlgorithm: 'simple' | 'smart' | 'rebalance';
+    mmMinBuySol: number;
+    mmMaxBuySol: number;
+    mmAutoClaimEnabled: boolean;
 }
 
 interface PendingLaunch {
@@ -43,6 +48,11 @@ export default function LaunchPage() {
         symbol: '',
         description: '',
         imageUrl: '',
+        // MM defaults
+        mmAlgorithm: 'simple',
+        mmMinBuySol: 0.01,
+        mmMaxBuySol: 0.05,
+        mmAutoClaimEnabled: true,
     });
     const [pendingLaunch, setPendingLaunch] = useState<PendingLaunch | null>(null);
     const [error, setError] = useState<string | null>(null);
@@ -385,6 +395,63 @@ export default function LaunchPage() {
                             <p className="text-xs text-gray-500 mt-2">
                                 Amount of SOL to use for initial buy at launch (0-10 SOL)
                             </p>
+                        </div>
+
+                        {/* MM Strategy Selection */}
+                        <div className="bg-gray-800/50 rounded-xl p-4">
+                            <label className="block text-sm text-gray-400 mb-3">Market Making Strategy</label>
+                            <div className="grid grid-cols-3 gap-2 mb-4">
+                                {[
+                                    { value: 'simple', label: 'Simple', desc: '5 buys, 5 sells', disabled: false },
+                                    { value: 'smart', label: 'Smart', desc: 'Coming Soon', disabled: true },
+                                    { value: 'rebalance', label: 'Rebalance', desc: 'Portfolio %', disabled: false },
+                                ].map(opt => (
+                                    <button
+                                        key={opt.value}
+                                        type="button"
+                                        disabled={opt.disabled}
+                                        onClick={() => !opt.disabled && setData({ ...data, mmAlgorithm: opt.value as TokenData['mmAlgorithm'] })}
+                                        className={`p-3 rounded-lg text-center transition-colors ${
+                                            opt.disabled
+                                                ? 'bg-gray-800 text-gray-500 cursor-not-allowed'
+                                                : data.mmAlgorithm === opt.value
+                                                    ? 'bg-green-600 text-white'
+                                                    : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                                        }`}
+                                    >
+                                        <div className="text-sm font-medium">{opt.label}</div>
+                                        <div className="text-xs opacity-70">{opt.desc}</div>
+                                    </button>
+                                ))}
+                            </div>
+
+                            {/* Buy Amount Range */}
+                            <div className="grid grid-cols-2 gap-3">
+                                <div>
+                                    <label className="block text-xs text-gray-500 mb-1">Min Buy (SOL)</label>
+                                    <input
+                                        type="number"
+                                        value={data.mmMinBuySol}
+                                        onChange={e => setData({ ...data, mmMinBuySol: Math.max(0.001, parseFloat(e.target.value) || 0.01) })}
+                                        step="0.01"
+                                        min="0.001"
+                                        max="1"
+                                        className="w-full bg-gray-700 rounded-lg p-2 text-white text-sm"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-xs text-gray-500 mb-1">Max Buy (SOL)</label>
+                                    <input
+                                        type="number"
+                                        value={data.mmMaxBuySol}
+                                        onChange={e => setData({ ...data, mmMaxBuySol: Math.max(0.01, parseFloat(e.target.value) || 0.05) })}
+                                        step="0.01"
+                                        min="0.01"
+                                        max="5"
+                                        className="w-full bg-gray-700 rounded-lg p-2 text-white text-sm"
+                                    />
+                                </div>
+                            </div>
                         </div>
 
                         <div className="bg-gray-800/50 rounded-xl p-4 text-sm space-y-2">

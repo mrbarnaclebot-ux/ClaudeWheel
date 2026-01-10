@@ -543,19 +543,19 @@ class MultiUserMMService {
   }
 
   /**
-   * Collect fees from dev wallet and transfer to ops wallet with platform fee split
-   * Takes 10% for WHEEL platform, 90% goes to user's ops wallet
-   * WHEEL token is excluded from platform fees (100% goes to user)
+   * Transfer excess SOL from dev wallet to ops wallet
+   * NOTE: This is just a balance sweep - NO platform fee is taken here.
+   * Platform fees are only taken from actual Bags.fm fee claims in fast-claim.service.ts
    */
   private async collectFees(
     token: UserToken,
     connection: Connection
   ): Promise<{ collected: boolean; amount: number; platformFeeSol: number; userAmountSol: number; signature?: string }> {
     try {
-      // Get dev wallet (source of fees)
+      // Get dev wallet (source of funds)
       const devWallet = await getDecryptedDevWallet(token.id)
       if (!devWallet) {
-        loggers.flywheel.warn({ tokenSymbol: token.token_symbol, tokenId: token.id }, 'Could not decrypt dev wallet for fee collection')
+        loggers.flywheel.warn({ tokenSymbol: token.token_symbol, tokenId: token.id }, 'Could not decrypt dev wallet for balance sweep')
         return { collected: false, amount: 0, platformFeeSol: 0, userAmountSol: 0 }
       }
 
@@ -567,89 +567,38 @@ class MultiUserMMService {
       const transferAmount = devBalance - DEV_WALLET_MIN_RESERVE_SOL
 
       if (transferAmount < MIN_FEE_THRESHOLD_SOL) {
-        loggers.flywheel.debug({ tokenSymbol: token.token_symbol, devBalance, minRequired: MIN_FEE_THRESHOLD_SOL + DEV_WALLET_MIN_RESERVE_SOL }, 'Dev wallet balance too low for fee collection')
+        loggers.flywheel.debug({ tokenSymbol: token.token_symbol, devBalance, minRequired: MIN_FEE_THRESHOLD_SOL + DEV_WALLET_MIN_RESERVE_SOL }, 'Dev wallet balance too low for sweep')
         return { collected: false, amount: 0, platformFeeSol: 0, userAmountSol: 0 }
       }
 
-      // Check if this is the platform WHEEL token - excluded from platform fees
-      const isWheelToken = token.token_mint_address === PLATFORM_WHEEL_TOKEN_MINT
+      loggers.flywheel.info({ tokenSymbol: token.token_symbol, transferAmount }, 'Sweeping dev wallet balance to ops (no platform fee)')
 
-      // Calculate platform fee (0% for WHEEL token, default 10% for others)
-      const platformFeePercent = isWheelToken ? 0 : (env.platformFeePercentage || 10)
-      const platformFeeSol = transferAmount * (platformFeePercent / 100)
-      const userAmountSol = transferAmount - platformFeeSol
+      // Transfer 100% to user's ops wallet (no platform fee - that's handled in fast-claim)
+      const userOpsWalletAddress = new PublicKey(token.ops_wallet_address)
+      const tx = new Transaction().add(
+        SystemProgram.transfer({
+          fromPubkey: devWallet.publicKey,
+          toPubkey: userOpsWalletAddress,
+          lamports: Math.floor(transferAmount * LAMPORTS_PER_SOL),
+        })
+      )
+      const result = await sendAndConfirmTransactionWithRetry(
+        connection,
+        tx,
+        [devWallet],
+        { commitment: 'confirmed', logContext: { service: 'flywheel', type: 'balance-sweep', tokenSymbol: token.token_symbol } }
+      )
 
-      if (isWheelToken) {
-        loggers.flywheel.info({ tokenSymbol: token.token_symbol }, 'WHEEL token - skipping platform fee')
+      if (result.success) {
+        loggers.flywheel.info({ tokenSymbol: token.token_symbol, transferAmount, signature: result.signature }, 'Balance sweep successful')
+        await this.recordTransaction(token.id, 'transfer', transferAmount, result.signature!)
+        return { collected: true, amount: transferAmount, platformFeeSol: 0, userAmountSol: transferAmount, signature: result.signature }
+      } else {
+        loggers.flywheel.error({ tokenSymbol: token.token_symbol, error: result.error }, 'Balance sweep failed')
+        return { collected: false, amount: 0, platformFeeSol: 0, userAmountSol: 0 }
       }
-
-      loggers.flywheel.info({ tokenSymbol: token.token_symbol, transferAmount, platformFeePercent }, 'Collecting fees from dev wallet')
-
-      // Get platform ops wallet (WHEEL)
-      const platformOpsWallet = getOpsWallet()
-      let platformSig: string | undefined
-
-      // Transfer 1: Platform fee to WHEEL ops wallet (10%)
-      if (platformOpsWallet && platformFeeSol > 0.001) {
-        const platformTx = new Transaction().add(
-          SystemProgram.transfer({
-            fromPubkey: devWallet.publicKey,
-            toPubkey: platformOpsWallet.publicKey,
-            lamports: Math.floor(platformFeeSol * LAMPORTS_PER_SOL),
-          })
-        )
-        const platformResult = await sendAndConfirmTransactionWithRetry(
-          connection,
-          platformTx,
-          [devWallet],
-          { commitment: 'confirmed', logContext: { service: 'flywheel', type: 'platform-fee', tokenSymbol: token.token_symbol } }
-        )
-        if (platformResult.success) {
-          platformSig = platformResult.signature
-          loggers.flywheel.info({ tokenSymbol: token.token_symbol, platformFeePercent, platformFeeSol, signature: platformSig }, 'Platform fee transferred to WHEEL ops wallet')
-        } else {
-          loggers.flywheel.error({ tokenSymbol: token.token_symbol, error: platformResult.error }, 'Platform fee transfer failed')
-        }
-      } else if (!platformOpsWallet) {
-        loggers.flywheel.warn({ tokenSymbol: token.token_symbol }, 'Platform ops wallet not configured, skipping platform fee')
-      }
-
-      // Transfer 2: Remaining to user's ops wallet (90%)
-      let userSig: string | undefined
-      if (userAmountSol > 0.001) {
-        const userOpsWalletAddress = new PublicKey(token.ops_wallet_address)
-        const userTx = new Transaction().add(
-          SystemProgram.transfer({
-            fromPubkey: devWallet.publicKey,
-            toPubkey: userOpsWalletAddress,
-            lamports: Math.floor(userAmountSol * LAMPORTS_PER_SOL),
-          })
-        )
-        const userResult = await sendAndConfirmTransactionWithRetry(
-          connection,
-          userTx,
-          [devWallet],
-          { commitment: 'confirmed', logContext: { service: 'flywheel', type: 'user-portion', tokenSymbol: token.token_symbol } }
-        )
-        if (userResult.success) {
-          userSig = userResult.signature
-          loggers.flywheel.info({ tokenSymbol: token.token_symbol, userPercent: 100 - platformFeePercent, userAmountSol, signature: userSig }, 'User portion transferred to ops wallet')
-        } else {
-          loggers.flywheel.error({ tokenSymbol: token.token_symbol, error: userResult.error }, 'User portion transfer failed')
-        }
-      }
-
-      const signature = userSig || platformSig || ''
-      loggers.flywheel.info({ tokenSymbol: token.token_symbol, totalAmount: transferAmount, platformFeeSol, userAmountSol }, 'Fee collection successful')
-
-      // Record the transfer (user portion)
-      if (userSig) {
-        await this.recordTransaction(token.id, 'transfer', userAmountSol, userSig)
-      }
-
-      return { collected: true, amount: transferAmount, platformFeeSol, userAmountSol, signature }
     } catch (error: any) {
-      loggers.flywheel.error({ tokenSymbol: token.token_symbol, error: String(error) }, 'Fee collection failed')
+      loggers.flywheel.error({ tokenSymbol: token.token_symbol, error: String(error) }, 'Balance sweep failed')
       return { collected: false, amount: 0, platformFeeSol: 0, userAmountSol: 0 }
     }
   }
@@ -1648,7 +1597,9 @@ class MultiUserMMService {
   }
 
   /**
-   * Collect fees from Privy dev wallet to ops wallet using Privy signing
+   * Transfer excess SOL from Privy dev wallet to ops wallet using Privy signing
+   * NOTE: This is just a balance sweep - NO platform fee is taken here.
+   * Platform fees are only taken from actual Bags.fm fee claims in fast-claim.service.ts
    */
   private async collectPrivyFees(
     token: PrivyTokenWithConfig,
@@ -1659,7 +1610,7 @@ class MultiUserMMService {
       const opsWalletAddress = token.ops_wallet?.wallet_address
 
       if (!devWalletAddress || !opsWalletAddress) {
-        loggers.flywheel.warn({ tokenSymbol: token.token_symbol }, 'Missing wallet addresses for Privy fee collection')
+        loggers.flywheel.warn({ tokenSymbol: token.token_symbol }, 'Missing wallet addresses for Privy balance sweep')
         return { collected: false, amount: 0 }
       }
 
@@ -1672,76 +1623,40 @@ class MultiUserMMService {
       const transferAmount = devBalance - DEV_WALLET_MIN_RESERVE_SOL
 
       if (transferAmount < MIN_FEE_THRESHOLD_SOL) {
-        loggers.flywheel.debug({ tokenSymbol: token.token_symbol, devBalance }, 'Privy dev wallet balance too low for fee collection')
+        loggers.flywheel.debug({ tokenSymbol: token.token_symbol, devBalance }, 'Privy dev wallet balance too low for sweep')
         return { collected: false, amount: 0 }
       }
 
-      // Calculate platform fee (10%)
-      const platformFeePercent = env.platformFeePercentage || 10
-      const platformFeeSol = transferAmount * (platformFeePercent / 100)
-      const userAmountSol = transferAmount - platformFeeSol
+      loggers.flywheel.info({ tokenSymbol: token.token_symbol, transferAmount }, 'Sweeping Privy dev wallet balance to ops (no platform fee)')
 
-      loggers.flywheel.info({ tokenSymbol: token.token_symbol, transferAmount, platformFeePercent }, 'Collecting Privy fees')
+      // Transfer 100% to user's ops wallet (no platform fee - that's handled in fast-claim)
+      const userOpsPubkey = new PublicKey(opsWalletAddress)
+      const tx = new Transaction().add(
+        SystemProgram.transfer({
+          fromPubkey: devPubkey,
+          toPubkey: userOpsPubkey,
+          lamports: Math.floor(transferAmount * LAMPORTS_PER_SOL),
+        })
+      )
+      tx.feePayer = devPubkey
 
-      // Get platform ops wallet (WHEEL)
-      const platformOpsWallet = getOpsWallet()
+      const result = await sendTransactionWithPrivySigning(
+        connection,
+        tx,
+        devWalletAddress,
+        { commitment: 'confirmed', logContext: { service: 'flywheel', type: 'privy-balance-sweep', tokenSymbol: token.token_symbol } }
+      )
 
-      // Transfer 1: Platform fee to WHEEL ops wallet (10%)
-      if (platformOpsWallet && platformFeeSol > 0.001) {
-        const platformTx = new Transaction().add(
-          SystemProgram.transfer({
-            fromPubkey: devPubkey,
-            toPubkey: platformOpsWallet.publicKey,
-            lamports: Math.floor(platformFeeSol * LAMPORTS_PER_SOL),
-          })
-        )
-        platformTx.feePayer = devPubkey
-
-        const platformResult = await sendTransactionWithPrivySigning(
-          connection,
-          platformTx,
-          devWalletAddress,
-          { commitment: 'confirmed', logContext: { service: 'flywheel', type: 'privy-platform-fee', tokenSymbol: token.token_symbol } }
-        )
-
-        if (platformResult.success) {
-          loggers.flywheel.info({ tokenSymbol: token.token_symbol, platformFeeSol, signature: platformResult.signature }, 'Privy platform fee transferred')
-        } else {
-          loggers.flywheel.error({ tokenSymbol: token.token_symbol, error: platformResult.error }, 'Privy platform fee transfer failed')
-        }
+      if (result.success) {
+        loggers.flywheel.info({ tokenSymbol: token.token_symbol, transferAmount, signature: result.signature }, 'Privy balance sweep successful')
+        await this.recordPrivyTransaction(token.id, 'transfer', transferAmount, result.signature!)
+        return { collected: true, amount: transferAmount, signature: result.signature }
+      } else {
+        loggers.flywheel.error({ tokenSymbol: token.token_symbol, error: result.error }, 'Privy balance sweep failed')
+        return { collected: false, amount: 0 }
       }
-
-      // Transfer 2: Remaining to user's ops wallet (90%)
-      if (userAmountSol > 0.001) {
-        const userOpsPubkey = new PublicKey(opsWalletAddress)
-        const userTx = new Transaction().add(
-          SystemProgram.transfer({
-            fromPubkey: devPubkey,
-            toPubkey: userOpsPubkey,
-            lamports: Math.floor(userAmountSol * LAMPORTS_PER_SOL),
-          })
-        )
-        userTx.feePayer = devPubkey
-
-        const userResult = await sendTransactionWithPrivySigning(
-          connection,
-          userTx,
-          devWalletAddress,
-          { commitment: 'confirmed', logContext: { service: 'flywheel', type: 'privy-user-portion', tokenSymbol: token.token_symbol } }
-        )
-
-        if (userResult.success) {
-          loggers.flywheel.info({ tokenSymbol: token.token_symbol, userAmountSol, signature: userResult.signature }, 'Privy user portion transferred')
-          await this.recordPrivyTransaction(token.id, 'transfer', userAmountSol, userResult.signature!)
-          return { collected: true, amount: transferAmount, signature: userResult.signature }
-        } else {
-          loggers.flywheel.error({ tokenSymbol: token.token_symbol, error: userResult.error }, 'Privy user portion transfer failed')
-        }
-      }
-
-      return { collected: false, amount: 0 }
     } catch (error: any) {
-      loggers.flywheel.error({ tokenSymbol: token.token_symbol, error: String(error) }, 'Privy fee collection failed')
+      loggers.flywheel.error({ tokenSymbol: token.token_symbol, error: String(error) }, 'Privy balance sweep failed')
       return { collected: false, amount: 0 }
     }
   }
@@ -1796,14 +1711,17 @@ class MultiUserMMService {
       )
 
       if (!quote?.rawQuoteResponse) {
+        // Quote failures are temporary (e.g., token not indexed yet) - don't trigger pause
         const errorMsg = `Failed to get ${tradingRoute} quote`
-        await this.recordPrivyFailure(token.id, errorMsg)
+        loggers.flywheel.info({ tokenSymbol: token.token_symbol, route: tradingRoute }, 'Quote failed (temporary, no pause)')
+        await this.updatePrivyFlywheelCheck(token.id, 'quote_failed')
         return { ...baseResult, tradeType: 'buy', success: false, amount: buyAmount, error: errorMsg }
       }
 
       const signature = await this.executeSwapWithPrivySigning(connection, opsWalletAddress, quote.rawQuoteResponse, tradingRoute)
 
       if (!signature) {
+        // Actual swap failures should trigger pause mechanism
         const errorMsg = `${tradingRoute} swap failed`
         await this.recordPrivyFailure(token.id, errorMsg)
         return { ...baseResult, tradeType: 'buy', success: false, amount: buyAmount, error: errorMsg }
@@ -1882,14 +1800,17 @@ class MultiUserMMService {
       )
 
       if (!quote?.rawQuoteResponse) {
+        // Quote failures are temporary (e.g., token not indexed yet) - don't trigger pause
         const errorMsg = `Failed to get ${tradingRoute} quote`
-        await this.recordPrivyFailure(token.id, errorMsg)
+        loggers.flywheel.info({ tokenSymbol: token.token_symbol, route: tradingRoute }, 'Quote failed (temporary, no pause)')
+        await this.updatePrivyFlywheelCheck(token.id, 'quote_failed')
         return { ...baseResult, tradeType: 'sell', success: false, amount: actualSellAmount, error: errorMsg }
       }
 
       const signature = await this.executeSwapWithPrivySigning(connection, opsWalletAddress, quote.rawQuoteResponse, tradingRoute)
 
       if (!signature) {
+        // Actual swap failures should trigger pause mechanism
         const errorMsg = `${tradingRoute} swap failed`
         await this.recordPrivyFailure(token.id, errorMsg)
         return { ...baseResult, tradeType: 'sell', success: false, amount: actualSellAmount, error: errorMsg }
