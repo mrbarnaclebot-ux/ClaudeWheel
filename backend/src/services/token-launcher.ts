@@ -22,10 +22,13 @@ import { BagsSDK, signAndSendTransaction } from '@bagsfm/bags-sdk'
 /**
  * Sign and send a VersionedTransaction using Privy delegated signing.
  *
- * IMPORTANT: Refreshes blockhash before sending to handle Privy API latency.
- * The Bags API returns transactions, but by the time Privy signs and broadcasts,
- * the original blockhash may have expired. We update the blockhash in-place
- * on the message object (safe because transaction is unsigned).
+ * APPROACH: Sign with Privy, broadcast ourselves for full control.
+ *
+ * Previous attempts using Privy's signAndSendTransaction returned signatures
+ * but transactions weren't appearing on-chain. By signing separately and
+ * broadcasting ourselves, we have full visibility into any broadcast errors.
+ *
+ * Blockhash is refreshed before signing to handle Privy API latency.
  */
 async function signAndSendWithPrivy(
   connection: Connection,
@@ -37,11 +40,10 @@ async function signAndSendWithPrivy(
 
   // Get fresh blockhash to prevent expiry during Privy API latency
   // Using 'finalized' commitment for longer validity window
-  const { blockhash } = await connection.getLatestBlockhash('finalized')
+  const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('finalized')
 
   // Update blockhash in-place on the message
   // This is safe because the transaction is unsigned (signatures array is empty)
-  // We're modifying the existing message object, not creating a new one
   const message = transaction.message as any
   const oldBlockhash = message.recentBlockhash
   message.recentBlockhash = blockhash
@@ -52,14 +54,41 @@ async function signAndSendWithPrivy(
     newBlockhash: blockhash.slice(0, 8) + '...'
   }, 'Updated blockhash')
 
-  // Send to Privy for signing and broadcasting
-  const signature = await privyService.signAndSendSolanaTransaction(walletAddress, transaction)
+  // Sign with Privy (sign only, we'll broadcast ourselves)
+  const signedTx = await privyService.signSolanaTransaction(walletAddress, transaction)
 
-  if (!signature) {
+  if (!signedTx) {
     throw new Error(`Privy signing returned null for ${description}`)
   }
 
-  loggers.token.debug({ signature, description }, `${description} signed and sent`)
+  // Verify we got a VersionedTransaction back
+  if (!(signedTx instanceof VersionedTransaction)) {
+    throw new Error(`Privy returned unexpected transaction type for ${description}`)
+  }
+
+  loggers.token.debug({ description }, `${description} signed by Privy, broadcasting ourselves`)
+
+  // Broadcast the signed transaction ourselves
+  // This gives us full control and visibility into any errors
+  const signature = await connection.sendTransaction(signedTx, {
+    skipPreflight: false, // Do preflight to catch errors early
+    maxRetries: 3,
+  })
+
+  loggers.token.info({ signature, description }, `${description} broadcast successfully`)
+
+  // Confirm the transaction landed
+  const confirmation = await connection.confirmTransaction({
+    signature,
+    blockhash,
+    lastValidBlockHeight,
+  }, 'confirmed')
+
+  if (confirmation.value.err) {
+    throw new Error(`Transaction ${description} failed: ${JSON.stringify(confirmation.value.err)}`)
+  }
+
+  loggers.token.info({ signature, description }, `${description} confirmed on-chain`)
   return signature
 }
 
@@ -275,7 +304,6 @@ class TokenLauncherService {
 
       const devWalletPubkey = new PublicKey(params.devWalletAddress)
       const connection = getConnection()
-      const commitment = this.sdk.state.getCommitment()
 
       // Step 1: Create token info and metadata
       loggers.token.info('Creating token info and metadata')
@@ -311,19 +339,17 @@ class TokenLauncherService {
       })
 
       // Sign and send config transactions using Privy
-      // Refresh blockhash before each to handle Privy API latency
+      // signAndSendWithPrivy handles blockhash refresh and confirmation internally
       if (configResult.transactions && configResult.transactions.length > 0) {
         loggers.token.debug({ transactionCount: configResult.transactions.length }, 'Signing config transactions with Privy')
         for (let i = 0; i < configResult.transactions.length; i++) {
           const tx = configResult.transactions[i]
-          const signature = await signAndSendWithPrivy(
+          await signAndSendWithPrivy(
             connection,
             params.devWalletAddress,
             tx,
             `config transaction ${i + 1}/${configResult.transactions.length}`
           )
-          // Wait for confirmation
-          await connection.confirmTransaction(signature, commitment)
         }
       }
 
@@ -334,13 +360,12 @@ class TokenLauncherService {
           const bundle = configResult.bundles[i]
           for (let j = 0; j < bundle.length; j++) {
             const tx = bundle[j]
-            const signature = await signAndSendWithPrivy(
+            await signAndSendWithPrivy(
               connection,
               params.devWalletAddress,
               tx,
               `bundle ${i + 1} transaction ${j + 1}`
             )
-            await connection.confirmTransaction(signature, commitment)
           }
         }
       }
@@ -361,7 +386,7 @@ class TokenLauncherService {
       })
 
       // Step 4 & 5: Sign and broadcast using Privy
-      // Refresh blockhash to handle Privy API latency
+      // signAndSendWithPrivy handles blockhash refresh and confirmation internally
       loggers.token.info('Signing and broadcasting launch transaction with Privy')
       const signature = await signAndSendWithPrivy(
         connection,
@@ -369,9 +394,6 @@ class TokenLauncherService {
         launchTransaction,
         'launch transaction'
       )
-
-      // Confirm the transaction
-      await connection.confirmTransaction(signature, commitment)
 
       loggers.token.info({ tokenMint: tokenInfoResponse.tokenMint, signature, url: `https://bags.fm/${tokenInfoResponse.tokenMint}` }, 'Token launched successfully with Privy signing')
 
