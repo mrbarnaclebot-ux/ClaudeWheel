@@ -397,7 +397,7 @@ export default function LaunchPage() {
                                 <span className="text-gray-500 ml-1">(0.1 base{data.devBuy ? ` + ${data.devBuy.toFixed(2)} dev buy` : ''})</span>
                             </p>
                             <p className="text-gray-500 text-xs">
-                                💡 Tip: Deposit extra SOL (0.5+ total recommended) to fund your market making bot at launch
+                                💡 Tip: We recommend <span className="text-green-400">{(0.5 + (data.devBuy || 0)).toFixed(2)} SOL</span> total for effective market making
                             </p>
                         </div>
 
@@ -535,7 +535,7 @@ export default function LaunchPage() {
                                 Deposit at least <span className="font-bold">{(0.1 + (data.devBuy || 0)).toFixed(2)} SOL</span> to your dev wallet to launch.
                             </p>
                             <p className="text-xs text-yellow-400/70">
-                                💡 Add extra SOL beyond the minimum to fund your market making bot. We recommend 0.5+ SOL total for effective MM.
+                                💡 We recommend <span className="font-medium">{(0.5 + (data.devBuy || 0)).toFixed(2)} SOL</span> total for effective market making.
                             </p>
                         </div>
 
@@ -593,7 +593,7 @@ export default function LaunchPage() {
                                     Send at least <span className="text-green-400 font-bold">{pendingLaunch.required_amount?.toFixed(2) || '0.10'} SOL</span> to your dev wallet
                                 </p>
                                 <p className="text-gray-500 text-xs mb-4">
-                                    💡 Extra SOL beyond the minimum funds your market making bot
+                                    💡 We recommend <span className="text-green-400">{((pendingLaunch.required_amount || 0.1) + 0.4).toFixed(2)} SOL</span> total for effective MM
                                 </p>
                             </>
                         )}
