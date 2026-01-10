@@ -11,6 +11,7 @@ import {
 } from '@solana/web3.js'
 import { connection, getBalance } from '../config/solana'
 import { supabase } from '../config/database'
+import { prisma, isPrismaConfigured } from '../config/prisma'
 import { getKeypairFromEncrypted } from './wallet-generator'
 import { loggers } from '../utils/logger'
 
@@ -326,6 +327,139 @@ Use /launch to try again!`
     }
   } catch (error) {
     loggers.refund.error({ error: String(error) }, 'Error sending refund notification')
+  }
+}
+
+/**
+ * Execute a refund for a Privy pending launch using delegated signing
+ */
+export async function executePrivyRefund(
+  launchId: string,
+  devWalletAddress: string,
+  refundAddress: string,
+  telegramId?: number | bigint
+): Promise<RefundResult> {
+  try {
+    // Validate addresses
+    let devWalletPubkey: PublicKey
+    let refundPubkey: PublicKey
+    try {
+      devWalletPubkey = new PublicKey(devWalletAddress)
+      refundPubkey = new PublicKey(refundAddress)
+    } catch {
+      return { success: false, error: 'Invalid wallet address' }
+    }
+
+    // Check current balance
+    const currentBalance = await getBalance(devWalletPubkey)
+    if (currentBalance <= RENT_RESERVE_SOL) {
+      return { success: false, error: `Insufficient balance: ${currentBalance} SOL` }
+    }
+
+    // Calculate refund amount (leave rent reserve)
+    const refundAmountSol = currentBalance - RENT_RESERVE_SOL
+    const refundAmountLamports = Math.floor(refundAmountSol * LAMPORTS_PER_SOL)
+
+    loggers.refund.info({ amountSol: refundAmountSol, refundAddress }, 'Processing Privy refund')
+
+    // Create transfer transaction
+    const transaction = new Transaction().add(
+      SystemProgram.transfer({
+        fromPubkey: devWalletPubkey,
+        toPubkey: refundPubkey,
+        lamports: refundAmountLamports,
+      })
+    )
+
+    // Get recent blockhash
+    const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed')
+    transaction.recentBlockhash = blockhash
+    transaction.feePayer = devWalletPubkey
+
+    // Use Privy service to sign and send
+    const { privyService } = await import('./privy.service')
+
+    if (!privyService.canSignTransactions()) {
+      return { success: false, error: 'Privy signing not configured - missing PRIVY_AUTHORIZATION_KEY' }
+    }
+
+    const signature = await privyService.signAndSendSolanaTransaction(
+      devWalletAddress,
+      transaction
+    )
+
+    if (!signature) {
+      return { success: false, error: 'Privy signing failed' }
+    }
+
+    // Wait for confirmation
+    await connection.confirmTransaction({
+      signature,
+      blockhash,
+      lastValidBlockHeight,
+    }, 'confirmed')
+
+    loggers.refund.info({ signature }, 'Privy refund successful')
+
+    // Update database using Prisma
+    if (isPrismaConfigured()) {
+      await prisma.privyPendingLaunch.update({
+        where: { id: launchId },
+        data: {
+          status: 'refunded',
+          lastError: `Refunded ${refundAmountSol.toFixed(6)} SOL to ${refundAddress}`,
+          updatedAt: new Date(),
+        },
+      })
+    }
+
+    // Log audit event
+    if (supabase) {
+      await supabase.from('audit_log').insert({
+        event_type: 'privy_refund_executed',
+        details: {
+          privy_launch_id: launchId,
+          refund_address: refundAddress,
+          amount_sol: refundAmountSol,
+          signature,
+          telegram_id: telegramId ? Number(telegramId) : null,
+        },
+      })
+    }
+
+    // Notify user via Telegram if we have their ID
+    if (telegramId) {
+      await notifyUserRefund(
+        Number(telegramId),
+        'your token',
+        refundAmountSol,
+        refundAddress,
+        signature
+      )
+    }
+
+    return {
+      success: true,
+      signature,
+      amountRefunded: refundAmountSol,
+      refundAddress,
+    }
+  } catch (error: any) {
+    loggers.refund.error({ error: String(error) }, 'Privy refund failed')
+
+    // Log the failure
+    if (supabase) {
+      await supabase.from('audit_log').insert({
+        event_type: 'privy_refund_failed',
+        details: {
+          privy_launch_id: launchId,
+          error: error.message,
+          refund_address: refundAddress,
+        },
+      })
+    }
+
+    return { success: false, error: error.message || 'Privy refund failed' }
   }
 }
 

@@ -1,10 +1,28 @@
 import { Router, Request, Response, NextFunction } from 'express'
 import { privyService } from '../services/privy.service'
 import { prisma, isPrismaConfigured } from '../config/prisma'
+import { supabase } from '../config/database'
 import { loggers } from '../utils/logger'
 import { z } from 'zod'
+import multer from 'multer'
 
 const router = Router()
+
+// Configure multer for memory storage (files in memory as Buffer)
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 5 * 1024 * 1024, // 5MB max
+  },
+  fileFilter: (req, file, cb) => {
+    // Only allow images
+    if (file.mimetype.startsWith('image/')) {
+      cb(null, true)
+    } else {
+      cb(new Error('Only image files are allowed'))
+    }
+  },
+})
 
 // ═══════════════════════════════════════════════════════════════════════════
 // PRIVY TOKEN LAUNCH ROUTES
@@ -65,6 +83,99 @@ async function authMiddleware(req: PrivyRequest, res: Response, next: NextFuncti
 router.use(authMiddleware)
 
 // ═══════════════════════════════════════════════════════════════════════════
+// IMAGE UPLOAD
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Error handler for multer file upload errors
+ */
+function handleMulterError(err: any, _req: Request, res: Response, next: NextFunction) {
+  if (err instanceof multer.MulterError) {
+    if (err.code === 'LIMIT_FILE_SIZE') {
+      return res.status(400).json({
+        success: false,
+        error: 'Image file too large. Maximum size is 5MB.',
+      })
+    }
+    return res.status(400).json({
+      success: false,
+      error: `Upload error: ${err.message}`,
+    })
+  }
+  if (err) {
+    return res.status(400).json({
+      success: false,
+      error: err.message || 'Upload failed',
+    })
+  }
+  next()
+}
+
+/**
+ * POST /api/privy/launches/upload-image
+ * Upload token image to Supabase Storage
+ */
+router.post('/upload-image', upload.single('image'), handleMulterError, async (req: PrivyRequest, res: Response) => {
+  try {
+    if (!supabase) {
+      return res.status(503).json({
+        success: false,
+        error: 'Storage not configured',
+      })
+    }
+
+    if (!req.file) {
+      return res.status(400).json({
+        success: false,
+        error: 'No image file provided',
+      })
+    }
+
+    const file = req.file
+    // Whitelist allowed extensions for safety
+    const allowedExtensions = ['jpg', 'jpeg', 'png', 'gif', 'webp']
+    const rawExtension = (file.originalname.split('.').pop() || 'jpg').toLowerCase()
+    const extension = allowedExtensions.includes(rawExtension) ? rawExtension : 'jpg'
+    const filename = `token-${Date.now()}-${Math.random().toString(36).substring(7)}.${extension}`
+    const storagePath = `token-images/${filename}`
+
+    // Upload to Supabase Storage
+    const { error: uploadError } = await supabase.storage
+      .from('public-assets')
+      .upload(storagePath, file.buffer, {
+        contentType: file.mimetype,
+        upsert: false,
+      })
+
+    if (uploadError) {
+      loggers.privy.error({ error: uploadError.message }, 'Image upload failed')
+      return res.status(500).json({
+        success: false,
+        error: 'Failed to upload image',
+      })
+    }
+
+    // Get public URL
+    const { data: urlData } = supabase.storage
+      .from('public-assets')
+      .getPublicUrl(storagePath)
+
+    loggers.privy.info({ path: storagePath }, 'Image uploaded successfully')
+
+    return res.json({
+      success: true,
+      imageUrl: urlData.publicUrl,
+    })
+  } catch (error) {
+    loggers.privy.error({ error: String(error) }, 'Image upload error')
+    return res.status(500).json({
+      success: false,
+      error: 'Image upload failed',
+    })
+  }
+})
+
+// ═══════════════════════════════════════════════════════════════════════════
 // LAUNCH ROUTES
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -73,7 +184,7 @@ const createLaunchSchema = z.object({
   name: z.string().min(1, 'Token name required').max(100),
   symbol: z.string().min(1, 'Token symbol required').max(20),
   description: z.string().max(1000).optional(),
-  imageUrl: z.string().url().optional().or(z.literal('')),
+  imageUrl: z.string().url('Token image URL is required'),
   twitter: z.string().url().optional().or(z.literal('')),
   telegram: z.string().url().optional().or(z.literal('')),
   website: z.string().url().optional().or(z.literal('')),
@@ -182,7 +293,7 @@ router.post('/', async (req: PrivyRequest, res: Response) => {
       depositAddress: devWallet.walletAddress,
     }, 'Pending launch created')
 
-    res.status(201).json({
+    return res.status(201).json({
       success: true,
       data: {
         launch: {
@@ -202,7 +313,7 @@ router.post('/', async (req: PrivyRequest, res: Response) => {
     })
   } catch (error) {
     loggers.privy.error({ error: String(error) }, 'Error creating launch')
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       error: 'Failed to create launch',
     })
@@ -212,6 +323,7 @@ router.post('/', async (req: PrivyRequest, res: Response) => {
 /**
  * GET /api/privy/launches/pending
  * Get user's pending launch
+ * NOTE: This must be defined before /:id to avoid route collision
  */
 router.get('/pending', async (req: PrivyRequest, res: Response) => {
   try {
@@ -260,7 +372,7 @@ router.get('/pending', async (req: PrivyRequest, res: Response) => {
       })
     }
 
-    res.json({
+    return res.json({
       success: true,
       data: {
         id: launch.id,
@@ -283,7 +395,7 @@ router.get('/pending', async (req: PrivyRequest, res: Response) => {
     })
   } catch (error) {
     loggers.privy.error({ error: String(error) }, 'Error getting pending launch')
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       error: 'Failed to get pending launch',
     })
@@ -315,7 +427,7 @@ router.get('/history', async (req: PrivyRequest, res: Response) => {
       take: limit,
     })
 
-    res.json({
+    return res.json({
       success: true,
       data: launches.map(launch => ({
         id: launch.id,
@@ -329,9 +441,85 @@ router.get('/history', async (req: PrivyRequest, res: Response) => {
     })
   } catch (error) {
     loggers.privy.error({ error: String(error) }, 'Error getting launch history')
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       error: 'Failed to get launch history',
+    })
+  }
+})
+
+/**
+ * GET /api/privy/launches/:id
+ * Get launch status by ID
+ * NOTE: This must be defined after /pending and /history to avoid route collision
+ */
+router.get('/:id', async (req: PrivyRequest, res: Response) => {
+  try {
+    if (!isPrismaConfigured()) {
+      return res.status(503).json({
+        success: false,
+        error: 'Database not configured',
+      })
+    }
+
+    const { id } = req.params
+
+    const launch = await prisma.privyPendingLaunch.findFirst({
+      where: {
+        id,
+        privyUserId: req.privyUserId, // Ensure user owns this launch
+      },
+      include: {
+        devWallet: {
+          select: { walletAddress: true },
+        },
+      },
+    })
+
+    if (!launch) {
+      return res.status(404).json({
+        success: false,
+        error: 'Launch not found',
+      })
+    }
+
+    // Get current balance of dev wallet if launch is still pending
+    let balance = Number(launch.minDepositSol) || 0
+    if (launch.status === 'awaiting_deposit' || launch.status === 'launching') {
+      try {
+        const { PublicKey } = await import('@solana/web3.js')
+        const { getBalance } = await import('../config/solana')
+        const devWalletAddress = launch.devWallet?.walletAddress
+        if (devWalletAddress) {
+          const pubkey = new PublicKey(devWalletAddress)
+          balance = await getBalance(pubkey)
+        }
+      } catch (e) {
+        // Use stored balance if we can't fetch current
+      }
+    }
+
+    return res.json({
+      success: true,
+      data: {
+        id: launch.id,
+        status: launch.status,
+        tokenName: launch.tokenName,
+        tokenSymbol: launch.tokenSymbol,
+        tokenMintAddress: launch.tokenMintAddress,
+        balance,
+        minDepositSol: Number(launch.minDepositSol),
+        lastError: launch.lastError,
+        createdAt: launch.createdAt,
+        updatedAt: launch.updatedAt,
+        devWalletAddress: launch.devWallet?.walletAddress,
+      },
+    })
+  } catch (error) {
+    loggers.privy.error({ error: String(error) }, 'Error fetching launch')
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to fetch launch',
     })
   }
 })
@@ -390,13 +578,13 @@ router.delete('/:id', async (req: PrivyRequest, res: Response) => {
       privyUserId: req.privyUserId,
     }, 'Pending launch cancelled')
 
-    res.json({
+    return res.json({
       success: true,
       message: 'Launch cancelled successfully',
     })
   } catch (error) {
     loggers.privy.error({ error: String(error) }, 'Error cancelling launch')
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       error: 'Failed to cancel launch',
     })

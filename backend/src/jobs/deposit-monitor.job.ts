@@ -10,7 +10,7 @@ import { supabase } from '../config/database'
 import { prisma, isPrismaConfigured, type PrivyPendingLaunch as PrismaPrivyPendingLaunch, type PrivyWallet } from '../config/prisma'
 import { getConnection, getBalance } from '../config/solana'
 import { tokenLauncherService } from '../services/token-launcher'
-import { executeRefund, findOriginalFunder } from '../services/refund.service'
+import { executeRefund, executePrivyRefund, findOriginalFunder } from '../services/refund.service'
 
 /**
  * Check if supabase is configured and throw error if not
@@ -801,13 +801,13 @@ async function handlePrivyExpiredLaunch(launch: PrivyPendingLaunchWithRelations)
   const devWalletPubkey = new PublicKey(devWalletAddress)
   const balance = await getBalance(devWalletPubkey)
 
-  // Update using Prisma
+  // Update using Prisma - set initial expired status
   await prisma.privyPendingLaunch.update({
     where: { id: launch.id },
     data: {
       status: 'expired',
       minDepositSol: balance, // Store the balance at expiry
-      lastError: balance > 0.001 ? `Expired with ${balance} SOL` : 'No deposit received',
+      lastError: balance > 0.001 ? `Expired with ${balance.toFixed(4)} SOL - refund pending` : 'No deposit received',
       updatedAt: new Date(),
     },
   })
@@ -823,11 +823,53 @@ async function handlePrivyExpiredLaunch(launch: PrivyPendingLaunchWithRelations)
     },
   })
 
-  // Notify user via Telegram
+  // Trigger automatic refund if there's balance using Privy delegated signing
+  if (balance > 0.001) {
+    try {
+      const originalFunder = await findOriginalFunder(devWalletAddress)
+      if (originalFunder) {
+        loggers.deposit.info({ balance: balance.toFixed(4), originalFunder }, '💸 Auto-refunding Privy SOL after expiry')
+        const refundResult = await executePrivyRefund(
+          launch.id,
+          devWalletAddress,
+          originalFunder,
+          launch.user?.telegramId ?? undefined
+        )
+        if (refundResult.success) {
+          loggers.deposit.info({ signature: refundResult.signature }, '✅ Privy auto-refund successful')
+          // Notification and status update to 'refunded' handled by executePrivyRefund
+          return
+        } else {
+          loggers.deposit.error({ error: refundResult.error }, '❌ Privy auto-refund failed')
+          // Update lastError to reflect refund failure
+          await prisma.privyPendingLaunch.update({
+            where: { id: launch.id },
+            data: { lastError: `Expired with ${balance.toFixed(4)} SOL - refund failed: ${refundResult.error}` },
+          })
+        }
+      } else {
+        loggers.deposit.warn({ tokenSymbol: launch.tokenSymbol }, '⚠️ Could not find original funder - manual refund required')
+        // Update lastError to indicate manual refund needed
+        await prisma.privyPendingLaunch.update({
+          where: { id: launch.id },
+          data: { lastError: `Expired with ${balance.toFixed(4)} SOL - manual refund required (could not find funder)` },
+        })
+      }
+    } catch (refundError) {
+      loggers.deposit.error({ error: String(refundError) }, 'Privy auto-refund error')
+      // Update lastError to reflect refund error
+      await prisma.privyPendingLaunch.update({
+        where: { id: launch.id },
+        data: { lastError: `Expired with ${balance.toFixed(4)} SOL - refund error: ${String(refundError)}` },
+      })
+    }
+  }
+
+  // Notify user via Telegram (only if refund wasn't successfully triggered)
   if (launch.user?.telegramId) {
     await notifyUser(
       Number(launch.user.telegramId),
-      `⏰ Your ${launch.tokenSymbol} launch has expired.\n\n${balance > 0.001 ? `Balance: ${balance.toFixed(4)} SOL` : 'No deposit was received.'}\n\nUse the TMA app to start a new launch.`
+      `⏰ Your ${launch.tokenSymbol} launch has expired.\n\n${balance > 0.001 ? `Balance of ${balance.toFixed(4)} SOL will be refunded.` : 'No deposit was received.'}\n\nUse the TMA app to start a new launch.`
     )
   }
 }
@@ -1063,7 +1105,57 @@ async function handlePrivyFailedLaunch(launch: PrivyPendingLaunchWithRelations, 
       },
     })
 
-    if (launch.user?.telegramId) {
+    // Trigger automatic refund using Privy delegated signing
+    let refundTriggered = false
+    const devWalletAddress = launch.devWallet?.walletAddress
+    if (devWalletAddress) {
+      try {
+        const devWalletPubkey = new PublicKey(devWalletAddress)
+        const balance = await getBalance(devWalletPubkey)
+
+        if (balance > 0.001) {
+          const originalFunder = await findOriginalFunder(devWalletAddress)
+          if (originalFunder) {
+            loggers.deposit.info({ balance: balance.toFixed(4), originalFunder }, '💸 Auto-refunding Privy SOL after failed launch')
+            const refundResult = await executePrivyRefund(
+              launch.id,
+              devWalletAddress,
+              originalFunder,
+              launch.user?.telegramId ?? undefined
+            )
+            if (refundResult.success) {
+              loggers.deposit.info({ signature: refundResult.signature }, '✅ Privy auto-refund successful')
+              refundTriggered = true
+              // Notification and status update to 'refunded' handled by executePrivyRefund
+            } else {
+              loggers.deposit.error({ error: refundResult.error }, '❌ Privy auto-refund failed')
+              // Update lastError to reflect refund failure
+              await prisma.privyPendingLaunch.update({
+                where: { id: launch.id },
+                data: { lastError: `Launch failed after ${newRetryCount} retries - refund failed: ${refundResult.error}` },
+              })
+            }
+          } else {
+            loggers.deposit.warn({ tokenSymbol: launch.tokenSymbol }, '⚠️ Could not find original funder - manual refund required')
+            // Update lastError to indicate manual refund needed
+            await prisma.privyPendingLaunch.update({
+              where: { id: launch.id },
+              data: { lastError: `Launch failed - manual refund required (could not find funder)` },
+            })
+          }
+        }
+      } catch (refundError) {
+        loggers.deposit.error({ error: String(refundError) }, 'Privy auto-refund error')
+        // Update lastError to reflect refund error
+        await prisma.privyPendingLaunch.update({
+          where: { id: launch.id },
+          data: { lastError: `Launch failed - refund error: ${String(refundError)}` },
+        })
+      }
+    }
+
+    // Notify user about failure (only if refund wasn't triggered - refund service sends its own notification)
+    if (!refundTriggered && launch.user?.telegramId) {
       await notifyUser(
         Number(launch.user.telegramId),
         `❌ *Launch Failed*
@@ -1072,7 +1164,9 @@ Your ${launch.tokenSymbol} launch could not be completed after ${maxRetries} att
 
 Error: ${errorMessage}
 
-Please check the TMA app for more details.`
+Your SOL will be refunded to your wallet. Please contact support if you need assistance.
+
+Use the TMA app to try again!`
       )
     }
   }
