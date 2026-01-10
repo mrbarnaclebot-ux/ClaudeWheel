@@ -10,6 +10,7 @@ import {
   Keypair,
   SendTransactionError,
   TransactionConfirmationStrategy,
+  PublicKey,
 } from '@solana/web3.js'
 import { loggers } from './logger'
 import { privyService } from '../services/privy.service'
@@ -384,6 +385,106 @@ export async function sendSerializedTransactionWithRetry(
 // PRIVY DELEGATED SIGNING FUNCTIONS
 // For transactions signed via Privy's server-side wallet API
 // ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Sign and send a transaction using Privy - EXACT copy of token-launcher.ts pattern
+ *
+ * CRITICAL: This function does NOT modify blockhash - Bags SDK provides fresh ones.
+ * But for legacy Transaction, we MUST set feePayer if not already set.
+ * This is the pattern that WORKS for token launches.
+ */
+export async function signAndSendWithPrivyExact(
+  connection: Connection,
+  walletAddress: string,
+  transaction: Transaction | VersionedTransaction,
+  description: string = 'transaction'
+): Promise<{ success: boolean; signature?: string; error?: string }> {
+
+  loggers.solana.debug({ description, walletAddress }, `Signing ${description} with Privy (exact pattern)`)
+
+  try {
+    // For legacy Transaction, ensure feePayer is set (required before signing)
+    // VersionedTransaction has feePayer baked into message, so this only applies to legacy
+    if (transaction instanceof Transaction) {
+      if (!transaction.feePayer) {
+        transaction.feePayer = new PublicKey(walletAddress)
+        loggers.solana.debug({ description }, 'Set feePayer for legacy Transaction')
+      }
+
+      // Log transaction details for debugging
+      loggers.solana.debug({
+        description,
+        feePayer: transaction.feePayer?.toBase58(),
+        recentBlockhash: transaction.recentBlockhash?.slice(0, 8) + '...',
+        instructionCount: transaction.instructions.length,
+      }, 'Legacy Transaction details before signing')
+    }
+
+    // Sign with Privy - NO blockhash modifications (SDK provides fresh ones)
+    const signedTx = await privyService.signSolanaTransaction(walletAddress, transaction)
+
+    if (!signedTx) {
+      return { success: false, error: `Privy signing returned null for ${description}` }
+    }
+
+    loggers.solana.debug({ description }, `${description} signed by Privy, broadcasting`)
+
+    // Serialize - handle both Transaction and VersionedTransaction
+    let serialized: Buffer
+    if (signedTx instanceof VersionedTransaction) {
+      serialized = Buffer.from(signedTx.serialize())
+    } else if (signedTx instanceof Transaction) {
+      serialized = signedTx.serialize({ requireAllSignatures: false })
+    } else if ((signedTx as any).serialize) {
+      serialized = (signedTx as any).serialize({ requireAllSignatures: false })
+    } else {
+      return { success: false, error: `Unknown signed transaction type for ${description}` }
+    }
+
+    // Broadcast with skipPreflight and high retries (Orica pattern)
+    const signature = await connection.sendRawTransaction(serialized, {
+      skipPreflight: true,
+      maxRetries: 5,
+    })
+
+    loggers.solana.info({ signature, description }, `${description} broadcast, polling for confirmation`)
+
+    // Poll for status (don't use confirmTransaction which times out)
+    const maxPolls = 30 // 30 * 2s = 60s max
+    for (let i = 0; i < maxPolls; i++) {
+      await sleep(2000)
+
+      const status = await connection.getSignatureStatus(signature)
+
+      if (status && status.value) {
+        if (status.value.err) {
+          loggers.solana.error({ signature, error: status.value.err, description }, `${description} failed on-chain`)
+          return { success: false, signature, error: `Transaction failed: ${JSON.stringify(status.value.err)}` }
+        }
+
+        if (status.value.confirmationStatus === 'confirmed' || status.value.confirmationStatus === 'finalized') {
+          loggers.solana.info({
+            signature,
+            description,
+            confirmationStatus: status.value.confirmationStatus,
+          }, `${description} confirmed on-chain`)
+          return { success: true, signature }
+        }
+
+        loggers.solana.debug({ signature, poll: i + 1 }, 'Transaction processing...')
+      } else {
+        loggers.solana.debug({ signature, poll: i + 1 }, 'Transaction not found yet...')
+      }
+    }
+
+    // Transaction not confirmed after timeout
+    loggers.solana.error({ signature, description }, `${description} not confirmed after 60s`)
+    return { success: false, signature, error: `Transaction not confirmed after 60 seconds. Signature: ${signature}` }
+  } catch (error: any) {
+    loggers.solana.error({ error: String(error), description }, `${description} failed`)
+    return { success: false, error: error.message || String(error) }
+  }
+}
 
 export interface PrivyTransactionOptions {
   /** Maximum number of retry attempts (default: 3) */

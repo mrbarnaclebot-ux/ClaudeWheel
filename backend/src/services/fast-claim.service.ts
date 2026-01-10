@@ -11,7 +11,7 @@ import { getConnection, getOpsWallet, getSolPrice } from '../config/solana'
 import { env } from '../config/env'
 import { bagsFmService, ClaimablePosition } from './bags-fm'
 import { loggers } from '../utils/logger'
-import { sendSerializedTransactionWithRetry, sendAndConfirmTransactionWithRetry, sendTransactionWithPrivySigning } from '../utils/transaction'
+import { sendSerializedTransactionWithRetry, sendAndConfirmTransactionWithRetry, sendTransactionWithPrivySigning, signAndSendWithPrivyExact } from '../utils/transaction'
 import {
   UserToken,
   getTokensForAutoClaim,
@@ -856,22 +856,23 @@ class FastClaimService {
             attempt: attempt + 1,
           }, 'Fresh RAW claim transactions generated, executing with Privy signing')
 
-          // Execute claim transactions using the WORKING pattern from token-launcher.ts:
-          // Sign with Privy → We broadcast ourselves → Poll for confirmation
-          // This pattern WORKS for token launches, so use it for claims too
-          for (const tx of claimTxs) {
-            const result = await sendTransactionWithPrivySigning(
+          // Execute claim transactions using EXACT token-launcher.ts pattern:
+          // - NO transaction modifications (especially no blockhash changes)
+          // - Sign with Privy → Serialize ourselves → Broadcast ourselves → Poll
+          // This is copy-pasted logic from the working token launches
+          for (let txIndex = 0; txIndex < claimTxs.length; txIndex++) {
+            const tx = claimTxs[txIndex]
+            const result = await signAndSendWithPrivyExact(
               connection,
-              tx, // Raw transaction object
               devWalletAddress,
-              {
-                maxRetries: 1, // Don't retry internally - we get fresh txs each outer attempt
-                logContext: { service: 'privy-fast-claim', attempt: attempt + 1 },
-              }
+              tx,
+              `claim tx ${txIndex + 1}/${claimTxs.length} for ${token.token_symbol}`
             )
             if (result.success && result.signature) {
               lastSignature = result.signature
-              break // Success - exit transaction loop
+              // Continue to next tx if there are more (some claims have multiple txs)
+            } else if (!result.success) {
+              throw new Error(result.error || 'Claim transaction failed')
             }
           }
 
