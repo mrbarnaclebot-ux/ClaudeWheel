@@ -97,21 +97,29 @@ export default function DashboardPage() {
             )}
 
             {/* Quick Actions */}
-            <div className="grid grid-cols-2 gap-3 mb-6">
+            <div className="grid grid-cols-3 gap-3 mb-6">
                 <Link
                     href="/launch"
                     onClick={handleLinkClick}
                     className="bg-green-600 hover:bg-green-500 rounded-xl p-4 text-center transition-colors"
                 >
                     <div className="text-2xl mb-1">🚀</div>
-                    <div className="font-medium">Launch Token</div>
+                    <div className="font-medium text-sm">Launch</div>
+                </Link>
+                <Link
+                    href="/mm"
+                    onClick={handleLinkClick}
+                    className="bg-blue-600 hover:bg-blue-500 rounded-xl p-4 text-center transition-colors"
+                >
+                    <div className="text-2xl mb-1">📈</div>
+                    <div className="font-medium text-sm">MM Mode</div>
                 </Link>
                 <div
                     className="bg-gray-800/50 rounded-xl p-4 text-center opacity-50 cursor-not-allowed"
                 >
                     <div className="text-2xl mb-1">📝</div>
-                    <div className="font-medium text-gray-400">Register Token</div>
-                    <div className="text-xs text-gray-500">Coming Soon</div>
+                    <div className="font-medium text-sm text-gray-400">Register</div>
+                    <div className="text-xs text-gray-500">Soon</div>
                 </div>
             </div>
 

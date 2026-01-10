@@ -16,6 +16,7 @@ interface TokenDetails {
     token_symbol: string;
     token_image?: string;
     token_decimals: number;
+    token_source?: 'launched' | 'registered' | 'mm_only';
     is_active: boolean;
     is_graduated: boolean;
     created_at: string;
@@ -71,6 +72,8 @@ export default function TokenDetailPage() {
     const [showSettings, setShowSettings] = useState(false);
     const [showDevBuyActions, setShowDevBuyActions] = useState(false);
     const [devBuyAction, setDevBuyAction] = useState<'burn' | 'sell' | 'transfer' | null>(null);
+    const [showWithdraw, setShowWithdraw] = useState(false);
+    const [withdrawAddress, setWithdrawAddress] = useState('');
 
     // Fetch token details
     const { data: token, isLoading, error } = useQuery({
@@ -150,6 +153,28 @@ export default function TokenDetailPage() {
             hapticFeedback('heavy');
             setDevBuyAction(null);
             setShowDevBuyActions(false);
+        },
+        onError: () => {
+            hapticFeedback('heavy');
+        },
+    });
+
+    // MM Withdraw mutation (mm_only tokens only)
+    const withdrawMutation = useMutation({
+        mutationFn: async (destinationAddress: string) => {
+            const accessToken = await getAccessToken();
+            const res = await api.post(`/api/privy/mm/${tokenId}/withdraw`, {
+                destinationAddress,
+            }, {
+                headers: { Authorization: `Bearer ${accessToken}` },
+            });
+            return res.data;
+        },
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['token', tokenId] });
+            queryClient.invalidateQueries({ queryKey: ['tokens'] });
+            hapticFeedback('heavy');
+            setShowWithdraw(false);
         },
         onError: () => {
             hapticFeedback('heavy');
@@ -370,6 +395,90 @@ export default function TokenDetailPage() {
                                         <div className="text-xs font-medium text-blue-400">Transfer</div>
                                     </button>
                                 </div>
+                            )}
+                        </div>
+                    )}
+                </motion.div>
+            )}
+
+            {/* MM-Only Withdraw Section */}
+            {token.token_source === 'mm_only' && (
+                <motion.div
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: 0.15 }}
+                    className="bg-blue-900/30 border border-blue-700/50 rounded-xl p-4 mb-6"
+                >
+                    <div className="flex items-center justify-between mb-3">
+                        <div>
+                            <p className="font-medium text-blue-400">MM-Only Mode</p>
+                            <p className="text-sm text-blue-400/70">
+                                Withdraw to stop MM and get your SOL back
+                            </p>
+                        </div>
+                        <button
+                            onClick={() => setShowWithdraw(!showWithdraw)}
+                            className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+                        >
+                            Withdraw
+                        </button>
+                    </div>
+
+                    {showWithdraw && (
+                        <div className="space-y-3 mt-4 pt-4 border-t border-blue-700/50">
+                            <p className="text-xs text-gray-400">
+                                This will stop the flywheel, sell all tokens, and transfer SOL to your address.
+                            </p>
+
+                            <div>
+                                <label className="block text-xs text-gray-400 mb-1">Destination Address</label>
+                                <input
+                                    type="text"
+                                    value={withdrawAddress}
+                                    onChange={(e) => setWithdrawAddress(e.target.value.trim())}
+                                    placeholder="Enter Solana address..."
+                                    className={`w-full bg-gray-800 rounded-lg p-3 text-white font-mono text-sm placeholder-gray-500 focus:outline-none focus:ring-2 ${
+                                        withdrawAddress.length > 0 && (withdrawAddress.length < 32 || withdrawAddress.length > 44)
+                                            ? 'focus:ring-red-500 border border-red-500/50'
+                                            : 'focus:ring-blue-500'
+                                    }`}
+                                />
+                                {withdrawAddress.length > 0 && (withdrawAddress.length < 32 || withdrawAddress.length > 44) && (
+                                    <p className="text-xs text-red-400 mt-1">Invalid address format (32-44 characters)</p>
+                                )}
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-2">
+                                <button
+                                    onClick={() => {
+                                        setShowWithdraw(false);
+                                        setWithdrawAddress('');
+                                    }}
+                                    disabled={withdrawMutation.isPending}
+                                    className="bg-gray-700 hover:bg-gray-600 rounded-lg py-3 text-sm transition-colors"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    onClick={() => withdrawMutation.mutate(withdrawAddress)}
+                                    disabled={withdrawMutation.isPending || withdrawAddress.length < 32 || withdrawAddress.length > 44}
+                                    className="bg-blue-600 hover:bg-blue-500 disabled:bg-gray-700 disabled:text-gray-500 rounded-lg py-3 text-sm font-medium transition-colors"
+                                >
+                                    {withdrawMutation.isPending ? (
+                                        <span className="flex items-center justify-center gap-2">
+                                            <span className="animate-spin w-4 h-4 border-2 border-white border-t-transparent rounded-full" />
+                                            Withdrawing...
+                                        </span>
+                                    ) : (
+                                        'Confirm Withdraw'
+                                    )}
+                                </button>
+                            </div>
+
+                            {withdrawMutation.isError && (
+                                <p className="text-xs text-red-400">
+                                    {(withdrawMutation.error as any)?.response?.data?.error || 'Withdraw failed. Please try again.'}
+                                </p>
                             )}
                         </div>
                     )}

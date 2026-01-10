@@ -108,6 +108,7 @@ router.get('/', async (req: PrivyRequest, res: Response) => {
       token_symbol: token.tokenSymbol,
       token_image: token.tokenImage,
       token_decimals: token.tokenDecimals,
+      token_source: token.tokenSource,
       is_active: token.isActive,
       created_at: token.createdAt,
       dev_wallet: token.devWallet ? {
@@ -315,6 +316,7 @@ router.get('/:id', async (req: PrivyRequest, res: Response) => {
       token_symbol: token.tokenSymbol,
       token_image: token.tokenImage,
       token_decimals: token.tokenDecimals,
+      token_source: token.tokenSource,
       is_active: token.isActive,
       is_graduated: token.isGraduated,
       created_at: token.createdAt,

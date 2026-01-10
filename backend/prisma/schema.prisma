@@ -34,6 +34,7 @@ model PrivyUser {
   wallets         PrivyWallet[]
   tokens          PrivyUserToken[]
   pendingLaunches PrivyPendingLaunch[]
+  mmPending       PrivyMmPending[]
 
   @@map("privy_users")
 }
@@ -57,6 +58,7 @@ model PrivyWallet {
   opsTokens          PrivyUserToken[]     @relation("OpsWallet")
   devPendingLaunches PrivyPendingLaunch[] @relation("DevWalletLaunch")
   opsPendingLaunches PrivyPendingLaunch[] @relation("OpsWalletLaunch")
+  mmPending          PrivyMmPending[]     @relation("MmOpsWallet")
 
   @@unique([privyUserId, walletType])
   @@index([walletAddress])
@@ -81,6 +83,7 @@ model PrivyUserToken {
   isActive            Boolean  @default(true) @map("is_active")
   isGraduated         Boolean  @default(false) @map("is_graduated")
   launchedViaTelegram Boolean  @default(false) @map("launched_via_telegram")
+  tokenSource         String   @default("launched") @map("token_source") // 'launched' | 'registered' | 'mm_only'
   createdAt           DateTime @default(now()) @map("created_at")
   updatedAt           DateTime @updatedAt @map("updated_at")
 
@@ -265,4 +268,36 @@ model PrivyClaimHistory {
   @@index([status])
   @@index([createdAt(sort: Desc)])
   @@map("privy_claim_history")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PRIVY MM PENDING
+// MM-only mode: user funds ops wallet to market-make any Bags token
+// ═══════════════════════════════════════════════════════════════════════════
+
+model PrivyMmPending {
+  id               String   @id @default(uuid())
+  privyUserId      String   @map("privy_user_id")
+  tokenMintAddress String   @map("token_mint_address")
+  tokenSymbol      String   @map("token_symbol")
+  tokenName        String?  @map("token_name")
+  tokenImage       String?  @map("token_image")
+  tokenDecimals    Int      @default(6) @map("token_decimals")
+  opsWalletId      String   @map("ops_wallet_id")
+  depositAddress   String   @map("deposit_address")
+  minDepositSol    Decimal  @default(0.1) @map("min_deposit_sol") @db.Decimal(20, 9)
+  mmAlgorithm      String   @default("simple") @map("mm_algorithm") // simple, rebalance
+  status           String   @default("awaiting_deposit") // awaiting_deposit, active, cancelled, expired
+  expiresAt        DateTime @map("expires_at")
+  activatedAt      DateTime? @map("activated_at")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  user      PrivyUser   @relation(fields: [privyUserId], references: [privyUserId], onDelete: Cascade)
+  opsWallet PrivyWallet @relation("MmOpsWallet", fields: [opsWalletId], references: [id])
+
+  @@index([status])
+  @@index([privyUserId])
+  @@index([expiresAt])
+  @@map("privy_mm_pending")
 }

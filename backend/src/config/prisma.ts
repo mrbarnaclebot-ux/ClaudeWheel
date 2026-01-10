@@ -75,6 +75,7 @@ export type {
   PrivyPendingLaunch,
   PrivyTransaction,
   PrivyClaimHistory,
+  PrivyMmPending,
 } from '@prisma/client'
 
 // ═══════════════════════════════════════════════════════════════════════════

@@ -15,6 +15,7 @@ import privyAuthRoutes from './routes/privy-auth.routes'
 import privyTokensRoutes from './routes/privy-tokens.routes'
 import privyLaunchesRoutes from './routes/privy-launches.routes'
 import privyUsersRoutes from './routes/privy-users.routes'
+import privyMmRoutes from './routes/privy-mm.routes'
 import { bagsFmService } from './services/bags-fm'
 import { isEncryptionConfigured } from './services/encryption.service'
 import { startTelegramBot, stopTelegramBot, getTelegramWebhookMiddleware } from './telegram/bot'
@@ -43,6 +44,7 @@ app.use('/api/user', userTokenRoutes)
 app.use('/api/privy', privyAuthRoutes)
 app.use('/api/privy/tokens', privyTokensRoutes)
 app.use('/api/privy/launches', privyLaunchesRoutes)
+app.use('/api/privy/mm', privyMmRoutes)
 app.use('/api/users', privyUsersRoutes)
 
 // Telegram webhook (for production)

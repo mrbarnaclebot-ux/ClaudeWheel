@@ -7,7 +7,7 @@ import cron from 'node-cron'
 import { loggers } from '../utils/logger'
 import { PublicKey } from '@solana/web3.js'
 import { supabase } from '../config/database'
-import { prisma, isPrismaConfigured, type PrivyPendingLaunch as PrismaPrivyPendingLaunch, type PrivyWallet } from '../config/prisma'
+import { prisma, isPrismaConfigured, type PrivyPendingLaunch as PrismaPrivyPendingLaunch, type PrivyWallet, type PrivyMmPending as PrismaPrivyMmPending } from '../config/prisma'
 import { getConnection, getBalance } from '../config/solana'
 import { tokenLauncherService } from '../services/token-launcher'
 import { executeRefund, executePrivyRefund, findOriginalFunder } from '../services/refund.service'
@@ -647,11 +647,13 @@ export function startDepositMonitorJob(): void {
   jobTask = cron.schedule(CHECK_INTERVAL, async () => {
     await checkPendingLaunches()
     await checkPrivyPendingLaunches() // Also check Privy pending launches
+    await checkPrivyMmPending() // Also check MM-only pending deposits
   })
 
   // Run immediately on start
   checkPendingLaunches()
   checkPrivyPendingLaunches()
+  checkPrivyMmPending()
 }
 
 /**
@@ -1217,6 +1219,258 @@ Error: ${errorMessage}
 Your SOL will be refunded to your wallet. Please contact support if you need assistance.
 
 Use the TMA app to try again!`
+      )
+    }
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PRIVY MM PENDING DEPOSITS
+// For MM-only mode: user funds ops wallet to market-make any Bags token
+// ═══════════════════════════════════════════════════════════════════════════
+
+type PrivyMmPendingWithRelations = PrismaPrivyMmPending & {
+  opsWallet: PrivyWallet
+  user: { telegramId: bigint | null }
+}
+
+let isMmRunning = false
+const MM_MIN_DEPOSIT_SOL = 0.1
+
+/**
+ * Check all Privy MM pending deposits
+ */
+async function checkPrivyMmPending(): Promise<void> {
+  if (isMmRunning) {
+    return
+  }
+
+  if (!isPrismaConfigured()) {
+    return
+  }
+
+  isMmRunning = true
+
+  try {
+    // Get all pending MM deposits awaiting deposit
+    const pendingMm = await prisma.privyMmPending.findMany({
+      where: {
+        status: 'awaiting_deposit',
+      },
+      include: {
+        opsWallet: true,
+        user: { select: { telegramId: true } },
+      },
+    })
+
+    if (!pendingMm || pendingMm.length === 0) {
+      return
+    }
+
+    loggers.deposit.info({ count: pendingMm.length }, '📡 Checking Privy MM pending deposits...')
+
+    for (const pending of pendingMm as PrivyMmPendingWithRelations[]) {
+      try {
+        // Check if expired
+        if (pending.expiresAt < new Date()) {
+          await handleMmExpired(pending)
+          continue
+        }
+
+        // Check balance of ops wallet
+        const opsWalletAddress = pending.opsWallet?.walletAddress
+        if (!opsWalletAddress) {
+          loggers.deposit.warn({ pendingId: pending.id }, 'MM pending missing ops wallet')
+          continue
+        }
+
+        const opsWalletPubkey = new PublicKey(opsWalletAddress)
+        const balance = await getBalance(opsWalletPubkey)
+
+        if (balance >= MM_MIN_DEPOSIT_SOL) {
+          loggers.deposit.info({ tokenSymbol: pending.tokenSymbol, balance }, '💰 MM deposit detected')
+
+          // Atomic update with optimistic locking
+          const updateResult = await prisma.privyMmPending.updateMany({
+            where: {
+              id: pending.id,
+              status: 'awaiting_deposit',
+            },
+            data: {
+              status: 'active',
+              activatedAt: new Date(),
+              updatedAt: new Date(),
+            },
+          })
+
+          if (updateResult.count === 0) {
+            loggers.deposit.info({ pendingId: pending.id }, '⏭️ MM pending already being processed')
+            continue
+          }
+
+          // Activate MM-only token
+          await activateMmToken(pending)
+        }
+      } catch (error) {
+        loggers.deposit.error({ pendingId: pending.id, error: String(error) }, 'Error checking MM pending')
+      }
+    }
+  } catch (error) {
+    loggers.deposit.error({ error: String(error) }, 'Error in MM pending monitor')
+  } finally {
+    isMmRunning = false
+  }
+}
+
+/**
+ * Handle expired MM pending deposit
+ */
+async function handleMmExpired(pending: PrivyMmPendingWithRelations): Promise<void> {
+  loggers.deposit.info({ tokenSymbol: pending.tokenSymbol }, '⏰ MM pending expired')
+
+  await prisma.privyMmPending.update({
+    where: { id: pending.id },
+    data: {
+      status: 'expired',
+      updatedAt: new Date(),
+    },
+  })
+
+  // Notify user
+  if (pending.user?.telegramId) {
+    await notifyUser(
+      Number(pending.user.telegramId),
+      `⏰ Your MM setup for ${pending.tokenSymbol} has expired.\n\nNo deposit was received within 24 hours.\n\nUse the TMA app to start a new MM setup.`
+    )
+  }
+}
+
+/**
+ * Activate MM-only token after deposit received
+ */
+async function activateMmToken(pending: PrivyMmPendingWithRelations): Promise<void> {
+  try {
+    loggers.deposit.info({
+      tokenSymbol: pending.tokenSymbol,
+      tokenMint: pending.tokenMintAddress,
+    }, '🚀 Activating MM-only token')
+
+    // Get user's dev wallet (needed for relations, even if unused for MM-only)
+    const devWallet = await prisma.privyWallet.findFirst({
+      where: {
+        privyUserId: pending.privyUserId,
+        walletType: 'dev',
+      },
+    })
+
+    if (!devWallet) {
+      loggers.deposit.error({ pendingId: pending.id }, 'Dev wallet not found for MM activation')
+      return
+    }
+
+    // Use transaction to ensure all records are created together (no orphans)
+    const userToken = await prisma.$transaction(async (tx) => {
+      // Create user token record (mm_only source)
+      const token = await tx.privyUserToken.create({
+        data: {
+          privyUserId: pending.privyUserId,
+          devWalletId: devWallet.id,
+          opsWalletId: pending.opsWalletId,
+          tokenMintAddress: pending.tokenMintAddress,
+          tokenSymbol: pending.tokenSymbol,
+          tokenName: pending.tokenName,
+          tokenImage: pending.tokenImage,
+          tokenDecimals: pending.tokenDecimals,
+          isActive: true,
+          isGraduated: false,
+          launchedViaTelegram: false,
+          tokenSource: 'mm_only',
+        },
+      })
+
+      // Create config with flywheel enabled, NO auto-claim (not creator)
+      await tx.privyTokenConfig.create({
+        data: {
+          privyTokenId: token.id,
+          flywheelActive: true,
+          autoClaimEnabled: false, // MM-only users can't claim fees (not creator)
+          algorithmMode: pending.mmAlgorithm || 'simple',
+          minBuyAmountSol: 0.01,
+          maxBuyAmountSol: 0.05,
+          slippageBps: 300,
+          tradingRoute: 'auto',
+        },
+      })
+
+      // Create flywheel state
+      await tx.privyFlywheelState.create({
+        data: {
+          privyTokenId: token.id,
+          cyclePhase: 'buy',
+          buyCount: 0,
+          sellCount: 0,
+          consecutiveFailures: 0,
+          totalFailures: 0,
+        },
+      })
+
+      return token
+    })
+
+    loggers.deposit.info({ userTokenId: userToken.id, algorithm: pending.mmAlgorithm }, '📝 Created MM-only token with config and state')
+
+    // Notify user
+    if (pending.user?.telegramId) {
+      await notifyUser(
+        Number(pending.user.telegramId),
+        `🎉 *MM Mode Activated!*
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+*${pending.tokenName || pending.tokenSymbol} (${pending.tokenSymbol})*
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Mint: \`${pending.tokenMintAddress}\`
+
+✅ Flywheel: ENABLED
+✅ Algorithm: ${pending.mmAlgorithm || 'simple'} mode
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ℹ️ *Note*
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+As an MM-only user, you receive trading profits
+but cannot claim creator fees.
+
+To withdraw, use the TMA app to stop MM
+and transfer your SOL out.`
+      )
+    }
+
+    loggers.deposit.info({
+      tokenSymbol: pending.tokenSymbol,
+      userTokenId: userToken.id,
+    }, '✅ MM-only token activated successfully')
+
+  } catch (error) {
+    loggers.deposit.error({
+      pendingId: pending.id,
+      tokenSymbol: pending.tokenSymbol,
+      error: String(error),
+    }, '❌ Failed to activate MM-only token')
+
+    // Revert status so user can retry
+    await prisma.privyMmPending.update({
+      where: { id: pending.id },
+      data: {
+        status: 'awaiting_deposit',
+        updatedAt: new Date(),
+      },
+    })
+
+    if (pending.user?.telegramId) {
+      await notifyUser(
+        Number(pending.user.telegramId),
+        `⚠️ Failed to activate MM for ${pending.tokenSymbol}.\n\nPlease try again or contact support.`
       )
     }
   }

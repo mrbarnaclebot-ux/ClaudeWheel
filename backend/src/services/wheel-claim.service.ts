@@ -159,7 +159,7 @@ class WheelClaimService {
   private async executeClaim(
     connection: Connection,
     devWallet: ReturnType<typeof getDevWallet>,
-    position: { claimableAmount: number }
+    _position: { claimableAmount: number }
   ): Promise<{ success: boolean; signature?: string; error?: string }> {
     if (!devWallet) return { success: false, error: 'No dev wallet' }
 
@@ -209,23 +209,37 @@ class WheelClaimService {
   /**
    * Transfer claimed SOL to ops wallet
    * 100% transfer - no platform fee for WHEEL token
+   * Transfers any excess above DEV_WALLET_RESERVE_SOL from actual wallet balance
    */
   private async transferToOpsWallet(
     connection: Connection,
     fromWallet: ReturnType<typeof getDevWallet>,
     toAddress: string,
-    amountSol: number
+    _claimedAmountSol: number // Kept for logging, actual balance is used
   ): Promise<{ success: boolean; amountTransferred: number; signature?: string }> {
     if (!fromWallet) return { success: false, amountTransferred: 0 }
 
     try {
-      // Keep reserve in dev wallet
-      const transferAmount = Math.max(0, amountSol - DEV_WALLET_RESERVE_SOL)
+      // Get actual wallet balance to calculate transferable amount
+      const currentBalance = await getBalance(fromWallet.publicKey)
+
+      // Keep reserve in dev wallet - transfer any excess
+      const transferAmount = Math.max(0, currentBalance - DEV_WALLET_RESERVE_SOL)
 
       if (transferAmount <= 0.001) {
-        loggers.claim.debug({ amountSol }, 'WHEEL: Amount too small to transfer')
+        loggers.claim.debug({
+          claimedAmount: _claimedAmountSol,
+          currentBalance,
+          reserve: DEV_WALLET_RESERVE_SOL,
+        }, 'WHEEL: Balance below reserve threshold, skipping transfer')
         return { success: true, amountTransferred: 0 }
       }
+
+      loggers.claim.info({
+        currentBalance,
+        reserve: DEV_WALLET_RESERVE_SOL,
+        transferAmount,
+      }, 'WHEEL: Transferring excess balance to ops wallet')
 
       const tx = new Transaction().add(
         SystemProgram.transfer({
