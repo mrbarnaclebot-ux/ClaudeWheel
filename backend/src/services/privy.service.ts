@@ -230,14 +230,28 @@ class PrivyService {
 
       logger.debug({ walletAddress, walletId }, 'Signing transaction with Privy RPC method')
 
-      // Serialize transaction to base64 for VersionedTransaction
+      // Always serialize transaction to base64 before sending to Privy
       // This ensures Privy gets exactly the bytes we expect them to sign
-      // (Privy's SDK might not properly serialize VersionedTransaction objects)
-      let transactionToSend: any = transaction
-      if (transaction instanceof VersionedTransaction) {
-        const serialized = transaction.serialize()
-        transactionToSend = Buffer.from(serialized).toString('base64')
-        logger.debug({ base64Length: transactionToSend.length }, 'Serialized VersionedTransaction to base64')
+      // Note: instanceof checks can fail across module boundaries, so we try serialize methods
+      let transactionToSend: string
+      try {
+        if (transaction instanceof VersionedTransaction) {
+          const serialized = transaction.serialize()
+          transactionToSend = Buffer.from(serialized).toString('base64')
+        } else if (transaction instanceof Transaction) {
+          const serialized = transaction.serialize({ requireAllSignatures: false, verifySignatures: false })
+          transactionToSend = Buffer.from(serialized).toString('base64')
+        } else if ((transaction as any).serialize) {
+          // Fallback: try calling serialize directly (handles class mismatch from different imports)
+          const serialized = (transaction as any).serialize()
+          transactionToSend = Buffer.from(serialized).toString('base64')
+        } else {
+          throw new Error('Transaction has no serialize method')
+        }
+        logger.debug({ base64Length: transactionToSend.length }, 'Serialized transaction to base64')
+      } catch (serializeError) {
+        logger.error({ error: String(serializeError) }, 'Failed to serialize transaction')
+        return null
       }
 
       // Use walletApi.rpc method like Orica does
