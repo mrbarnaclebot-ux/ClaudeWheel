@@ -174,7 +174,17 @@ export default function LaunchPage() {
                 headers: { Authorization: `Bearer ${token}` },
             });
 
-            setPendingLaunch(response.data);
+            // Extract launch data from nested response structure
+            const launchData = response.data?.data;
+            if (!launchData?.launch?.id) {
+                throw new Error('Invalid response from server');
+            }
+            setPendingLaunch({
+                id: launchData.launch.id,
+                status: launchData.launch.status,
+                deposit_address: launchData.depositAddress,
+                required_amount: launchData.minDeposit,
+            });
             hapticFeedback('heavy');
             setStep('depositing');
         } catch (err: any) {
