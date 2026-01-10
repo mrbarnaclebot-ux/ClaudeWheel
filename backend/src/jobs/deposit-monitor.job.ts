@@ -23,7 +23,7 @@ function requireSupabase() {
 }
 
 // Minimum SOL required to trigger launch
-const MIN_DEPOSIT_SOL = 0.5
+const MIN_DEPOSIT_SOL = 0.1 // Minimum required, 0.5 recommended for MM funding
 
 // How often to check (every 30 seconds)
 const CHECK_INTERVAL = '*/30 * * * * *'

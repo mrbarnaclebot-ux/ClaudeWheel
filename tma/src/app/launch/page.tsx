@@ -491,7 +491,7 @@ export default function LaunchPage() {
                         <div className="bg-yellow-900/30 border border-yellow-700/50 rounded-xl p-4">
                             <p className="text-sm text-yellow-400">
                                 After creating the launch, you'll need to deposit at least{' '}
-                                <span className="font-bold">0.5 SOL</span> to your dev wallet to proceed.
+                                at least <span className="font-bold">0.1 SOL</span> (0.5+ recommended) to your dev wallet to proceed.
                             </p>
                         </div>
 
@@ -546,7 +546,7 @@ export default function LaunchPage() {
                                 <div className="text-5xl mb-4">💰</div>
                                 <h2 className="text-xl font-bold mb-2">Deposit to Launch</h2>
                                 <p className="text-gray-400 mb-6">
-                                    Send at least <span className="text-green-400 font-bold">0.5 SOL</span> to your dev wallet
+                                    Send at least <span className="text-green-400 font-bold">0.1 SOL</span> (0.5+ recommended) to your dev wallet
                                 </p>
                             </>
                         )}

@@ -191,8 +191,8 @@ const createLaunchSchema = z.object({
   discord: z.string().url().optional().or(z.literal('')),
 })
 
-// Default minimum deposit in SOL
-const MIN_DEPOSIT_SOL = 0.5
+// Default minimum deposit in SOL (0.1 required, 0.5 recommended for MM funding)
+const MIN_DEPOSIT_SOL = 0.1
 // Launch expiry in hours
 const LAUNCH_EXPIRY_HOURS = 24
 
