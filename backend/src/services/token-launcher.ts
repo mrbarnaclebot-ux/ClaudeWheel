@@ -3,7 +3,7 @@
 // Launches new tokens on Bags.fm using the official Bags SDK
 // ═══════════════════════════════════════════════════════════════════════════
 
-import { Keypair, PublicKey, Connection, VersionedTransaction, Transaction, TransactionMessage, AddressLookupTableAccount, MessageV0 } from '@solana/web3.js'
+import { Keypair, PublicKey } from '@solana/web3.js'
 import bs58 from 'bs58'
 import { env } from '../config/env'
 import { getConnection } from '../config/solana'
@@ -13,60 +13,6 @@ import { privyService } from './privy.service'
 
 // Import Bags SDK
 import { BagsSDK, signAndSendTransaction } from '@bagsfm/bags-sdk'
-
-/**
- * Refresh the blockhash on a transaction to prevent expiry during Privy API calls
- * Uses 'finalized' commitment for longer validity window
- * Note: This function assumes unsigned transactions (signatures will be added by Privy)
- */
-async function refreshBlockhash(
-  connection: Connection,
-  tx: Transaction | VersionedTransaction
-): Promise<Transaction | VersionedTransaction> {
-  const { blockhash } = await connection.getLatestBlockhash('finalized')
-
-  if (tx instanceof Transaction) {
-    // Legacy Transaction - simply update recentBlockhash
-    tx.recentBlockhash = blockhash
-    return tx
-  } else {
-    // VersionedTransaction - need to rebuild the message with new blockhash
-    const message = tx.message as MessageV0
-
-    // Check if the message uses Address Lookup Tables
-    if (message.addressTableLookups && message.addressTableLookups.length > 0) {
-      // Fetch the lookup table accounts from the chain
-      const addressLookupTableAccounts: AddressLookupTableAccount[] = []
-
-      for (const lookup of message.addressTableLookups) {
-        const accountInfo = await connection.getAddressLookupTable(lookup.accountKey)
-        if (accountInfo.value) {
-          addressLookupTableAccounts.push(accountInfo.value)
-        }
-      }
-
-      // Decompile with the lookup tables
-      const decompiled = TransactionMessage.decompile(message, { addressLookupTableAccounts })
-      const newMessage = new TransactionMessage({
-        payerKey: decompiled.payerKey,
-        recentBlockhash: blockhash,
-        instructions: decompiled.instructions,
-      }).compileToV0Message(addressLookupTableAccounts)
-
-      return new VersionedTransaction(newMessage)
-    } else {
-      // No lookup tables - simple decompile and recompile
-      const decompiled = TransactionMessage.decompile(message)
-      const newMessage = new TransactionMessage({
-        payerKey: decompiled.payerKey,
-        recentBlockhash: blockhash,
-        instructions: decompiled.instructions,
-      }).compileToV0Message()
-
-      return new VersionedTransaction(newMessage)
-    }
-  }
-}
 
 export interface LaunchTokenParams {
   tokenName: string
@@ -314,9 +260,9 @@ class TokenLauncherService {
       // Sign and send config transactions using Privy
       if (configResult.transactions && configResult.transactions.length > 0) {
         loggers.token.debug({ transactionCount: configResult.transactions.length }, 'Signing config transactions with Privy')
-        for (let tx of configResult.transactions) {
-          // Refresh blockhash to prevent expiry during Privy API call
-          tx = await refreshBlockhash(connection, tx) as typeof tx
+        for (const tx of configResult.transactions) {
+          // Note: Don't refresh blockhash - it corrupts the transaction structure
+          // Bags SDK returns fresh transactions, so blockhash should be valid
           const signature = await privyService.signAndSendSolanaTransaction(params.devWalletAddress, tx)
           if (!signature) {
             throw new Error('Privy signing failed for config transaction')
@@ -330,9 +276,8 @@ class TokenLauncherService {
       if (configResult.bundles && configResult.bundles.length > 0) {
         loggers.token.debug({ bundleCount: configResult.bundles.length }, 'Processing bundles with Privy')
         for (const bundle of configResult.bundles) {
-          for (let tx of bundle) {
-            // Refresh blockhash to prevent expiry during Privy API call
-            tx = await refreshBlockhash(connection, tx) as typeof tx
+          for (const tx of bundle) {
+            // Note: Don't refresh blockhash - it corrupts the transaction structure
             const signature = await privyService.signAndSendSolanaTransaction(params.devWalletAddress, tx)
             if (!signature) {
               throw new Error('Privy signing failed for bundle transaction')
@@ -359,9 +304,9 @@ class TokenLauncherService {
 
       // Step 4 & 5: Sign and broadcast using Privy
       loggers.token.info('Signing and broadcasting transaction with Privy')
-      // Refresh blockhash to prevent expiry during Privy API call
-      const refreshedLaunchTx = await refreshBlockhash(connection, launchTransaction)
-      const signature = await privyService.signAndSendSolanaTransaction(params.devWalletAddress, refreshedLaunchTx)
+      // Note: Don't refresh blockhash - it corrupts the transaction structure
+      // Bags SDK returns fresh transactions, so blockhash should be valid
+      const signature = await privyService.signAndSendSolanaTransaction(params.devWalletAddress, launchTransaction)
 
       if (!signature) {
         throw new Error('Privy signing failed for launch transaction')
