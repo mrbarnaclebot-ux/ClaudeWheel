@@ -44,7 +44,7 @@ const SELLS_PER_CYCLE = 5
 const PLATFORM_WHEEL_TOKEN_MINT = '8JLGQ7RqhsvhsDhvjMuJUeeuaQ53GTJqSHNaBWf4BAGS'
 
 // Fee collection settings
-const DEV_WALLET_MIN_RESERVE_SOL = 0.01 // Keep minimum SOL in dev wallet for claiming
+const DEV_WALLET_MIN_RESERVE_SOL = 0.05 // Keep minimum SOL in dev wallet for claiming (covers tx fees + rent for claim accounts)
 const MIN_FEE_THRESHOLD_SOL = 0.01 // Minimum SOL to trigger fee collection
 
 // Failure tracking settings
