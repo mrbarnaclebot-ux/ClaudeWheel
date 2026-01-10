@@ -88,7 +88,9 @@ export default function Dashboard() {
   const loadData = useCallback(async () => {
     try {
       // Fetch status from backend API
+      console.log('[Dashboard] Fetching status from backend API...')
       const status = await fetchStatus()
+      console.log('[Dashboard] Backend status:', status)
       if (status) {
         setIsActive(status.is_active)
         // Update wallet data from API if available
@@ -111,10 +113,14 @@ export default function Dashboard() {
             totalCollected: status.total_fees_collected,
           }))
         }
+      } else {
+        console.warn('[Dashboard] No status received from backend API')
       }
 
       // Fetch wallet balances from Supabase
+      console.log('[Dashboard] Fetching wallet balances from Supabase...')
       const wallets = await fetchWalletBalances()
+      console.log('[Dashboard] Wallet balances:', wallets)
       if (wallets.length > 0) {
         const devWallet = wallets.find(w => w.wallet_type === 'dev')
         const opsWallet = wallets.find(w => w.wallet_type === 'ops')
@@ -132,10 +138,14 @@ export default function Dashboard() {
             tokenBalance: opsWallet?.token_balance || 0,
           },
         })
+      } else {
+        console.warn('[Dashboard] No wallet balances found in Supabase')
       }
 
       // Fetch transactions from Supabase
+      console.log('[Dashboard] Fetching transactions from Supabase...')
       const txs = await fetchTransactionsFromDB(20)
+      console.log('[Dashboard] Transactions:', txs.length, 'found')
       if (txs.length > 0) {
         setTransactions(txs.map(tx => ({
           id: tx.id,
@@ -145,10 +155,14 @@ export default function Dashboard() {
           timestamp: new Date(tx.created_at),
           status: tx.status,
         })))
+      } else {
+        console.warn('[Dashboard] No transactions found in Supabase')
       }
 
       // Fetch fee stats from Supabase
+      console.log('[Dashboard] Fetching fee stats from Supabase...')
       const stats = await fetchFeeStats()
+      console.log('[Dashboard] Fee stats:', stats)
       if (stats) {
         setFeeStats({
           totalCollected: stats.total_collected,
@@ -158,21 +172,29 @@ export default function Dashboard() {
           todayChange: stats.today_change || 0,
           hourChange: stats.hour_change || 0,
         })
+      } else {
+        console.warn('[Dashboard] No fee stats found in Supabase')
       }
 
       // Fetch config for token mint address and symbol
+      console.log('[Dashboard] Fetching config from Supabase...')
       const config = await fetchConfig()
+      console.log('[Dashboard] Config:', config)
       if (config) {
         if (config.token_mint_address) {
           setTokenMintAddress(config.token_mint_address)
+        } else {
+          console.warn('[Dashboard] Config found but token_mint_address is null')
         }
         if (config.token_symbol) {
           setTokenSymbol(config.token_symbol)
         }
         setIsActive(config.flywheel_active)
+      } else {
+        console.warn('[Dashboard] No config found in Supabase (missing id="main" row)')
       }
     } catch (error) {
-      console.error('Failed to load data:', error)
+      console.error('[Dashboard] Failed to load data:', error)
     } finally {
       setIsLoading(false)
     }
@@ -312,7 +334,7 @@ export default function Dashboard() {
         <section className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
           <WalletCard
             type="dev"
-            address={walletData.devWallet.address || '2qaYB64KpD1yNbmgVSytCBcSpF2hJUd2fmXpa7P5cF7f'}
+            address={walletData.devWallet.address}
             solBalance={walletData.devWallet.solBalance}
             usdValue={walletData.devWallet.usdValue}
             lastFee={walletData.devWallet.lastFee}
@@ -320,7 +342,7 @@ export default function Dashboard() {
           />
           <WalletCard
             type="ops"
-            address={walletData.opsWallet.address || '4eWyYcydT1uJyJkZbVzqNhFPwQMRmLrGxYbBWn3WHpnL'}
+            address={walletData.opsWallet.address}
             solBalance={walletData.opsWallet.solBalance}
             usdValue={walletData.opsWallet.usdValue}
             tokenBalance={walletData.opsWallet.tokenBalance}
@@ -330,7 +352,7 @@ export default function Dashboard() {
 
         {/* Price Chart & Transaction Feed Row */}
         <section className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
-          <PriceChart tokenAddress={tokenMintAddress || '8JLGQ7RqhsvhsDhvjMuJUeeuaQ53GTJqSHNaBWf4BAGS'} />
+          <PriceChart tokenAddress={tokenMintAddress} />
           <TransactionFeed transactions={transactions} />
         </section>
 

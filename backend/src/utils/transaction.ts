@@ -397,6 +397,124 @@ export interface PrivyTransactionOptions {
 }
 
 /**
+ * Send a transaction using Privy's signAndSend method
+ * Privy handles EVERYTHING: signing, serialization, broadcast
+ * Use this when manual broadcast isn't working (e.g., claim transactions)
+ */
+export async function sendTransactionWithPrivySignAndSend(
+  connection: Connection,
+  transaction: Transaction | VersionedTransaction,
+  walletAddress: string,
+  options: PrivyTransactionOptions = {}
+): Promise<TransactionResult> {
+  const {
+    maxRetries = 3,
+    retryDelayMs = [2000, 5000, 10000],
+    logContext = {},
+  } = options
+
+  let lastError: Error | null = null
+  let attempts = 0
+
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    attempts++
+    try {
+      loggers.solana.debug({
+        ...logContext,
+        walletAddress,
+        attempt: attempt + 1,
+      }, 'Sending transaction via Privy signAndSend')
+
+      // Let Privy handle EVERYTHING: signing, serialization, broadcast
+      const signature = await privyService.signAndSendSolanaTransaction(
+        walletAddress,
+        transaction
+      )
+
+      if (!signature) {
+        throw new Error('Privy signAndSend returned null')
+      }
+
+      loggers.solana.info({
+        ...logContext,
+        signature,
+        walletAddress,
+        attempts,
+      }, 'Privy signAndSend returned signature, polling for confirmation')
+
+      // Poll for confirmation (transaction is already broadcast by Privy)
+      const maxPolls = 30 // 30 * 2s = 60s
+      for (let poll = 0; poll < maxPolls; poll++) {
+        await sleep(2000)
+
+        const status = await connection.getSignatureStatus(signature)
+
+        if (status && status.value) {
+          if (status.value.err) {
+            throw new Error(`Transaction failed on-chain: ${JSON.stringify(status.value.err)}`)
+          }
+
+          if (status.value.confirmationStatus === 'confirmed' || status.value.confirmationStatus === 'finalized') {
+            loggers.solana.info({
+              ...logContext,
+              signature,
+              walletAddress,
+              attempts,
+              confirmationStatus: status.value.confirmationStatus,
+            }, 'Privy signAndSend transaction confirmed')
+
+            return {
+              success: true,
+              signature,
+              attempts,
+            }
+          }
+        }
+      }
+
+      // Timeout
+      throw new Error(`Transaction not confirmed after 60s. Signature: ${signature}`)
+    } catch (error) {
+      lastError = error as Error
+
+      const errorMessage = error instanceof Error ? error.message : String(error)
+      const isRetryable = isRetryableError(errorMessage) ||
+        errorMessage.includes('BLOCKHASH_EXPIRED')
+
+      loggers.solana.warn({
+        ...logContext,
+        walletAddress,
+        attempt: attempt + 1,
+        maxRetries,
+        error: errorMessage,
+        isRetryable,
+      }, 'Privy signAndSend attempt failed')
+
+      if (!isRetryable || attempt >= maxRetries - 1) {
+        break
+      }
+
+      const delay = retryDelayMs[attempt] || retryDelayMs[retryDelayMs.length - 1]
+      await sleep(delay)
+    }
+  }
+
+  const errorMessage = lastError?.message || 'Privy signAndSend failed after max retries'
+  loggers.solana.error({
+    ...logContext,
+    walletAddress,
+    attempts,
+    error: errorMessage,
+  }, 'Privy signAndSend transaction failed')
+
+  return {
+    success: false,
+    error: errorMessage,
+    attempts,
+  }
+}
+
+/**
  * Send a transaction using Privy delegated signing
  * Works with both legacy and versioned transactions
  *
