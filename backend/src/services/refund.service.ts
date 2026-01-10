@@ -371,8 +371,8 @@ export async function executePrivyRefund(
       })
     )
 
-    // Get recent blockhash
-    const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed')
+    // Get recent blockhash - use 'finalized' for longer validity window due to Privy API latency
+    const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('finalized')
     transaction.recentBlockhash = blockhash
     transaction.feePayer = devWalletPubkey
 
