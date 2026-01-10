@@ -292,25 +292,19 @@ export default function TokenDetailPage() {
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: 0.1 }}
-                className="grid grid-cols-3 gap-3 mb-6"
+                className="grid grid-cols-2 gap-3 mb-6"
             >
                 <div className="bg-gray-800/50 rounded-xl p-3 text-center">
                     <p className="text-lg font-bold text-green-400">
-                        {token.balance?.dev_sol?.toFixed(3) || '0.000'}
+                        {devBuyBalance?.tokenBalance?.toLocaleString() || '0'}
                     </p>
-                    <p className="text-xs text-gray-400">Dev SOL</p>
+                    <p className="text-xs text-gray-400">Dev Supply</p>
                 </div>
                 <div className="bg-gray-800/50 rounded-xl p-3 text-center">
                     <p className="text-lg font-bold text-green-400">
                         {token.balance?.ops_sol?.toFixed(3) || '0.000'}
                     </p>
                     <p className="text-xs text-gray-400">Ops SOL</p>
-                </div>
-                <div className="bg-gray-800/50 rounded-xl p-3 text-center">
-                    <p className="text-lg font-bold text-green-400">
-                        {token.balance?.token_balance?.toLocaleString() || '0'}
-                    </p>
-                    <p className="text-xs text-gray-400">Tokens</p>
                 </div>
             </motion.div>
 
@@ -489,22 +483,6 @@ export default function TokenDetailPage() {
                         <div>
                             <p className="text-gray-400">Algorithm</p>
                             <p className="capitalize">{token.config.algorithm_mode}</p>
-                        </div>
-                        <div>
-                            <p className="text-gray-400">Min Buy</p>
-                            <p>{token.config.min_buy_amount_sol} SOL</p>
-                        </div>
-                        <div>
-                            <p className="text-gray-400">Max Buy</p>
-                            <p>{token.config.max_buy_amount_sol} SOL</p>
-                        </div>
-                        <div>
-                            <p className="text-gray-400">Slippage</p>
-                            <p>{(token.config.slippage_bps / 100).toFixed(1)}%</p>
-                        </div>
-                        <div>
-                            <p className="text-gray-400">Route</p>
-                            <p className="capitalize">{token.config.trading_route}</p>
                         </div>
                     </div>
 
