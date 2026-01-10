@@ -626,9 +626,10 @@ router.post('/devbuy-action', async (req: PrivyRequest, res: Response) => {
         })
       }
 
-      // Deserialize and sign with Privy
+      // Deserialize and sign with Privy (transaction is bs58 encoded from bags-fm service)
       const { VersionedTransaction } = await import('@solana/web3.js')
-      const txBuffer = Buffer.from(swapResult.transaction, 'base64')
+      const bs58 = await import('bs58')
+      const txBuffer = bs58.default.decode(swapResult.transaction)
       const transaction = VersionedTransaction.deserialize(txBuffer)
 
       const result = await sendTransactionWithPrivySigning(connection, transaction, devWalletAddress, {
