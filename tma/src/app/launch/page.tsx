@@ -21,8 +21,6 @@ interface TokenData {
     devBuy?: number;
     // MM Config
     mmAlgorithm: 'simple' | 'smart' | 'rebalance';
-    mmMinBuySol: number;
-    mmMaxBuySol: number;
     mmAutoClaimEnabled: boolean;
 }
 
@@ -50,8 +48,6 @@ export default function LaunchPage() {
         imageUrl: '',
         // MM defaults
         mmAlgorithm: 'simple',
-        mmMinBuySol: 0.01,
-        mmMaxBuySol: 0.05,
         mmAutoClaimEnabled: true,
     });
     const [pendingLaunch, setPendingLaunch] = useState<PendingLaunch | null>(null);
@@ -423,34 +419,6 @@ export default function LaunchPage() {
                                         <div className="text-xs opacity-70">{opt.desc}</div>
                                     </button>
                                 ))}
-                            </div>
-
-                            {/* Buy Amount Range */}
-                            <div className="grid grid-cols-2 gap-3">
-                                <div>
-                                    <label className="block text-xs text-gray-500 mb-1">Min Buy (SOL)</label>
-                                    <input
-                                        type="number"
-                                        value={data.mmMinBuySol}
-                                        onChange={e => setData({ ...data, mmMinBuySol: Math.max(0.001, parseFloat(e.target.value) || 0.01) })}
-                                        step="0.01"
-                                        min="0.001"
-                                        max="1"
-                                        className="w-full bg-gray-700 rounded-lg p-2 text-white text-sm"
-                                    />
-                                </div>
-                                <div>
-                                    <label className="block text-xs text-gray-500 mb-1">Max Buy (SOL)</label>
-                                    <input
-                                        type="number"
-                                        value={data.mmMaxBuySol}
-                                        onChange={e => setData({ ...data, mmMaxBuySol: Math.max(0.01, parseFloat(e.target.value) || 0.05) })}
-                                        step="0.01"
-                                        min="0.01"
-                                        max="5"
-                                        className="w-full bg-gray-700 rounded-lg p-2 text-white text-sm"
-                                    />
-                                </div>
                             </div>
                         </div>
 
