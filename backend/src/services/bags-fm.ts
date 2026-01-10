@@ -615,81 +615,181 @@ class BagsFmService {
   /**
    * Generate claim transactions for claimable fees
    * Uses SDK if available, falls back to REST API
+   * Includes retry logic for transient 500 errors
    */
   async generateClaimTransactions(
     walletAddress: string,
-    tokenMints: string[]
+    tokenMints: string[],
+    maxRetries: number = 3
   ): Promise<string[] | null> {
+    const retryDelays = [1000, 2000, 4000] // Exponential backoff
+
     // Try SDK approach - get positions first, then generate claim txs
     if (this.sdk) {
-      try {
-        const wallet = new PublicKey(walletAddress)
-        const positions = await this.sdk.fee.getAllClaimablePositions(wallet)
+      for (let attempt = 0; attempt < maxRetries; attempt++) {
+        try {
+          const wallet = new PublicKey(walletAddress)
+          const positions = await this.sdk.fee.getAllClaimablePositions(wallet)
 
-        // Filter positions for requested token mints
-        const matchingPositions = positions.filter(p =>
-          tokenMints.includes(p.baseMint)
-        )
+          // Filter positions for requested token mints
+          const matchingPositions = positions.filter(p =>
+            tokenMints.includes(p.baseMint)
+          )
 
-        if (matchingPositions.length === 0) {
-          loggers.bags.warn({
-            wallet: walletAddress,
-            requestedMints: tokenMints,
-            availableMints: positions.map(p => p.baseMint),
-          }, 'No matching positions found for requested token mints')
-          return null
-        }
-
-        loggers.bags.info({
-          wallet: walletAddress,
-          matchingPositions: matchingPositions.length,
-          positions: matchingPositions.map(p => ({
-            baseMint: p.baseMint,
-            claimableSOL: p.totalClaimableLamportsUserShare / 1e9,
-          })),
-        }, 'Generating SDK claim transactions')
-
-        // Generate claim transactions for each position
-        const allTransactions: string[] = []
-        for (const position of matchingPositions) {
-          try {
-            const txs = await this.sdk.fee.getClaimTransaction(wallet, position)
-            // Serialize transactions to base64
-            for (const tx of txs) {
-              const serialized = tx.serialize({ requireAllSignatures: false })
-              allTransactions.push(Buffer.from(serialized).toString('base64'))
-            }
-          } catch (txError) {
-            loggers.bags.error({
-              error: String(txError),
-              baseMint: position.baseMint,
-            }, 'Failed to generate claim transaction for position')
+          if (matchingPositions.length === 0) {
+            loggers.bags.warn({
+              wallet: walletAddress,
+              requestedMints: tokenMints,
+              availableMints: positions.map(p => p.baseMint),
+            }, 'No matching positions found for requested token mints')
+            return null
           }
-        }
 
-        if (allTransactions.length > 0) {
           loggers.bags.info({
-            transactionCount: allTransactions.length,
-          }, 'SDK claim transactions generated')
-          return allTransactions
+            wallet: walletAddress,
+            matchingPositions: matchingPositions.length,
+            positions: matchingPositions.map(p => ({
+              baseMint: p.baseMint,
+              claimableSOL: p.totalClaimableLamportsUserShare / 1e9,
+            })),
+            attempt: attempt + 1,
+          }, 'Generating SDK claim transactions')
+
+          // Generate claim transactions for each position
+          const allTransactions: string[] = []
+          let lastError: Error | null = null
+
+          for (const position of matchingPositions) {
+            try {
+              const txs = await this.sdk.fee.getClaimTransaction(wallet, position)
+
+              // Check if SDK returned empty array (possible silent failure)
+              if (!txs || txs.length === 0) {
+                loggers.bags.warn({
+                  baseMint: position.baseMint,
+                  claimableSOL: position.totalClaimableLamportsUserShare / 1e9,
+                }, 'SDK returned empty transactions array for position')
+                continue
+              }
+
+              // Serialize transactions to base64
+              for (const tx of txs) {
+                const serialized = tx.serialize({ requireAllSignatures: false })
+                allTransactions.push(Buffer.from(serialized).toString('base64'))
+              }
+
+              loggers.bags.debug({
+                baseMint: position.baseMint,
+                txCount: txs.length,
+              }, 'Generated claim transaction for position')
+            } catch (txError: any) {
+              lastError = txError
+              const errorStr = String(txError)
+              const is500Error = errorStr.includes('500') || errorStr.includes('Internal Server Error')
+
+              loggers.bags.error({
+                error: errorStr,
+                baseMint: position.baseMint,
+                attempt: attempt + 1,
+                is500Error,
+              }, 'Failed to generate claim transaction for position')
+
+              // If it's a 500 error, we might want to retry
+              if (is500Error && attempt < maxRetries - 1) {
+                break // Break inner loop to retry entire SDK attempt
+              }
+            }
+          }
+
+          if (allTransactions.length > 0) {
+            loggers.bags.info({
+              transactionCount: allTransactions.length,
+            }, 'SDK claim transactions generated')
+            return allTransactions
+          }
+
+          // If we got here with no transactions but had 500 errors, retry
+          if (lastError && String(lastError).includes('500') && attempt < maxRetries - 1) {
+            loggers.bags.warn({
+              attempt: attempt + 1,
+              maxRetries,
+              delay: retryDelays[attempt],
+            }, 'SDK claim failed with 500 error, retrying...')
+            await this.sleep(retryDelays[attempt])
+            continue
+          }
+
+          // No transactions and no retryable errors - fall through to REST
+          break
+        } catch (error: any) {
+          const errorStr = String(error)
+          const is500Error = errorStr.includes('500') || errorStr.includes('Internal Server Error')
+
+          loggers.bags.error({
+            error: errorStr,
+            attempt: attempt + 1,
+            is500Error,
+          }, 'SDK claim transaction generation failed')
+
+          // Retry on 500 errors
+          if (is500Error && attempt < maxRetries - 1) {
+            loggers.bags.warn({
+              attempt: attempt + 1,
+              maxRetries,
+              delay: retryDelays[attempt],
+            }, 'Retrying SDK claim after 500 error...')
+            await this.sleep(retryDelays[attempt])
+            continue
+          }
+
+          // Non-retryable error or max retries reached - fall through to REST
+          break
         }
-      } catch (error) {
-        loggers.bags.error({ error: String(error) }, 'SDK claim transaction generation failed, falling back to REST API')
+      }
+
+      loggers.bags.warn('SDK claim generation exhausted, falling back to REST API')
+    }
+
+    // Fallback to REST API with retry logic
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      const data = await this.fetch<any>('/token-launch/claim-txs/v2', {
+        method: 'POST',
+        body: JSON.stringify({
+          wallet: walletAddress,
+          tokenMints,
+        }),
+      })
+
+      if (data && Array.isArray(data.transactions) && data.transactions.length > 0) {
+        loggers.bags.info({
+          transactionCount: data.transactions.length,
+        }, 'REST API claim transactions generated')
+        return data.transactions
+      }
+
+      // Check if it's worth retrying
+      if (attempt < maxRetries - 1) {
+        loggers.bags.warn({
+          attempt: attempt + 1,
+          maxRetries,
+          delay: retryDelays[attempt],
+        }, 'REST API claim failed, retrying...')
+        await this.sleep(retryDelays[attempt])
       }
     }
 
-    // Fallback to REST API
-    const data = await this.fetch<any>('/token-launch/claim-txs/v2', {
-      method: 'POST',
-      body: JSON.stringify({
-        wallet: walletAddress,
-        tokenMints,
-      }),
-    })
+    loggers.bags.error({
+      wallet: walletAddress,
+      tokenMints,
+    }, 'All claim transaction generation attempts failed')
+    return null
+  }
 
-    if (!data || !Array.isArray(data.transactions)) return null
-
-    return data.transactions
+  /**
+   * Sleep helper for retry delays
+   */
+  private sleep(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms))
   }
 
   /**

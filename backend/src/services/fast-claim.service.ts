@@ -801,49 +801,124 @@ class FastClaimService {
 
   /**
    * Execute a single Privy claim
+   * Uses fresh transaction generation for each retry attempt (like flywheel)
+   * to ensure blockhash doesn't expire
    */
   private async executePrivySingleClaim(
     claimable: { token: PrivyTokenWithConfig; position: ClaimablePosition }
   ): Promise<FastClaimResult> {
     const { token, position } = claimable
     const claimedAt = new Date().toISOString()
+    const maxRetries = 3
+    const retryDelays = [2000, 4000, 8000] // Exponential backoff
 
     try {
-      loggers.claim.info({ tokenSymbol: token.token_symbol, claimableAmount: position.claimableAmount }, 'Claiming Privy fees')
+      loggers.claim.info({
+        tokenSymbol: token.token_symbol,
+        tokenMint: token.token_mint_address,
+        claimableAmount: position.claimableAmount,
+        isGraduated: token.is_graduated,
+      }, 'Claiming Privy fees')
 
       const devWalletAddress = token.dev_wallet?.wallet_address
       if (!devWalletAddress) {
         throw new Error('Dev wallet not found')
       }
 
-      // Generate claim transactions
-      const claimTxs = await bagsFmService.generateClaimTransactions(
-        devWalletAddress,
-        [token.token_mint_address]
-      )
-
-      if (!claimTxs || claimTxs.length === 0) {
-        throw new Error('Failed to generate claim transactions')
-      }
-
-      // Execute claim transactions with Privy signing
       const connection = getConnection()
       let lastSignature: string | undefined
+      let lastError: Error | null = null
 
-      for (const txBase64 of claimTxs) {
-        const result = await sendSerializedTransactionWithPrivySigning(
-          connection,
-          txBase64,
-          devWalletAddress,
-          { logContext: { service: 'privy-fast-claim' } }
-        )
-        if (result.success && result.signature) {
-          lastSignature = result.signature
+      // Retry loop - generate FRESH transactions each attempt (like flywheel)
+      // This ensures blockhash doesn't expire between generation and signing
+      for (let attempt = 0; attempt < maxRetries; attempt++) {
+        try {
+          loggers.claim.debug({
+            tokenSymbol: token.token_symbol,
+            devWallet: devWalletAddress,
+            tokenMint: token.token_mint_address,
+            attempt: attempt + 1,
+          }, 'Generating fresh claim transactions for Privy token')
+
+          // Generate FRESH claim transactions for each attempt (critical for fresh blockhash)
+          const claimTxs = await bagsFmService.generateClaimTransactions(
+            devWalletAddress,
+            [token.token_mint_address],
+            1 // Only 1 internal retry since we handle retries here
+          )
+
+          if (!claimTxs || claimTxs.length === 0) {
+            throw new Error('Failed to generate claim transactions')
+          }
+
+          loggers.claim.info({
+            tokenSymbol: token.token_symbol,
+            txCount: claimTxs.length,
+            attempt: attempt + 1,
+          }, 'Fresh claim transactions generated, executing with Privy signing')
+
+          // Execute claim transactions with Privy signing
+          // Use maxRetries: 1 since we handle retries ourselves with fresh transactions
+          for (const txBase64 of claimTxs) {
+            const result = await sendSerializedTransactionWithPrivySigning(
+              connection,
+              txBase64,
+              devWalletAddress,
+              {
+                maxRetries: 1, // Don't retry internally - we get fresh txs
+                logContext: { service: 'privy-fast-claim', attempt: attempt + 1 },
+              }
+            )
+            if (result.success && result.signature) {
+              lastSignature = result.signature
+              break // Success - exit transaction loop
+            }
+          }
+
+          if (lastSignature) {
+            break // Success - exit retry loop
+          }
+
+          throw new Error('Claim transaction signing/broadcast failed')
+        } catch (error: any) {
+          lastError = error
+          const errorStr = String(error)
+          const isBlockhashError = errorStr.includes('Blockhash') ||
+            errorStr.includes('blockhash') ||
+            errorStr.includes('block height') ||
+            errorStr.includes('not confirmed')
+
+          loggers.claim.warn({
+            tokenSymbol: token.token_symbol,
+            attempt: attempt + 1,
+            maxRetries,
+            error: errorStr,
+            isBlockhashError,
+          }, 'Privy claim attempt failed')
+
+          if (attempt < maxRetries - 1) {
+            const delay = retryDelays[attempt]
+            loggers.claim.debug({
+              tokenSymbol: token.token_symbol,
+              delay,
+              nextAttempt: attempt + 2,
+            }, 'Retrying claim with fresh transaction')
+            await new Promise(resolve => setTimeout(resolve, delay))
+          }
         }
       }
 
       if (!lastSignature) {
-        throw new Error('Claim transaction failed')
+        const errorMsg = lastError?.message || 'Claim transaction failed after all retries'
+        loggers.claim.error({
+          tokenSymbol: token.token_symbol,
+          tokenMint: token.token_mint_address,
+          devWallet: devWalletAddress,
+          isGraduated: token.is_graduated,
+          claimableAmount: position.claimableAmount,
+          error: errorMsg,
+        }, 'Failed to complete Privy claim after all attempts')
+        throw new Error(errorMsg)
       }
 
       // Transfer to ops wallet with platform fee split
