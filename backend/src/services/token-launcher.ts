@@ -3,7 +3,14 @@
 // Launches new tokens on Bags.fm using the official Bags SDK
 // ═══════════════════════════════════════════════════════════════════════════
 
-import { Keypair, PublicKey, Transaction, VersionedTransaction, Connection } from '@solana/web3.js'
+import {
+  Keypair,
+  PublicKey,
+  Transaction,
+  VersionedTransaction,
+  Connection,
+  MessageV0,
+} from '@solana/web3.js'
 import bs58 from 'bs58'
 import { env } from '../config/env'
 import { getConnection } from '../config/solana'
@@ -15,30 +22,106 @@ import { privyService } from './privy.service'
 import { BagsSDK, signAndSendTransaction } from '@bagsfm/bags-sdk'
 
 /**
- * Refresh the blockhash on a transaction WITHOUT corrupting its structure.
- * This directly modifies the recentBlockhash property, preserving:
- * - Account ordering
- * - Compiled instructions
- * - Address lookup tables
- * - All other transaction data
+ * Create a new transaction with a fresh blockhash.
+ * For VersionedTransaction, we create an entirely new MessageV0 to ensure
+ * the serialization is correct. Direct mutation of the blockhash property
+ * can cause serialization issues with Privy's signing API.
  *
  * IMPORTANT: Only call this on UNSIGNED transactions. Any existing signatures
  * will become invalid after blockhash change.
  */
-async function refreshBlockhash(
+async function refreshTransactionBlockhash(
+  connection: Connection,
+  tx: Transaction
+): Promise<Transaction>
+async function refreshTransactionBlockhash(
+  connection: Connection,
+  tx: VersionedTransaction
+): Promise<VersionedTransaction>
+async function refreshTransactionBlockhash(
   connection: Connection,
   tx: Transaction | VersionedTransaction
-): Promise<void> {
-  const { blockhash } = await connection.getLatestBlockhash('confirmed')
+): Promise<Transaction | VersionedTransaction> {
+  const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('finalized')
 
   if (tx instanceof Transaction) {
     // Legacy Transaction - direct property assignment
     tx.recentBlockhash = blockhash
+    tx.lastValidBlockHeight = lastValidBlockHeight
+    return tx
   } else {
-    // VersionedTransaction - message.recentBlockhash is a string property
-    // Direct assignment preserves all other message data
-    ;(tx.message as any).recentBlockhash = blockhash
+    // VersionedTransaction - create a new MessageV0 to avoid serialization issues
+    // This is safer than direct property mutation which can cause signature verification failures
+    const msg = tx.message as MessageV0
+
+    // Create a new MessageV0 with the same properties but fresh blockhash
+    const newMessage = new MessageV0({
+      header: msg.header,
+      staticAccountKeys: msg.staticAccountKeys,
+      recentBlockhash: blockhash,
+      compiledInstructions: msg.compiledInstructions,
+      addressTableLookups: msg.addressTableLookups,
+    })
+
+    // Create a new VersionedTransaction with the new message
+    // Note: no signatures yet since this is an unsigned transaction
+    return new VersionedTransaction(newMessage)
   }
+}
+
+/**
+ * Helper to determine if an error is retryable
+ */
+function isRetryableError(error: Error): boolean {
+  const msg = error.message || ''
+  return msg.includes('BLOCKHASH_EXPIRED') ||
+    msg.includes('SIGNATURE_VERIFICATION_FAILED') ||
+    msg.includes('BROADCAST_FAILED')
+}
+
+/**
+ * Sign and send a transaction with retry logic.
+ * On transient errors (blockhash, signature verification), retries with a fresh blockhash.
+ */
+async function signWithPrivyRetry(
+  connection: Connection,
+  walletAddress: string,
+  tx: VersionedTransaction,
+  maxRetries: number = 3
+): Promise<string> {
+  let lastError: Error | null = null
+
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      // Refresh blockhash on every attempt to ensure it's valid
+      const freshTx = await refreshTransactionBlockhash(connection, tx)
+
+      loggers.token.debug({ attempt, maxRetries }, 'Attempting Privy signing')
+
+      const signature = await privyService.signAndSendSolanaTransaction(walletAddress, freshTx)
+      if (!signature) {
+        throw new Error('Privy signing returned null signature')
+      }
+
+      return signature
+    } catch (error: any) {
+      lastError = error
+      loggers.token.warn({ attempt, maxRetries, error: error.message }, 'Privy signing attempt failed')
+
+      // Only retry on transient errors
+      if (!isRetryableError(error) || attempt === maxRetries) {
+        throw error
+      }
+
+      // Wait before retry (exponential backoff: 1s, 2s, 4s)
+      const waitMs = 1000 * Math.pow(2, attempt - 1)
+      loggers.token.info({ waitMs }, 'Waiting before retry')
+      await new Promise(resolve => setTimeout(resolve, waitMs))
+    }
+  }
+
+  // Should not reach here, but just in case
+  throw lastError || new Error('Privy signing failed after all retries')
 }
 
 export interface LaunchTokenParams {
@@ -284,17 +367,11 @@ class TokenLauncherService {
         feeClaimers,
       })
 
-      // Sign and send config transactions using Privy
+      // Sign and send config transactions using Privy with retry logic
       if (configResult.transactions && configResult.transactions.length > 0) {
         loggers.token.debug({ transactionCount: configResult.transactions.length }, 'Signing config transactions with Privy')
         for (const tx of configResult.transactions) {
-          // Refresh blockhash to prevent expiry during Privy API call
-          // This directly modifies the blockhash property without corrupting the transaction
-          await refreshBlockhash(connection, tx)
-          const signature = await privyService.signAndSendSolanaTransaction(params.devWalletAddress, tx)
-          if (!signature) {
-            throw new Error('Privy signing failed for config transaction')
-          }
+          const signature = await signWithPrivyRetry(connection, params.devWalletAddress, tx)
           // Wait for confirmation
           await connection.confirmTransaction(signature, commitment)
         }
@@ -305,12 +382,7 @@ class TokenLauncherService {
         loggers.token.debug({ bundleCount: configResult.bundles.length }, 'Processing bundles with Privy')
         for (const bundle of configResult.bundles) {
           for (const tx of bundle) {
-            // Refresh blockhash to prevent expiry during Privy API call
-            await refreshBlockhash(connection, tx)
-            const signature = await privyService.signAndSendSolanaTransaction(params.devWalletAddress, tx)
-            if (!signature) {
-              throw new Error('Privy signing failed for bundle transaction')
-            }
+            const signature = await signWithPrivyRetry(connection, params.devWalletAddress, tx)
             await connection.confirmTransaction(signature, commitment)
           }
         }
@@ -331,15 +403,9 @@ class TokenLauncherService {
         configKey: configKey,
       })
 
-      // Step 4 & 5: Sign and broadcast using Privy
+      // Step 4 & 5: Sign and broadcast using Privy with retry logic
       loggers.token.info('Signing and broadcasting transaction with Privy')
-      // Refresh blockhash to prevent expiry during Privy API call
-      await refreshBlockhash(connection, launchTransaction)
-      const signature = await privyService.signAndSendSolanaTransaction(params.devWalletAddress, launchTransaction)
-
-      if (!signature) {
-        throw new Error('Privy signing failed for launch transaction')
-      }
+      const signature = await signWithPrivyRetry(connection, params.devWalletAddress, launchTransaction)
 
       // Confirm the transaction
       await connection.confirmTransaction(signature, commitment)

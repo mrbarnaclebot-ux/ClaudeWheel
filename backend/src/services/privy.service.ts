@@ -231,6 +231,10 @@ class PrivyService {
   /**
    * Sign and send a Solana transaction in one call
    * More efficient for automated trading
+   *
+   * Throws an error with a descriptive message on failure instead of returning null.
+   * The error message will indicate if this is a blockhash/signature issue that
+   * might be resolved by retrying with a fresh transaction.
    */
   async signAndSendSolanaTransaction(
     walletAddress: string,
@@ -239,7 +243,7 @@ class PrivyService {
   ): Promise<string | null> {
     if (!this.client) {
       logger.error('Privy client not configured')
-      return null
+      throw new Error('Privy client not configured')
     }
 
     try {
@@ -281,9 +285,30 @@ class PrivyService {
       }
 
       return hash
-    } catch (error) {
-      logger.error({ error: String(error), walletAddress }, 'Failed to sign and send Solana transaction')
-      return null
+    } catch (error: any) {
+      const errorMsg = String(error)
+
+      // Detect specific error types for better handling
+      const isBlockhashError = errorMsg.includes('Blockhash not found') ||
+        errorMsg.includes('blockhash') ||
+        errorMsg.includes('block height exceeded')
+      const isSignatureError = errorMsg.includes('signature verification failure') ||
+        errorMsg.includes('Transaction signature verification')
+      const isBroadcastError = errorMsg.includes('transaction_broadcast_failure')
+
+      if (isBlockhashError) {
+        logger.warn({ error: errorMsg, walletAddress }, 'Privy transaction failed - blockhash expired (retry may help)')
+        throw new Error(`BLOCKHASH_EXPIRED: ${errorMsg}`)
+      } else if (isSignatureError) {
+        logger.error({ error: errorMsg, walletAddress }, 'Privy transaction failed - signature verification failure')
+        throw new Error(`SIGNATURE_VERIFICATION_FAILED: ${errorMsg}`)
+      } else if (isBroadcastError) {
+        logger.error({ error: errorMsg, walletAddress }, 'Privy transaction failed - broadcast failure')
+        throw new Error(`BROADCAST_FAILED: ${errorMsg}`)
+      } else {
+        logger.error({ error: errorMsg, walletAddress }, 'Failed to sign and send Solana transaction')
+        throw new Error(`PRIVY_SIGNING_FAILED: ${errorMsg}`)
+      }
     }
   }
 
