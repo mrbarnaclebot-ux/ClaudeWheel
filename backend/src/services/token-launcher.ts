@@ -3,7 +3,7 @@
 // Launches new tokens on Bags.fm using the official Bags SDK
 // ═══════════════════════════════════════════════════════════════════════════
 
-import { Keypair, PublicKey, Connection, VersionedTransaction, Transaction, TransactionMessage } from '@solana/web3.js'
+import { Keypair, PublicKey, Connection, VersionedTransaction, Transaction, TransactionMessage, AddressLookupTableAccount, MessageV0 } from '@solana/web3.js'
 import bs58 from 'bs58'
 import { env } from '../config/env'
 import { getConnection } from '../config/solana'
@@ -31,17 +31,40 @@ async function refreshBlockhash(
     return tx
   } else {
     // VersionedTransaction - need to rebuild the message with new blockhash
-    // Note: This preserves instructions but not address table lookups or existing signatures
-    // For Bags SDK transactions, these should be unsigned and typically don't use lookup tables
-    const message = tx.message
-    const decompiled = TransactionMessage.decompile(message)
-    const newMessage = new TransactionMessage({
-      payerKey: decompiled.payerKey,
-      recentBlockhash: blockhash,
-      instructions: decompiled.instructions,
-    }).compileToV0Message()
+    const message = tx.message as MessageV0
 
-    return new VersionedTransaction(newMessage)
+    // Check if the message uses Address Lookup Tables
+    if (message.addressTableLookups && message.addressTableLookups.length > 0) {
+      // Fetch the lookup table accounts from the chain
+      const addressLookupTableAccounts: AddressLookupTableAccount[] = []
+
+      for (const lookup of message.addressTableLookups) {
+        const accountInfo = await connection.getAddressLookupTable(lookup.accountKey)
+        if (accountInfo.value) {
+          addressLookupTableAccounts.push(accountInfo.value)
+        }
+      }
+
+      // Decompile with the lookup tables
+      const decompiled = TransactionMessage.decompile(message, { addressLookupTableAccounts })
+      const newMessage = new TransactionMessage({
+        payerKey: decompiled.payerKey,
+        recentBlockhash: blockhash,
+        instructions: decompiled.instructions,
+      }).compileToV0Message(addressLookupTableAccounts)
+
+      return new VersionedTransaction(newMessage)
+    } else {
+      // No lookup tables - simple decompile and recompile
+      const decompiled = TransactionMessage.decompile(message)
+      const newMessage = new TransactionMessage({
+        payerKey: decompiled.payerKey,
+        recentBlockhash: blockhash,
+        instructions: decompiled.instructions,
+      }).compileToV0Message()
+
+      return new VersionedTransaction(newMessage)
+    }
   }
 }
 

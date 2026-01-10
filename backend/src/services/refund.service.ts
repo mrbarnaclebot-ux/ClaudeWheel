@@ -102,22 +102,23 @@ export async function getPendingRefunds(): Promise<PendingRefund[]> {
 }
 
 /**
- * Find the original address that funded the dev wallet
- * by looking at the first incoming SOL transfer
+ * Find the address that most recently funded the dev wallet
+ * by looking at the most recent incoming SOL transfer
+ * This ensures refunds go to the correct sender for this specific launch
  */
 export async function findOriginalFunder(devWalletAddress: string): Promise<string | null> {
   try {
     const devWalletPubkey = new PublicKey(devWalletAddress)
 
-    // Get transaction signatures for this wallet
+    // Get transaction signatures for this wallet (most recent first)
     const signatures = await connection.getSignaturesForAddress(devWalletPubkey, {
       limit: 20, // Check last 20 transactions
     })
 
     if (signatures.length === 0) return null
 
-    // Look through transactions to find the first incoming SOL transfer
-    for (const sig of signatures.reverse()) {
+    // Look through transactions to find the most recent incoming SOL transfer
+    for (const sig of signatures) {
       try {
         const tx = await connection.getParsedTransaction(sig.signature, {
           maxSupportedTransactionVersion: 0,
