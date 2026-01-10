@@ -172,6 +172,29 @@ export default function PriceChart({
     return `$${value.toFixed(2)}`
   }
 
+  // Compact format for Y-axis labels - handles very small prices better
+  const formatYAxisPrice = (value: number): string => {
+    if (value === 0) return '0'
+    // For micro-cap tokens with prices like 0.00003-0.0001
+    // Show as "3.03" (×10⁻⁵) - multiplied by 100,000 for readability
+    if (value < 0.0001) {
+      const scaled = value * 100000 // multiply by 10^5
+      return scaled.toFixed(2)
+    }
+    if (value < 0.001) return (value * 10000).toFixed(2)
+    if (value < 0.01) return (value * 1000).toFixed(2)
+    if (value < 1) return value.toFixed(4)
+    return value.toFixed(2)
+  }
+
+  // Get the scale label for Y-axis based on price range
+  const getYAxisLabel = (): string => {
+    if (stats.price < 0.0001) return '×10⁻⁵'
+    if (stats.price < 0.001) return '×10⁻⁴'
+    if (stats.price < 0.01) return '×10⁻³'
+    return ''
+  }
+
   const formatCompact = (value: number): string => {
     if (value >= 1000000) return `$${(value / 1000000).toFixed(2)}M`
     if (value >= 1000) return `$${(value / 1000).toFixed(1)}K`
@@ -278,8 +301,16 @@ export default function PriceChart({
                 axisLine={false}
                 tickLine={false}
                 tick={{ fill: '#6b6a62', fontSize: 10, fontFamily: 'JetBrains Mono' }}
-                tickFormatter={(value) => formatPrice(value).replace('$', '')}
-                width={60}
+                tickFormatter={formatYAxisPrice}
+                width={50}
+                tickCount={5}
+                label={getYAxisLabel() ? {
+                  value: getYAxisLabel(),
+                  angle: 0,
+                  position: 'insideTopLeft',
+                  offset: 0,
+                  style: { fill: '#6b6a62', fontSize: 9, fontFamily: 'JetBrains Mono' }
+                } : undefined}
               />
               <Tooltip
                 contentStyle={{
