@@ -427,25 +427,71 @@ export async function signAndSendWithPrivyExact(
       return { success: false, error: `Privy signing returned null for ${description}` }
     }
 
-    loggers.solana.debug({ description }, `${description} signed by Privy, broadcasting`)
+    loggers.solana.debug({ description }, `${description} signed by Privy, preparing to broadcast`)
 
-    // Serialize - handle both Transaction and VersionedTransaction
-    let serialized: Buffer
-    if (signedTx instanceof VersionedTransaction) {
-      serialized = Buffer.from(signedTx.serialize())
-    } else if (signedTx instanceof Transaction) {
-      serialized = signedTx.serialize({ requireAllSignatures: false })
-    } else if ((signedTx as any).serialize) {
-      serialized = (signedTx as any).serialize({ requireAllSignatures: false })
-    } else {
-      return { success: false, error: `Unknown signed transaction type for ${description}` }
+    // Log signature state BEFORE serialization to diagnose issues
+    if (signedTx instanceof Transaction) {
+      const sigInfo = signedTx.signatures.map(s => ({
+        pubkey: s.publicKey.toBase58(),
+        hasSig: s.signature !== null,
+        sigLength: s.signature?.length || 0,
+      }))
+      loggers.solana.info({
+        description,
+        signatureCount: signedTx.signatures.length,
+        signatures: sigInfo,
+        feePayer: signedTx.feePayer?.toBase58(),
+        recentBlockhash: signedTx.recentBlockhash,
+      }, 'Transaction state after Privy signing (before serialize)')
     }
 
-    // Broadcast with skipPreflight and high retries (Orica pattern)
-    const signature = await connection.sendRawTransaction(serialized, {
-      skipPreflight: true,
-      maxRetries: 5,
-    })
+    // Serialize - handle both Transaction and VersionedTransaction
+    // IMPORTANT: Use same serialization as WHEEL claims (no requireAllSignatures option)
+    let serialized: Buffer
+    try {
+      if (signedTx instanceof VersionedTransaction) {
+        serialized = Buffer.from(signedTx.serialize())
+      } else if (signedTx instanceof Transaction) {
+        // Try without options first (like WHEEL does) - this will throw if not fully signed
+        try {
+          serialized = signedTx.serialize()
+        } catch (serializeError) {
+          // If that fails, the transaction wasn't properly signed
+          loggers.solana.error({
+            description,
+            error: String(serializeError),
+          }, 'Transaction not fully signed - Privy signing may have failed')
+          return { success: false, error: `Transaction not fully signed: ${serializeError}` }
+        }
+      } else if ((signedTx as any).serialize) {
+        serialized = (signedTx as any).serialize()
+      } else {
+        return { success: false, error: `Unknown signed transaction type for ${description}` }
+      }
+    } catch (serError) {
+      loggers.solana.error({ description, error: String(serError) }, 'Serialization failed')
+      return { success: false, error: `Serialization failed: ${serError}` }
+    }
+
+    // Try with preflight FIRST to catch errors, then retry without if it fails
+    let signature: string
+    try {
+      signature = await connection.sendRawTransaction(serialized, {
+        skipPreflight: false,  // Enable preflight to catch errors
+        maxRetries: 5,
+      })
+    } catch (preflightError: any) {
+      loggers.solana.warn({
+        description,
+        error: String(preflightError),
+      }, 'Preflight failed, retrying with skipPreflight=true')
+
+      // Retry without preflight
+      signature = await connection.sendRawTransaction(serialized, {
+        skipPreflight: true,
+        maxRetries: 5,
+      })
+    }
 
     loggers.solana.info({ signature, description }, `${description} broadcast, polling for confirmation`)
 
