@@ -10,8 +10,8 @@ export interface AdminAuth {
   message: string | null
 }
 
-// Tab Types
-export type AdminTab = 'overview' | 'tokens' | 'telegram' | 'logs' | 'wheel' | 'settings'
+// Tab Types (Simplified: 4 tabs)
+export type AdminTab = 'dashboard' | 'transactions' | 'logs' | 'settings'
 
 // Platform Stats
 export interface PlatformStats {

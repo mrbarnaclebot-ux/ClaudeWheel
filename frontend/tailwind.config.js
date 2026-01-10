@@ -7,23 +7,34 @@ module.exports = {
   theme: {
     extend: {
       colors: {
-        'void': '#06060a',
-        'bg-primary': '#0d0d12',
-        'bg-secondary': '#13131a',
-        'bg-card': '#1a1a24',
-        'bg-card-hover': '#22222e',
+        // New warm color palette
+        'void': '#191814',
+        'bg-primary': '#1f1e19',
+        'bg-secondary': '#252420',
+        'bg-card': '#2a2822',
+        'bg-card-hover': '#35332b',
         'accent': {
-          primary: '#e8956a',
-          secondary: '#d4a574',
-          tertiary: '#cc785c',
+          primary: '#f0a381',
+          secondary: '#7b462d',
+          tertiary: '#e16939',
         },
         'accent-cyan': '#4ecdc4',
         'success': '#3fb950',
         'error': '#f85149',
         'text': {
-          primary: '#e6edf3',
-          secondary: '#8b949e',
-          muted: '#484f58',
+          primary: '#edece6',
+          secondary: '#a8a79f',
+          muted: '#6b6a62',
+        },
+        // Semantic colors
+        'wheel': {
+          bg: '#191814',
+          surface: '#1f1e19',
+          elevated: '#2a2822',
+          primary: '#f0a381',
+          secondary: '#7b462d',
+          accent: '#e16939',
+          text: '#edece6',
         },
       },
       fontFamily: {
@@ -39,8 +50,8 @@ module.exports = {
       },
       keyframes: {
         pulseGlow: {
-          '0%, 100%': { opacity: 1, boxShadow: '0 0 20px rgba(232, 149, 106, 0.4)' },
-          '50%': { opacity: 0.8, boxShadow: '0 0 40px rgba(232, 149, 106, 0.6)' },
+          '0%, 100%': { opacity: 1, boxShadow: '0 0 20px rgba(240, 163, 129, 0.4)' },
+          '50%': { opacity: 0.8, boxShadow: '0 0 40px rgba(240, 163, 129, 0.6)' },
         },
         orbit: {
           '0%': { transform: 'rotate(0deg) translateX(120px) rotate(0deg)' },

@@ -14,34 +14,22 @@ interface NavItem {
 
 const navItems: NavItem[] = [
   {
-    id: 'overview',
-    label: 'Overview',
-    icon: '📊',
-    description: 'Platform stats & health',
+    id: 'dashboard',
+    label: 'Dashboard',
+    icon: '🎡',
+    description: 'WHEEL status & metrics',
   },
   {
-    id: 'tokens',
-    label: 'Tokens',
-    icon: '🪙',
-    description: 'All registered tokens',
-  },
-  {
-    id: 'telegram',
-    label: 'Telegram',
-    icon: '📱',
-    description: 'Bot launches & users',
+    id: 'transactions',
+    label: 'Transactions',
+    icon: '📜',
+    description: 'Trade history',
   },
   {
     id: 'logs',
     label: 'Logs',
-    icon: '📜',
-    description: 'System & trade logs',
-  },
-  {
-    id: 'wheel',
-    label: '$WHEEL',
-    icon: '🎡',
-    description: 'Platform token',
+    icon: '🔍',
+    description: 'System logs',
   },
   {
     id: 'settings',

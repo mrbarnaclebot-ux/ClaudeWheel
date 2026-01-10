@@ -882,6 +882,11 @@ export interface PlatformSettings {
   flywheelJobEnabled: boolean
   fastClaimEnabled: boolean
   fastClaimIntervalSeconds: number
+  // WHEEL trading configuration
+  wheelMinBuySol: number
+  wheelMaxBuySol: number
+  wheelMinSellSol: number
+  wheelMaxSellSol: number
 }
 
 export async function fetchPlatformSettings(

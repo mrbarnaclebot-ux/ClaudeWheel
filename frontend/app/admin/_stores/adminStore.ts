@@ -67,7 +67,7 @@ export const useAdminStore = create<AdminState>()(
       signature: null,
       message: null,
 
-      activeTab: 'overview',
+      activeTab: 'dashboard',
       sidebarCollapsed: false,
 
       autoRefresh: true,

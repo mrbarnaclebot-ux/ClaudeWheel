@@ -10,20 +10,20 @@
    ═══════════════════════════════════════════════════════════════════════════ */
 
 :root {
-  /* ─── Backgrounds ─── */
-  --bg-void: #06060a;
-  --bg-primary: #0d0d12;
-  --bg-secondary: #13131a;
-  --bg-card: #1a1a24;
-  --bg-card-hover: #22222e;
-  --bg-gradient: linear-gradient(180deg, #0d0d12 0%, #06060a 100%);
+  /* ─── Backgrounds (Warm Dark Theme) ─── */
+  --bg-void: #191814;
+  --bg-primary: #1f1e19;
+  --bg-secondary: #252420;
+  --bg-card: #2a2822;
+  --bg-card-hover: #35332b;
+  --bg-gradient: linear-gradient(180deg, #1f1e19 0%, #191814 100%);
 
-  /* ─── Claude Code Coral/Orange Accent ─── */
-  --accent-primary: #e8956a;
-  --accent-secondary: #d4a574;
-  --accent-tertiary: #cc785c;
-  --accent-glow: rgba(232, 149, 106, 0.4);
-  --accent-glow-strong: rgba(232, 149, 106, 0.6);
+  /* ─── WHEEL Primary Accent (Warm Orange) ─── */
+  --accent-primary: #f0a381;
+  --accent-secondary: #7b462d;
+  --accent-tertiary: #e16939;
+  --accent-glow: rgba(240, 163, 129, 0.4);
+  --accent-glow-strong: rgba(240, 163, 129, 0.6);
 
   /* ─── Cyan Contrast ─── */
   --accent-cyan: #4ecdc4;
@@ -35,22 +35,22 @@
   --error: #f85149;
   --warning: #d29922;
 
-  /* ─── Text Hierarchy ─── */
-  --text-primary: #e6edf3;
-  --text-secondary: #8b949e;
-  --text-muted: #484f58;
+  /* ─── Text Hierarchy (Warm) ─── */
+  --text-primary: #edece6;
+  --text-secondary: #a8a79f;
+  --text-muted: #6b6a62;
 
   /* ─── Borders ─── */
-  --border-subtle: rgba(255, 255, 255, 0.06);
-  --border-accent: rgba(232, 149, 106, 0.3);
-  --border-glow: rgba(232, 149, 106, 0.5);
+  --border-subtle: rgba(237, 236, 230, 0.08);
+  --border-accent: rgba(240, 163, 129, 0.3);
+  --border-glow: rgba(240, 163, 129, 0.5);
 
   /* ─── Typography ─── */
   --font-mono: 'JetBrains Mono', monospace;
   --font-display: 'Outfit', sans-serif;
 
   /* ─── Scan Lines ─── */
-  --scanline: rgba(255, 255, 255, 0.015);
+  --scanline: rgba(237, 236, 230, 0.015);
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -142,15 +142,15 @@ h3 {
   box-shadow:
     0 0 20px var(--accent-glow),
     0 0 40px var(--accent-glow),
-    inset 0 0 20px rgba(232, 149, 106, 0.05);
+    inset 0 0 20px rgba(240, 163, 129, 0.05);
 }
 
 .glow-accent-strong {
   box-shadow:
     0 0 30px var(--accent-glow-strong),
     0 0 60px var(--accent-glow),
-    0 0 100px rgba(232, 149, 106, 0.2),
-    inset 0 0 30px rgba(232, 149, 106, 0.1);
+    0 0 100px rgba(240, 163, 129, 0.2),
+    inset 0 0 30px rgba(240, 163, 129, 0.1);
 }
 
 .glow-cyan {
@@ -322,7 +322,7 @@ h3 {
 }
 
 .btn-outline:hover {
-  background: rgba(232, 149, 106, 0.1);
+  background: rgba(240, 163, 129, 0.1);
   box-shadow: 0 0 15px var(--accent-glow);
 }
 
@@ -347,7 +347,7 @@ h3 {
 }
 
 .badge-accent {
-  background: rgba(232, 149, 106, 0.15);
+  background: rgba(240, 163, 129, 0.15);
   color: var(--accent-primary);
   border: 1px solid var(--border-accent);
 }
@@ -543,7 +543,7 @@ h3 {
    ═══════════════════════════════════════════════════════════════════════════ */
 
 .copy-btn {
-  background: rgba(232, 149, 106, 0.1);
+  background: rgba(240, 163, 129, 0.1);
   border: 1px solid var(--border-accent);
   border-radius: 6px;
   padding: 0.5rem;
@@ -553,7 +553,7 @@ h3 {
 }
 
 .copy-btn:hover {
-  background: rgba(232, 149, 106, 0.2);
+  background: rgba(240, 163, 129, 0.2);
   box-shadow: 0 0 10px var(--accent-glow);
 }
 
@@ -586,8 +586,8 @@ h3 {
 
 .bg-grid {
   background-image:
-    linear-gradient(rgba(232, 149, 106, 0.03) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(232, 149, 106, 0.03) 1px, transparent 1px);
+    linear-gradient(rgba(240, 163, 129, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(240, 163, 129, 0.03) 1px, transparent 1px);
   background-size: 50px 50px;
 }
 

@@ -8,9 +8,9 @@ import Image from 'next/image'
 import Header from './components/Header'
 import FlywheelAnimation from './components/FlywheelAnimation'
 import WalletCard from './components/WalletCard'
-import TokenInfo from './components/TokenInfo'
 import TransactionFeed from './components/TransactionFeed'
 import FeeStats from './components/FeeStats'
+import PriceChart from './components/PriceChart'
 import {
   supabase,
   fetchWalletBalances,
@@ -266,28 +266,6 @@ export default function Dashboard() {
 
       {/* Main Content */}
       <main className="max-w-7xl mx-auto px-4 py-8">
-        {/* Connect Your Token CTA - Top Banner */}
-        <section className="mb-8">
-          <div className="card-glow bg-gradient-to-r from-accent-primary/10 to-accent-secondary/10 p-6 text-center">
-            <h2 className="font-display text-2xl font-bold text-text-primary mb-2">
-              Connect Your Bags Token
-            </h2>
-            <p className="text-text-muted font-mono text-sm mb-4 max-w-2xl mx-auto">
-              Are you a token creator on Bags.fm? Connect your token to our autonomous market-making engine.
-              Auto-claim fees, automated trading, and full configuration control.
-            </p>
-            <a
-              href="/onboarding"
-              className="inline-flex items-center gap-2 px-6 py-3 bg-accent-primary text-bg-primary font-semibold rounded-lg hover:bg-accent-primary/90 transition-colors"
-            >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
-              </svg>
-              Get Started
-            </a>
-          </div>
-        </section>
-
         {/* Loading state */}
         {isLoading && (
           <div className="flex items-center justify-center py-12">
@@ -340,10 +318,67 @@ export default function Dashboard() {
           />
         </section>
 
-        {/* Token Info & Transaction Feed Row */}
+        {/* Price Chart & Transaction Feed Row */}
         <section className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
-          <TokenInfo contractAddress={tokenMintAddress} tokenSymbol={tokenSymbol} />
+          <PriceChart tokenAddress={tokenMintAddress || '8JLGQ7RqhsvhsDhvjMuJUeeuaQ53GTJqSHNaBWf4BAGS'} />
           <TransactionFeed transactions={transactions} />
+        </section>
+
+        {/* External Links */}
+        <section className="mb-8">
+          <div className="card-glow bg-bg-card p-6">
+            <h3 className="text-sm font-mono font-semibold text-text-muted uppercase mb-4">Quick Links</h3>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <a
+                href="https://bags.fm/token/8JLGQ7RqhsvhsDhvjMuJUeeuaQ53GTJqSHNaBWf4BAGS"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-2 p-3 rounded-lg bg-bg-secondary border border-border-subtle hover:border-accent-primary/30 hover:bg-bg-card-hover transition-all group"
+              >
+                <span className="text-lg">💰</span>
+                <div>
+                  <div className="text-sm font-mono text-text-primary group-hover:text-accent-primary transition-colors">Bags.fm</div>
+                  <div className="text-xs font-mono text-text-muted">Trade WHEEL</div>
+                </div>
+              </a>
+              <a
+                href="https://dexscreener.com/solana/8JLGQ7RqhsvhsDhvjMuJUeeuaQ53GTJqSHNaBWf4BAGS"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-2 p-3 rounded-lg bg-bg-secondary border border-border-subtle hover:border-accent-primary/30 hover:bg-bg-card-hover transition-all group"
+              >
+                <span className="text-lg">📊</span>
+                <div>
+                  <div className="text-sm font-mono text-text-primary group-hover:text-accent-primary transition-colors">DexScreener</div>
+                  <div className="text-xs font-mono text-text-muted">View Charts</div>
+                </div>
+              </a>
+              <a
+                href="https://t.me/claude_wheel_bot"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-2 p-3 rounded-lg bg-bg-secondary border border-border-subtle hover:border-accent-primary/30 hover:bg-bg-card-hover transition-all group"
+              >
+                <span className="text-lg">🤖</span>
+                <div>
+                  <div className="text-sm font-mono text-text-primary group-hover:text-accent-primary transition-colors">Telegram Bot</div>
+                  <div className="text-xs font-mono text-text-muted">Launch Tokens</div>
+                </div>
+              </a>
+              <a
+                href="https://x.com/i/communities/2008530158354063511"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-2 p-3 rounded-lg bg-bg-secondary border border-border-subtle hover:border-accent-primary/30 hover:bg-bg-card-hover transition-all group"
+              >
+                <span className="text-lg">🐦</span>
+                <div>
+                  <div className="text-sm font-mono text-text-primary group-hover:text-accent-primary transition-colors">Community</div>
+                  <div className="text-xs font-mono text-text-muted">Join Us</div>
+                </div>
+              </a>
+            </div>
+          </div>
         </section>
 
         {/* Footer */}

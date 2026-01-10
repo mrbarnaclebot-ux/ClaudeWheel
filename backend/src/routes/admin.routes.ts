@@ -3125,7 +3125,7 @@ router.get('/wheel', verifyAdminAuth, async (req: Request, res: Response) => {
       console.error('Error fetching config:', configError)
     }
 
-    // Get wallet balances from wallet_balances table
+    // Get wallet addresses from wallet_balances table
     const { data: walletBalances, error: balanceError } = await supabase
       .from('wallet_balances')
       .select('*')
@@ -3134,8 +3134,58 @@ router.get('/wheel', verifyAdminAuth, async (req: Request, res: Response) => {
       console.error('Error fetching wallet balances:', balanceError)
     }
 
-    const devWallet = walletBalances?.find(w => w.wallet_type === 'dev')
-    const opsWallet = walletBalances?.find(w => w.wallet_type === 'ops')
+    const devWalletRecord = walletBalances?.find(w => w.wallet_type === 'dev')
+    const opsWalletRecord = walletBalances?.find(w => w.wallet_type === 'ops')
+
+    // Fetch LIVE balances from Solana (not cached data)
+    let devSolBalance = 0
+    let devTokenBalance = 0
+    let opsSolBalance = 0
+    let opsTokenBalance = 0
+
+    const tokenMint = new PublicKey(PLATFORM_TOKEN_MINT)
+    const { getTokenBalance } = await import('../config/solana')
+
+    // Fetch dev wallet balances live
+    if (devWalletRecord?.address) {
+      try {
+        const devPubkey = new PublicKey(devWalletRecord.address)
+        devSolBalance = await getBalance(devPubkey)
+        devTokenBalance = await getTokenBalance(devPubkey, tokenMint)
+      } catch (e) {
+        console.warn('Failed to fetch dev wallet balance:', e)
+        // Fallback to cached data
+        devSolBalance = Number(devWalletRecord.sol_balance) || 0
+        devTokenBalance = Number(devWalletRecord.token_balance) || 0
+      }
+    }
+
+    // Fetch ops wallet balances live
+    if (opsWalletRecord?.address) {
+      try {
+        const opsPubkey = new PublicKey(opsWalletRecord.address)
+        opsSolBalance = await getBalance(opsPubkey)
+        opsTokenBalance = await getTokenBalance(opsPubkey, tokenMint)
+      } catch (e) {
+        console.warn('Failed to fetch ops wallet balance:', e)
+        // Fallback to cached data
+        opsSolBalance = Number(opsWalletRecord.sol_balance) || 0
+        opsTokenBalance = Number(opsWalletRecord.token_balance) || 0
+      }
+    }
+
+    // Update cached balances in database (fire and forget)
+    supabase.from('wallet_balances').update({
+      sol_balance: devSolBalance,
+      token_balance: devTokenBalance,
+      updated_at: new Date().toISOString(),
+    }).eq('wallet_type', 'dev').then(() => {})
+
+    supabase.from('wallet_balances').update({
+      sol_balance: opsSolBalance,
+      token_balance: opsTokenBalance,
+      updated_at: new Date().toISOString(),
+    }).eq('wallet_type', 'ops').then(() => {})
 
     // Get flywheel state from flywheel_state table
     const { data: flywheelState, error: stateError } = await supabase
@@ -3191,14 +3241,14 @@ router.get('/wheel', verifyAdminAuth, async (req: Request, res: Response) => {
         tokenName: 'Claude Wheel',
         tokenImage: null,
         devWallet: {
-          address: devWallet?.address || '',
-          solBalance: Number(devWallet?.sol_balance) || 0,
-          tokenBalance: Number(devWallet?.token_balance) || 0,
+          address: devWalletRecord?.address || '',
+          solBalance: devSolBalance,
+          tokenBalance: devTokenBalance,
         },
         opsWallet: {
-          address: opsWallet?.address || '',
-          solBalance: Number(opsWallet?.sol_balance) || 0,
-          tokenBalance: Number(opsWallet?.token_balance) || 0,
+          address: opsWalletRecord?.address || '',
+          solBalance: opsSolBalance,
+          tokenBalance: opsTokenBalance,
         },
         feeStats: {
           totalCollected: Number(feeStats?.total_collected) || 0,
@@ -3278,6 +3328,31 @@ router.get('/settings', verifyAdminAuth, async (req: Request, res: Response) => 
     const flywheelJobStatus = getMultiUserFlywheelJobStatus()
     const fastClaimJobStatus = getFastClaimJobStatus()
 
+    // Get WHEEL config from database
+    let wheelConfig = {
+      wheelMinBuySol: 0.01,
+      wheelMaxBuySol: 0.1,
+      wheelMinSellSol: 0.01,
+      wheelMaxSellSol: 0.1,
+    }
+
+    if (supabase) {
+      const { data: config } = await supabase
+        .from('config')
+        .select('min_buy_amount_sol, max_buy_amount_sol, min_sell_amount_sol, max_sell_amount_sol')
+        .eq('id', 'main')
+        .single()
+
+      if (config) {
+        wheelConfig = {
+          wheelMinBuySol: Number(config.min_buy_amount_sol) || 0.01,
+          wheelMaxBuySol: Number(config.max_buy_amount_sol) || 0.1,
+          wheelMinSellSol: Number(config.min_sell_amount_sol) || 0.01,
+          wheelMaxSellSol: Number(config.max_sell_amount_sol) || 0.1,
+        }
+      }
+    }
+
     return res.json({
       success: true,
       data: {
@@ -3288,6 +3363,7 @@ router.get('/settings', verifyAdminAuth, async (req: Request, res: Response) => 
         flywheelJobEnabled: flywheelJobStatus?.enabled ?? true,
         fastClaimEnabled: fastClaimJobStatus?.enabled ?? true,
         fastClaimIntervalSeconds: fastClaimJobStatus?.intervalSeconds || 30,
+        ...wheelConfig,
       },
     })
   } catch (error) {
@@ -3308,35 +3384,101 @@ router.post('/settings', verifyAdminAuth, async (req: Request, res: Response) =>
       maxTradesPerMinute,
       claimJobEnabled,
       flywheelJobEnabled,
+      fastClaimEnabled,
+      fastClaimIntervalSeconds,
+      // WHEEL trading configuration
+      wheelMinBuySol,
+      wheelMaxBuySol,
+      wheelMinSellSol,
+      wheelMaxSellSol,
     } = req.body
 
-    // For now, settings are stored in environment variables
-    // This endpoint acknowledges the request and suggests environment changes
-    console.log('📝 Admin requested settings update:', {
+    const changesApplied: string[] = []
+
+    loggers.server.info({
       claimJobIntervalMinutes,
       flywheelIntervalMinutes,
       maxTradesPerMinute,
       claimJobEnabled,
       flywheelJobEnabled,
-    })
+      fastClaimEnabled,
+      fastClaimIntervalSeconds,
+      wheelMinBuySol,
+      wheelMaxBuySol,
+      wheelMinSellSol,
+      wheelMaxSellSol,
+    }, '📝 Admin requested settings update')
 
-    // Restart jobs if enabled state changed
+    // Handle flywheel job
     if (typeof flywheelJobEnabled === 'boolean') {
       if (flywheelJobEnabled) {
         restartFlywheelJob()
+        changesApplied.push('Flywheel job restarted')
       }
     }
 
+    // Handle legacy claim job
     if (typeof claimJobEnabled === 'boolean') {
       if (claimJobEnabled) {
         const intervalMinutes = claimJobIntervalMinutes || getClaimJobStatus()?.intervalMinutes || 60
         restartClaimJob(intervalMinutes)
+        changesApplied.push('Legacy claim job restarted')
+      }
+    }
+
+    // Handle fast claim job - update interval and restart
+    if (fastClaimIntervalSeconds !== undefined && typeof fastClaimIntervalSeconds === 'number') {
+      if (fastClaimIntervalSeconds >= 10 && fastClaimIntervalSeconds <= 300) {
+        restartFastClaimJob(fastClaimIntervalSeconds)
+        changesApplied.push(`Fast claim interval set to ${fastClaimIntervalSeconds}s`)
+      }
+    } else if (typeof fastClaimEnabled === 'boolean' && fastClaimEnabled) {
+      restartFastClaimJob()
+      changesApplied.push('Fast claim job restarted')
+    }
+
+    // Handle WHEEL trading configuration
+    if (supabase) {
+      const configUpdates: Record<string, number> = {}
+
+      if (wheelMinBuySol !== undefined && typeof wheelMinBuySol === 'number' && wheelMinBuySol >= 0) {
+        configUpdates.min_buy_amount_sol = wheelMinBuySol
+        changesApplied.push(`WHEEL min buy set to ${wheelMinBuySol} SOL`)
+      }
+      if (wheelMaxBuySol !== undefined && typeof wheelMaxBuySol === 'number' && wheelMaxBuySol >= 0) {
+        configUpdates.max_buy_amount_sol = wheelMaxBuySol
+        changesApplied.push(`WHEEL max buy set to ${wheelMaxBuySol} SOL`)
+      }
+      if (wheelMinSellSol !== undefined && typeof wheelMinSellSol === 'number' && wheelMinSellSol >= 0) {
+        configUpdates.min_sell_amount_sol = wheelMinSellSol
+        changesApplied.push(`WHEEL min sell set to ${wheelMinSellSol} SOL`)
+      }
+      if (wheelMaxSellSol !== undefined && typeof wheelMaxSellSol === 'number' && wheelMaxSellSol >= 0) {
+        configUpdates.max_sell_amount_sol = wheelMaxSellSol
+        changesApplied.push(`WHEEL max sell set to ${wheelMaxSellSol} SOL`)
+      }
+
+      if (Object.keys(configUpdates).length > 0) {
+        const { error: configError } = await supabase
+          .from('config')
+          .upsert({
+            id: 'main',
+            ...configUpdates,
+            updated_at: new Date().toISOString(),
+          })
+
+        if (configError) {
+          loggers.server.error({ error: configError }, 'Failed to update WHEEL config')
+        }
       }
     }
 
     return res.json({
       success: true,
-      message: 'Settings update acknowledged. Job restarts triggered where applicable.',
+      message: changesApplied.length > 0
+        ? `Settings updated: ${changesApplied.join(', ')}`
+        : 'Settings update acknowledged.',
+      changesApplied,
       note: 'Some settings require environment variable updates and server restart to take effect.',
     })
   } catch (error) {

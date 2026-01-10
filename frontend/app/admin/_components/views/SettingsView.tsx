@@ -269,6 +269,79 @@ export function SettingsView() {
         </div>
       </div>
 
+      {/* WHEEL Trading Configuration */}
+      <div className="bg-bg-card border border-border-subtle rounded-xl overflow-hidden">
+        <div className="px-4 py-3 border-b border-border-subtle">
+          <h3 className="text-sm font-semibold text-text-primary">WHEEL Trading Configuration</h3>
+          <p className="text-xs text-text-muted mt-1">Configure min/max buy and sell amounts for WHEEL token (in SOL)</p>
+        </div>
+        <div className="p-4 space-y-4">
+          {/* Buy Amounts */}
+          <div>
+            <label className="block text-xs font-medium text-text-muted mb-2">Buy Amount Range (SOL)</label>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs text-text-muted mb-1">Min Buy</label>
+                <input
+                  type="number"
+                  step="0.001"
+                  min={0.001}
+                  max={10}
+                  value={localSettings.wheelMinBuySol ?? 0.01}
+                  onChange={(e) => handleChange('wheelMinBuySol', Number(e.target.value))}
+                  className="w-full px-3 py-2 bg-bg-secondary border border-border-subtle rounded-lg text-sm text-text-primary focus:outline-none focus:border-accent-primary"
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-text-muted mb-1">Max Buy</label>
+                <input
+                  type="number"
+                  step="0.001"
+                  min={0.001}
+                  max={10}
+                  value={localSettings.wheelMaxBuySol ?? 0.1}
+                  onChange={(e) => handleChange('wheelMaxBuySol', Number(e.target.value))}
+                  className="w-full px-3 py-2 bg-bg-secondary border border-border-subtle rounded-lg text-sm text-text-primary focus:outline-none focus:border-accent-primary"
+                />
+              </div>
+            </div>
+          </div>
+
+          <div className="border-t border-border-subtle/30" />
+
+          {/* Sell Amounts */}
+          <div>
+            <label className="block text-xs font-medium text-text-muted mb-2">Sell Amount Range (SOL)</label>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs text-text-muted mb-1">Min Sell</label>
+                <input
+                  type="number"
+                  step="0.001"
+                  min={0.001}
+                  max={10}
+                  value={localSettings.wheelMinSellSol ?? 0.01}
+                  onChange={(e) => handleChange('wheelMinSellSol', Number(e.target.value))}
+                  className="w-full px-3 py-2 bg-bg-secondary border border-border-subtle rounded-lg text-sm text-text-primary focus:outline-none focus:border-accent-primary"
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-text-muted mb-1">Max Sell</label>
+                <input
+                  type="number"
+                  step="0.001"
+                  min={0.001}
+                  max={10}
+                  value={localSettings.wheelMaxSellSol ?? 0.1}
+                  onChange={(e) => handleChange('wheelMaxSellSol', Number(e.target.value))}
+                  className="w-full px-3 py-2 bg-bg-secondary border border-border-subtle rounded-lg text-sm text-text-primary focus:outline-none focus:border-accent-primary"
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
       {/* Danger Zone */}
       <div className="bg-bg-card border border-error/30 rounded-xl overflow-hidden">
         <div className="px-4 py-3 border-b border-error/30 bg-error/5">
