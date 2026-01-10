@@ -11,7 +11,7 @@ import { getConnection, getOpsWallet, getSolPrice } from '../config/solana'
 import { env } from '../config/env'
 import { bagsFmService, ClaimablePosition } from './bags-fm'
 import { loggers } from '../utils/logger'
-import { sendSerializedTransactionWithRetry, sendAndConfirmTransactionWithRetry, sendTransactionWithPrivySigning, sendSerializedTransactionWithPrivySigning } from '../utils/transaction'
+import { sendSerializedTransactionWithRetry, sendAndConfirmTransactionWithRetry, sendTransactionWithPrivySigning } from '../utils/transaction'
 import {
   UserToken,
   getTokensForAutoClaim,
@@ -801,8 +801,8 @@ class FastClaimService {
 
   /**
    * Execute a single Privy claim
-   * Uses fresh transaction generation for each retry attempt (like flywheel)
-   * to ensure blockhash doesn't expire
+   * Uses RAW transaction objects (no serialization) - same pattern as token-launcher.ts
+   * Fresh transactions for each retry to avoid stale blockhash
    */
   private async executePrivySingleClaim(
     claimable: { token: PrivyTokenWithConfig; position: ClaimablePosition }
@@ -829,8 +829,8 @@ class FastClaimService {
       let lastSignature: string | undefined
       let lastError: Error | null = null
 
-      // Retry loop - generate FRESH transactions each attempt (like flywheel)
-      // This ensures blockhash doesn't expire between generation and signing
+      // Retry loop - generate FRESH RAW transactions each attempt
+      // Uses the same pattern as token-launcher.ts (which works)
       for (let attempt = 0; attempt < maxRetries; attempt++) {
         try {
           loggers.claim.debug({
@@ -838,13 +838,12 @@ class FastClaimService {
             devWallet: devWalletAddress,
             tokenMint: token.token_mint_address,
             attempt: attempt + 1,
-          }, 'Generating fresh claim transactions for Privy token')
+          }, 'Generating fresh RAW claim transactions for Privy token')
 
-          // Generate FRESH claim transactions for each attempt (critical for fresh blockhash)
-          const claimTxs = await bagsFmService.generateClaimTransactions(
+          // Generate RAW claim transactions (no serialization - like token-launcher.ts)
+          const claimTxs = await bagsFmService.generateClaimTransactionsRaw(
             devWalletAddress,
-            [token.token_mint_address],
-            1 // Only 1 internal retry since we handle retries here
+            [token.token_mint_address]
           )
 
           if (!claimTxs || claimTxs.length === 0) {
@@ -855,14 +854,15 @@ class FastClaimService {
             tokenSymbol: token.token_symbol,
             txCount: claimTxs.length,
             attempt: attempt + 1,
-          }, 'Fresh claim transactions generated, executing with Privy signing')
+          }, 'Fresh RAW claim transactions generated, executing with Privy signing')
 
           // Execute claim transactions with Privy signing
-          // Use maxRetries: 1 since we handle retries ourselves with fresh transactions
-          for (const txBase64 of claimTxs) {
-            const result = await sendSerializedTransactionWithPrivySigning(
+          // Use sendTransactionWithPrivySigning which takes raw transaction objects
+          // (same pattern as token-launcher.ts signAndSendWithPrivy)
+          for (const tx of claimTxs) {
+            const result = await sendTransactionWithPrivySigning(
               connection,
-              txBase64,
+              tx, // Raw transaction object - no serialization/deserialization
               devWalletAddress,
               {
                 maxRetries: 1, // Don't retry internally - we get fresh txs

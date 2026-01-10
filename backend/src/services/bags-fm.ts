@@ -4,7 +4,7 @@
 // Uses official Bags SDK for trading operations
 // ═══════════════════════════════════════════════════════════════════════════
 
-import { PublicKey } from '@solana/web3.js'
+import { PublicKey, VersionedTransaction, Transaction } from '@solana/web3.js'
 import { BagsSDK } from '@bagsfm/bags-sdk'
 import bs58 from 'bs58'
 import { getConnection } from '../config/solana'
@@ -790,6 +790,93 @@ class BagsFmService {
    */
   private sleep(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms))
+  }
+
+  /**
+   * Generate raw claim transactions (returns transaction objects, not serialized)
+   * Use this for Privy signing to avoid serialization/deserialization issues.
+   * Following the same pattern as token-launcher.ts which works.
+   */
+  async generateClaimTransactionsRaw(
+    walletAddress: string,
+    tokenMints: string[]
+  ): Promise<(VersionedTransaction | Transaction)[] | null> {
+    if (!this.sdk) {
+      loggers.bags.error('Bags SDK not initialized for raw claim transactions')
+      return null
+    }
+
+    try {
+      const wallet = new PublicKey(walletAddress)
+      const positions = await this.sdk.fee.getAllClaimablePositions(wallet)
+
+      // Filter positions for requested token mints
+      const matchingPositions = positions.filter(p =>
+        tokenMints.includes(p.baseMint)
+      )
+
+      if (matchingPositions.length === 0) {
+        loggers.bags.warn({
+          wallet: walletAddress,
+          requestedMints: tokenMints,
+          availableMints: positions.map(p => p.baseMint),
+        }, 'No matching positions found for requested token mints (raw)')
+        return null
+      }
+
+      loggers.bags.info({
+        wallet: walletAddress,
+        matchingPositions: matchingPositions.length,
+        positions: matchingPositions.map(p => ({
+          baseMint: p.baseMint,
+          claimableSOL: p.totalClaimableLamportsUserShare / 1e9,
+        })),
+      }, 'Generating raw SDK claim transactions (no serialization)')
+
+      // Generate claim transactions for each position
+      const allTransactions: (VersionedTransaction | Transaction)[] = []
+
+      for (const position of matchingPositions) {
+        try {
+          const txs = await this.sdk.fee.getClaimTransaction(wallet, position)
+
+          if (!txs || txs.length === 0) {
+            loggers.bags.warn({
+              baseMint: position.baseMint,
+              claimableSOL: position.totalClaimableLamportsUserShare / 1e9,
+            }, 'SDK returned empty transactions array for position (raw)')
+            continue
+          }
+
+          // Add raw transactions directly - NO SERIALIZATION
+          for (const tx of txs) {
+            allTransactions.push(tx)
+          }
+
+          loggers.bags.debug({
+            baseMint: position.baseMint,
+            txCount: txs.length,
+          }, 'Generated raw claim transaction for position')
+        } catch (txError: any) {
+          loggers.bags.error({
+            error: String(txError),
+            baseMint: position.baseMint,
+          }, 'Failed to generate raw claim transaction for position')
+        }
+      }
+
+      if (allTransactions.length > 0) {
+        loggers.bags.info({
+          transactionCount: allTransactions.length,
+        }, 'Raw SDK claim transactions generated successfully')
+        return allTransactions
+      }
+
+      return null
+    } catch (error) {
+      loggers.bags.error({ error: String(error) }, 'Failed to generate raw claim transactions')
+      return null
+    }
   }
 
   /**
