@@ -399,6 +399,8 @@ export interface PrivyTransactionOptions {
 /**
  * Send a transaction using Privy delegated signing
  * Works with both legacy and versioned transactions
+ *
+ * Uses the Orica pattern: sign with Privy RPC, broadcast ourselves, poll for status
  */
 export async function sendTransactionWithPrivySigning(
   connection: Connection,
@@ -419,59 +421,77 @@ export async function sendTransactionWithPrivySigning(
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     attempts++
     try {
-      // For legacy transactions, get fresh blockhash
+      // For legacy transactions, get fresh blockhash each attempt
       if (transaction instanceof Transaction) {
         const latestBlockhash = await connection.getLatestBlockhash(commitment)
         transaction.recentBlockhash = latestBlockhash.blockhash
         // Note: feePayer should already be set by caller
       }
 
-      // Use Privy to sign and send
-      const signature = await privyService.signAndSendSolanaTransaction(
-        walletAddress,
-        transaction
-      )
+      // Sign with Privy (sign only, we broadcast ourselves)
+      const signedTx = await privyService.signSolanaTransaction(walletAddress, transaction)
 
-      if (!signature) {
-        throw new Error('Privy signing failed - no signature returned')
+      if (!signedTx) {
+        throw new Error('Privy signing failed - no signed transaction returned')
       }
+
+      // Serialize the signed transaction
+      let serialized: Buffer
+      if (signedTx instanceof VersionedTransaction) {
+        serialized = Buffer.from(signedTx.serialize())
+      } else if (signedTx instanceof Transaction) {
+        serialized = signedTx.serialize({ requireAllSignatures: false })
+      } else if ((signedTx as any).serialize) {
+        serialized = (signedTx as any).serialize({ requireAllSignatures: false })
+      } else {
+        throw new Error('Unknown signed transaction type')
+      }
+
+      // Broadcast with skipPreflight and high retries (Orica pattern)
+      const signature = await connection.sendRawTransaction(serialized, {
+        skipPreflight: true,
+        maxRetries: 5,
+      })
 
       loggers.solana.debug({
         ...logContext,
         signature,
         walletAddress,
         attempt: attempt + 1,
-      }, 'Privy transaction sent, awaiting confirmation')
+      }, 'Privy transaction broadcast, polling for confirmation')
 
-      // Confirm transaction
-      const latestBlockhash = await connection.getLatestBlockhash(commitment)
-      const confirmationStrategy: TransactionConfirmationStrategy = {
-        signature,
-        blockhash: latestBlockhash.blockhash,
-        lastValidBlockHeight: latestBlockhash.lastValidBlockHeight,
+      // Poll for status instead of confirmTransaction (Orica pattern)
+      const maxPolls = 30 // 30 * 2s = 60s
+      for (let poll = 0; poll < maxPolls; poll++) {
+        await sleep(2000)
+
+        const status = await connection.getSignatureStatus(signature)
+
+        if (status && status.value) {
+          if (status.value.err) {
+            throw new Error(`Transaction failed on-chain: ${JSON.stringify(status.value.err)}`)
+          }
+
+          if (status.value.confirmationStatus === 'confirmed' || status.value.confirmationStatus === 'finalized') {
+            loggers.solana.info({
+              ...logContext,
+              signature,
+              walletAddress,
+              attempts,
+              confirmationStatus: status.value.confirmationStatus,
+            }, 'Privy transaction confirmed')
+
+            return {
+              success: true,
+              signature,
+              attempts,
+            }
+          }
+        }
       }
 
-      const confirmation = await connection.confirmTransaction(
-        confirmationStrategy,
-        commitment
-      )
-
-      if (confirmation.value.err) {
-        throw new Error(`Transaction failed: ${JSON.stringify(confirmation.value.err)}`)
-      }
-
-      loggers.solana.info({
-        ...logContext,
-        signature,
-        walletAddress,
-        attempts,
-      }, 'Privy transaction confirmed')
-
-      return {
-        success: true,
-        signature,
-        attempts,
-      }
+      // Timeout - but transaction might still land
+      throw new Error(`Transaction not confirmed after 60s. Signature: ${signature}`)
     } catch (error) {
       lastError = error as Error
 
@@ -514,6 +534,8 @@ export async function sendTransactionWithPrivySigning(
 /**
  * Send a pre-serialized transaction (base64 encoded) using Privy delegated signing
  * Automatically detects versioned vs legacy transaction format
+ *
+ * Uses the Orica pattern: sign with Privy RPC, broadcast ourselves, poll for status
  */
 export async function sendSerializedTransactionWithPrivySigning(
   connection: Connection,
@@ -524,7 +546,6 @@ export async function sendSerializedTransactionWithPrivySigning(
   const {
     maxRetries = 3,
     retryDelayMs = [2000, 5000, 10000],
-    commitment = 'confirmed',
     logContext = {},
   } = options
 
@@ -546,52 +567,70 @@ export async function sendSerializedTransactionWithPrivySigning(
         transaction = Transaction.from(txBuffer)
       }
 
-      // Use Privy to sign and send
-      const signature = await privyService.signAndSendSolanaTransaction(
-        walletAddress,
-        transaction
-      )
+      // Sign with Privy (sign only, we broadcast ourselves)
+      const signedTx = await privyService.signSolanaTransaction(walletAddress, transaction)
 
-      if (!signature) {
-        throw new Error('Privy signing failed - no signature returned')
+      if (!signedTx) {
+        throw new Error('Privy signing failed - no signed transaction returned')
       }
+
+      // Serialize the signed transaction
+      let serialized: Buffer
+      if (signedTx instanceof VersionedTransaction) {
+        serialized = Buffer.from(signedTx.serialize())
+      } else if (signedTx instanceof Transaction) {
+        serialized = signedTx.serialize({ requireAllSignatures: false })
+      } else if ((signedTx as any).serialize) {
+        serialized = (signedTx as any).serialize({ requireAllSignatures: false })
+      } else {
+        throw new Error('Unknown signed transaction type')
+      }
+
+      // Broadcast with skipPreflight and high retries (Orica pattern)
+      const signature = await connection.sendRawTransaction(serialized, {
+        skipPreflight: true,
+        maxRetries: 5,
+      })
 
       loggers.solana.debug({
         ...logContext,
         signature,
         walletAddress,
         attempt: attempt + 1,
-      }, 'Privy serialized transaction sent, awaiting confirmation')
+      }, 'Privy serialized transaction broadcast, polling for confirmation')
 
-      // Confirm transaction
-      const latestBlockhash = await connection.getLatestBlockhash(commitment)
-      const confirmationStrategy: TransactionConfirmationStrategy = {
-        signature,
-        blockhash: latestBlockhash.blockhash,
-        lastValidBlockHeight: latestBlockhash.lastValidBlockHeight,
+      // Poll for status instead of confirmTransaction (Orica pattern)
+      const maxPolls = 30 // 30 * 2s = 60s
+      for (let poll = 0; poll < maxPolls; poll++) {
+        await sleep(2000)
+
+        const status = await connection.getSignatureStatus(signature)
+
+        if (status && status.value) {
+          if (status.value.err) {
+            throw new Error(`Transaction failed on-chain: ${JSON.stringify(status.value.err)}`)
+          }
+
+          if (status.value.confirmationStatus === 'confirmed' || status.value.confirmationStatus === 'finalized') {
+            loggers.solana.info({
+              ...logContext,
+              signature,
+              walletAddress,
+              attempts,
+              confirmationStatus: status.value.confirmationStatus,
+            }, 'Privy serialized transaction confirmed')
+
+            return {
+              success: true,
+              signature,
+              attempts,
+            }
+          }
+        }
       }
 
-      const confirmation = await connection.confirmTransaction(
-        confirmationStrategy,
-        commitment
-      )
-
-      if (confirmation.value.err) {
-        throw new Error(`Transaction failed: ${JSON.stringify(confirmation.value.err)}`)
-      }
-
-      loggers.solana.info({
-        ...logContext,
-        signature,
-        walletAddress,
-        attempts,
-      }, 'Privy serialized transaction confirmed')
-
-      return {
-        success: true,
-        signature,
-        attempts,
-      }
+      // Timeout - but transaction might still land
+      throw new Error(`Transaction not confirmed after 60s. Signature: ${signature}`)
     } catch (error) {
       lastError = error as Error
 
