@@ -36,7 +36,7 @@ export default function SettingsPage() {
         },
     });
 
-    const copyToClipboard = (text: string, label: string) => {
+    const copyToClipboard = (text: string) => {
         navigator.clipboard.writeText(text);
         hapticFeedback('light');
     };
@@ -118,7 +118,7 @@ export default function SettingsPage() {
                 <div className="space-y-4">
                     {devWallet && (
                         <div
-                            onClick={() => copyToClipboard(devWallet.address, 'Dev wallet')}
+                            onClick={() => copyToClipboard(devWallet.address)}
                             className="cursor-pointer hover:bg-gray-700/50 rounded-lg p-3 -m-1 transition-colors"
                         >
                             <div className="flex items-center justify-between mb-1">
@@ -130,7 +130,7 @@ export default function SettingsPage() {
                     )}
                     {opsWallet && (
                         <div
-                            onClick={() => copyToClipboard(opsWallet.address, 'Ops wallet')}
+                            onClick={() => copyToClipboard(opsWallet.address)}
                             className="cursor-pointer hover:bg-gray-700/50 rounded-lg p-3 -m-1 transition-colors"
                         >
                             <div className="flex items-center justify-between mb-1">
@@ -160,10 +160,6 @@ export default function SettingsPage() {
                         <span className="text-gray-400">Auto-claim Threshold</span>
                         <span>0.15 SOL</span>
                     </div>
-                    <div className="flex justify-between">
-                        <span className="text-gray-400">Flywheel Cycle</span>
-                        <span>5 buys → 5 sells</span>
-                    </div>
                 </div>
             </motion.div>
 
@@ -182,28 +178,6 @@ export default function SettingsPage() {
                 >
                     <div className="flex items-center justify-between">
                         <span>Web Dashboard</span>
-                        <span className="text-gray-400">→</span>
-                    </div>
-                </a>
-                <a
-                    href="https://t.me/claudewheel"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="block bg-gray-800/50 hover:bg-gray-700/50 rounded-xl p-4 transition-colors"
-                >
-                    <div className="flex items-center justify-between">
-                        <span>Telegram Community</span>
-                        <span className="text-gray-400">→</span>
-                    </div>
-                </a>
-                <a
-                    href="https://docs.claudewheel.com"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="block bg-gray-800/50 hover:bg-gray-700/50 rounded-xl p-4 transition-colors"
-                >
-                    <div className="flex items-center justify-between">
-                        <span>Documentation</span>
                         <span className="text-gray-400">→</span>
                     </div>
                 </a>

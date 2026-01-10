@@ -274,15 +274,18 @@ export default function TokenSettingsPage() {
 
                 <div className="space-y-3">
                     {([
-                        { value: 'simple', label: 'Simple', desc: '5 buys then 5 sells, repeat' },
-                        { value: 'smart', label: 'Smart', desc: 'Adapts based on market conditions' },
-                        { value: 'rebalance', label: 'Rebalance', desc: 'Maintains target allocation' },
+                        { value: 'simple', label: 'Simple', desc: '5 buys then 5 sells, repeat', disabled: false },
+                        { value: 'smart', label: 'Smart', desc: 'Coming Soon', disabled: true },
+                        { value: 'rebalance', label: 'Rebalance', desc: 'Maintains target allocation', disabled: false },
                     ] as const).map((mode) => (
                         <button
                             key={mode.value}
-                            onClick={() => updateField('algorithm_mode', mode.value)}
+                            onClick={() => !mode.disabled && updateField('algorithm_mode', mode.value)}
+                            disabled={mode.disabled}
                             className={`w-full p-4 rounded-xl text-left transition-colors ${
-                                formData.algorithm_mode === mode.value
+                                mode.disabled
+                                    ? 'bg-gray-800/30 border border-gray-700/50 opacity-50 cursor-not-allowed'
+                                    : formData.algorithm_mode === mode.value
                                     ? 'bg-green-600/20 border border-green-600/50'
                                     : 'bg-gray-700/50 border border-transparent'
                             }`}
