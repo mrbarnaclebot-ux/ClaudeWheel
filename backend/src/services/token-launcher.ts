@@ -22,13 +22,14 @@ import { BagsSDK, signAndSendTransaction } from '@bagsfm/bags-sdk'
 /**
  * Sign and send a VersionedTransaction using Privy delegated signing.
  *
- * APPROACH: Sign with Privy, broadcast ourselves for full control.
+ * APPROACH: Based on Orica's battle-tested pattern for Privy + Solana:
+ * 1. Get fresh blockhash
+ * 2. Sign with Privy (sign only)
+ * 3. Broadcast with sendRawTransaction (skipPreflight + high retries)
+ * 4. Poll for status (don't use confirmTransaction which times out)
  *
- * Previous attempts using Privy's signAndSendTransaction returned signatures
- * but transactions weren't appearing on-chain. By signing separately and
- * broadcasting ourselves, we have full visibility into any broadcast errors.
- *
- * Blockhash is refreshed before signing to handle Privy API latency.
+ * Key insight from Orica: confirmTransaction with blockhash strategy times out
+ * because Privy signing adds latency. Instead, poll status with simple timeout.
  */
 async function signAndSendWithPrivy(
   connection: Connection,
@@ -38,12 +39,10 @@ async function signAndSendWithPrivy(
 ): Promise<string> {
   loggers.token.debug({ description }, `Signing ${description} with Privy`)
 
-  // Get fresh blockhash to prevent expiry during Privy API latency
-  // Using 'finalized' commitment for longer validity window
-  const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('finalized')
+  // Get fresh blockhash - using 'finalized' for longer validity
+  const { blockhash } = await connection.getLatestBlockhash('finalized')
 
   // Update blockhash in-place on the message
-  // This is safe because the transaction is unsigned (signatures array is empty)
   const message = transaction.message as any
   const oldBlockhash = message.recentBlockhash
   message.recentBlockhash = blockhash
@@ -66,30 +65,61 @@ async function signAndSendWithPrivy(
     throw new Error(`Privy returned unexpected transaction type for ${description}`)
   }
 
-  loggers.token.debug({ description }, `${description} signed by Privy, broadcasting ourselves`)
+  loggers.token.debug({ description }, `${description} signed by Privy, broadcasting with sendRawTransaction`)
 
-  // Broadcast the signed transaction ourselves
-  // This gives us full control and visibility into any errors
-  const signature = await connection.sendTransaction(signedTx, {
-    skipPreflight: false, // Do preflight to catch errors early
-    maxRetries: 3,
+  // Serialize the signed transaction to raw bytes
+  const serialized = signedTx.serialize()
+
+  // Broadcast using sendRawTransaction with skipPreflight and high retries
+  // This is the Orica pattern that works reliably for Privy-signed transactions
+  // skipPreflight=true is required because:
+  // 1. Bags SDK transactions use Address Lookup Tables which can cause simulation issues
+  // 2. The transaction was already validated by Privy during signing
+  // 3. Simulation adds latency that can cause blockhash expiry
+  const signature = await connection.sendRawTransaction(serialized, {
+    skipPreflight: true,
+    maxRetries: 5,
   })
 
-  loggers.token.info({ signature, description }, `${description} broadcast successfully`)
+  loggers.token.info({ signature, description }, `${description} broadcast, polling for confirmation`)
 
-  // Confirm the transaction landed
-  const confirmation = await connection.confirmTransaction({
-    signature,
-    blockhash,
-    lastValidBlockHeight,
-  }, 'confirmed')
+  // Poll for status instead of using confirmTransaction (which times out)
+  // This is the key insight from Orica - don't wait for blockhash-based confirmation
+  const maxPolls = 30 // 30 polls * 2 seconds = 60 seconds max
+  for (let i = 0; i < maxPolls; i++) {
+    await new Promise(resolve => setTimeout(resolve, 2000))
 
-  if (confirmation.value.err) {
-    throw new Error(`Transaction ${description} failed: ${JSON.stringify(confirmation.value.err)}`)
+    const status = await connection.getSignatureStatus(signature)
+
+    if (status && status.value) {
+      if (status.value.err) {
+        loggers.token.error({ signature, error: status.value.err, description }, `${description} failed on-chain`)
+        throw new Error(`Transaction ${description} failed: ${JSON.stringify(status.value.err)}`)
+      }
+
+      if (status.value.confirmationStatus === 'confirmed' || status.value.confirmationStatus === 'finalized') {
+        loggers.token.info({
+          signature,
+          description,
+          confirmationStatus: status.value.confirmationStatus,
+          slot: status.value.slot
+        }, `${description} confirmed on-chain`)
+        return signature
+      }
+
+      loggers.token.debug({
+        signature,
+        confirmationStatus: status.value.confirmationStatus,
+        poll: i + 1
+      }, 'Transaction processing...')
+    } else {
+      loggers.token.debug({ signature, poll: i + 1 }, 'Transaction not found yet, waiting...')
+    }
   }
 
-  loggers.token.info({ signature, description }, `${description} confirmed on-chain`)
-  return signature
+  // Transaction not confirmed after timeout - this is a failure
+  loggers.token.error({ signature, description }, `${description} not confirmed after ${maxPolls * 2}s`)
+  throw new Error(`Transaction ${description} not confirmed after ${maxPolls * 2} seconds. Signature: ${signature}`)
 }
 
 export interface LaunchTokenParams {
