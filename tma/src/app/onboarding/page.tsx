@@ -1,8 +1,5 @@
 'use client';
 
-// Force dynamic rendering - this page uses Privy hooks which require runtime
-export const dynamic = 'force-dynamic';
-
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { usePrivy, useSigners, type WalletWithMetadata } from '@privy-io/react-auth';

@@ -1,8 +1,5 @@
 'use client';
 
-// Force dynamic rendering - this page uses Privy hooks which require runtime
-export const dynamic = 'force-dynamic';
-
 import { useQuery } from '@tanstack/react-query';
 import { usePrivy } from '@privy-io/react-auth';
 import { useWallets } from '@privy-io/react-auth/solana';

@@ -100,6 +100,38 @@ router.post('/complete-onboarding', async (req: Request, res: Response) => {
         })
       }
 
+      // Also update wallet IDs if they're incorrect (fix for existing users)
+      // Get user info from Privy API to extract wallet IDs
+      let privyUserForUpdate = null
+      try {
+        privyUserForUpdate = await privyService.getPrivyUser(privyUserId)
+      } catch (e) {
+        loggers.privy.warn({ privyUserId }, 'Could not fetch Privy user info for wallet ID update')
+      }
+
+      if (privyUserForUpdate?.linkedAccounts) {
+        const linkedAccounts = privyUserForUpdate.linkedAccounts
+        const solanaWallets = linkedAccounts
+          .filter((a: any) => a.type === 'wallet' && a.chainType === 'solana')
+          .map((a: any) => ({ id: a.id, address: a.address })) as { id: string; address: string }[]
+
+        // Update wallet IDs for each wallet
+        for (const wallet of solanaWallets) {
+          if (wallet.id && wallet.address) {
+            await prisma.privyWallet.updateMany({
+              where: {
+                privyUserId,
+                walletAddress: wallet.address,
+              },
+              data: {
+                privyWalletId: wallet.id,
+              },
+            })
+          }
+        }
+        loggers.privy.info({ privyUserId, walletsUpdated: solanaWallets.length }, 'Updated wallet IDs for existing user')
+      }
+
       loggers.privy.info({ privyUserId }, 'User already onboarded, updated delegation status')
 
       return res.json({
@@ -119,11 +151,36 @@ router.post('/complete-onboarding', async (req: Request, res: Response) => {
       loggers.privy.warn({ privyUserId }, 'Could not fetch Privy user info')
     }
 
-    // Extract linked accounts info - filter for Solana wallets
+    // Extract linked accounts info - filter for Solana wallets with id and address
     const linkedAccounts = privyUser?.linkedAccounts || []
     const solanaWallets = linkedAccounts
       .filter((a: any) => a.type === 'wallet' && a.chainType === 'solana')
-      .map((a: any) => ({ address: a.address })) as { address: string }[]
+      .map((a: any) => ({ id: a.id, address: a.address })) as { id: string; address: string }[]
+
+    // Find the Privy wallet ID for each address by matching
+    const findWalletId = (address: string) => {
+      const wallet = solanaWallets.find(w => w.address === address)
+      return wallet?.id
+    }
+
+    // Get actual wallet IDs from Privy linked accounts
+    const actualDevWalletId = devWalletId || findWalletId(devWalletAddress)
+    const actualOpsWalletId = opsWalletId || findWalletId(opsWalletAddress)
+
+    if (!actualDevWalletId || !actualOpsWalletId) {
+      loggers.privy.error({
+        privyUserId,
+        devWalletAddress,
+        opsWalletAddress,
+        solanaWallets,
+        actualDevWalletId,
+        actualOpsWalletId,
+      }, 'Could not find wallet IDs from Privy linked accounts')
+      return res.status(400).json({
+        success: false,
+        error: 'Could not find wallet IDs. Please ensure wallets are properly linked in Privy.',
+      })
+    }
 
     // Create new user record with wallets in a transaction
     try {
@@ -138,20 +195,20 @@ router.post('/complete-onboarding', async (req: Request, res: Response) => {
           },
         })
 
-        // Create wallets
+        // Create wallets with actual Privy wallet IDs
         await tx.privyWallet.createMany({
           data: [
             {
               privyUserId,
               walletType: 'dev',
               walletAddress: devWalletAddress,
-              privyWalletId: devWalletId || solanaWallets[0]?.address || devWalletAddress,
+              privyWalletId: actualDevWalletId,
             },
             {
               privyUserId,
               walletType: 'ops',
               walletAddress: opsWalletAddress,
-              privyWalletId: opsWalletId || solanaWallets[1]?.address || opsWalletAddress,
+              privyWalletId: actualOpsWalletId,
             },
           ],
         })

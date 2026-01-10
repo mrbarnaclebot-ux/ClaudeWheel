@@ -253,13 +253,32 @@ class PrivyService {
         walletId = wallet?.privyWalletId
       }
 
-      // Use walletId if available (preferred), otherwise fall back to address
-      const { hash } = await this.client.walletApi.solana.signAndSendTransaction({
-        ...(walletId ? { walletId } : { address: walletAddress }),
-        chainType: 'solana',
-        transaction,
-        caip2,
-      })
+      // Validate wallet ID format - Privy IDs look like UUIDs, not Solana addresses
+      // Solana addresses are base58 and typically 32-44 chars, Privy IDs are UUIDs
+      const isValidPrivyWalletId = walletId &&
+        (walletId.includes('-') || walletId.length < 30) && // UUIDs have dashes, addresses don't
+        walletId !== walletAddress // Make sure it's not just the address stored as ID
+
+      let hash: string
+      if (isValidPrivyWalletId && walletId) {
+        // Use walletId (preferred)
+        const result = await this.client.walletApi.solana.signAndSendTransaction({
+          walletId,
+          chainType: 'solana',
+          transaction,
+          caip2,
+        })
+        hash = result.hash
+      } else {
+        // Fall back to address (deprecated but works)
+        const result = await this.client.walletApi.solana.signAndSendTransaction({
+          address: walletAddress,
+          chainType: 'solana',
+          transaction,
+          caip2,
+        })
+        hash = result.hash
+      }
 
       return hash
     } catch (error) {

@@ -718,6 +718,48 @@ async function checkPrivyPendingLaunches(): Promise<void> {
       },
     })
 
+    // Also get launches that need retry (failed but have retries left)
+    // Only retry if at least 30 seconds have passed since last attempt
+    const retryThreshold = new Date(Date.now() - 30 * 1000) // 30 seconds ago
+    const retryPendingLaunches = await prisma.privyPendingLaunch.findMany({
+      where: {
+        status: 'retry_pending',
+        updatedAt: { lt: retryThreshold }, // Wait at least 30 seconds between retries
+        expiresAt: { gt: new Date() }, // Not expired
+      },
+      include: {
+        devWallet: true,
+        opsWallet: true,
+        user: { select: { telegramId: true } },
+      },
+    })
+
+    // Process retry_pending launches first
+    for (const launch of retryPendingLaunches) {
+      try {
+        const devWalletAddress = launch.devWallet?.walletAddress
+        if (!devWalletAddress) continue
+
+        const devWalletPubkey = new PublicKey(devWalletAddress)
+        const balance = await getBalance(devWalletPubkey)
+
+        if (balance >= Number(launch.minDepositSol)) {
+          loggers.deposit.info({ tokenSymbol: launch.tokenSymbol, balance, retryCount: launch.retryCount }, '🔄 Retrying Privy token launch...')
+
+          // Update status to launching
+          await prisma.privyPendingLaunch.update({
+            where: { id: launch.id },
+            data: { status: 'launching', updatedAt: new Date() },
+          })
+
+          // Trigger launch
+          await triggerPrivyTokenLaunch(launch, balance)
+        }
+      } catch (error) {
+        loggers.deposit.error({ launchId: launch.id, error: String(error) }, 'Error retrying Privy launch')
+      }
+    }
+
     if (!pendingLaunches || pendingLaunches.length === 0) {
       return
     }
@@ -1066,11 +1108,12 @@ async function handlePrivyFailedLaunch(launch: PrivyPendingLaunchWithRelations, 
   const maxRetries = 3
 
   if (newRetryCount < maxRetries) {
-    // Update using Prisma for retry
+    // Update using Prisma for retry - use 'retry_pending' status to avoid flickering
+    // The deposit monitor will pick this up after a delay
     await prisma.privyPendingLaunch.update({
       where: { id: launch.id },
       data: {
-        status: 'awaiting_deposit',
+        status: 'retry_pending',
         retryCount: newRetryCount,
         lastError: errorMessage,
         updatedAt: new Date(),
@@ -1080,7 +1123,7 @@ async function handlePrivyFailedLaunch(launch: PrivyPendingLaunchWithRelations, 
     if (launch.user?.telegramId) {
       await notifyUser(
         Number(launch.user.telegramId),
-        `⚠️ Launch attempt ${newRetryCount} failed for ${launch.tokenSymbol}.\n\nError: ${errorMessage}\n\nRetrying automatically...`
+        `⚠️ Launch attempt ${newRetryCount} failed for ${launch.tokenSymbol}.\n\nError: ${errorMessage}\n\nRetrying in 30 seconds...`
       )
     }
   } else {

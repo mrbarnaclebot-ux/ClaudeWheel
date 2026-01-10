@@ -1,8 +1,5 @@
 'use client';
 
-// Force dynamic rendering - this page uses Privy hooks which require runtime
-export const dynamic = 'force-dynamic';
-
 import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { usePrivy } from '@privy-io/react-auth';
@@ -26,7 +23,7 @@ interface TokenData {
 
 interface PendingLaunch {
     id: string;
-    status: 'awaiting_deposit' | 'launching' | 'completed' | 'failed' | 'expired' | 'refunded';
+    status: 'awaiting_deposit' | 'launching' | 'completed' | 'failed' | 'expired' | 'refunded' | 'retry_pending';
     deposit_address: string;
     required_amount: number;
     token_mint?: string;
@@ -574,10 +571,19 @@ export default function LaunchPage() {
                         {launchStatus === 'launching' ? (
                             <>
                                 <div className="text-5xl mb-4">🚀</div>
-                                <h2 className="text-xl font-bold mb-2 text-green-400">Deposit Detected!</h2>
+                                <h2 className="text-xl font-bold mb-2 text-green-400">Launching...</h2>
                                 <p className="text-gray-400 mb-6">
                                     <span className="text-green-400 font-bold">{depositBalance.toFixed(4)} SOL</span> received - launching your token...
                                 </p>
+                            </>
+                        ) : launchStatus === 'retry_pending' ? (
+                            <>
+                                <div className="text-5xl mb-4">🔄</div>
+                                <h2 className="text-xl font-bold mb-2 text-yellow-400">Retrying...</h2>
+                                <p className="text-gray-400 mb-4">
+                                    Launch attempt failed. Retrying automatically in a few seconds...
+                                </p>
+                                {error && <p className="text-yellow-400/70 text-xs mb-4">{error}</p>}
                             </>
                         ) : launchStatus === 'failed' || launchStatus === 'expired' || launchStatus === 'refunded' ? (
                             <>
@@ -622,6 +628,11 @@ export default function LaunchPage() {
                                         <div className="animate-spin w-4 h-4 border-2 border-green-500 border-t-transparent rounded-full" />
                                         <span className="text-sm text-green-400">Launching on Bags.fm...</span>
                                     </>
+                                ) : launchStatus === 'retry_pending' ? (
+                                    <>
+                                        <div className="animate-spin w-4 h-4 border-2 border-yellow-500 border-t-transparent rounded-full" />
+                                        <span className="text-sm text-yellow-400">Retrying in a few seconds...</span>
+                                    </>
                                 ) : launchStatus === 'failed' || launchStatus === 'expired' || launchStatus === 'refunded' ? (
                                     <span className="text-sm text-red-400">
                                         {launchStatus === 'refunded' ? 'SOL has been refunded to your wallet' : 'Please try again'}
@@ -638,6 +649,8 @@ export default function LaunchPage() {
                         <p className="text-sm text-gray-500 mb-6">
                             {launchStatus === 'launching'
                                 ? 'This may take a few moments. Do not close this page.'
+                                : launchStatus === 'retry_pending'
+                                ? 'An error occurred. Retrying automatically...'
                                 : launchStatus === 'failed' || launchStatus === 'expired'
                                 ? 'Use the button below to return to dashboard and try again.'
                                 : 'Your token will launch automatically when the deposit is detected.'}
