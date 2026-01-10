@@ -189,10 +189,11 @@ const createLaunchSchema = z.object({
   telegram: z.string().url().optional().or(z.literal('')),
   website: z.string().url().optional().or(z.literal('')),
   discord: z.string().url().optional().or(z.literal('')),
+  devBuy: z.number().min(0).max(10).optional(), // Optional dev buy in SOL (0-10)
 })
 
-// Default minimum deposit in SOL (0.1 required, 0.5 recommended for MM funding)
-const MIN_DEPOSIT_SOL = 0.1
+// Base minimum deposit in SOL (launch cost)
+const BASE_MIN_DEPOSIT_SOL = 0.1
 // Launch expiry in hours
 const LAUNCH_EXPIRY_HOURS = 24
 
@@ -218,7 +219,11 @@ router.post('/', async (req: PrivyRequest, res: Response) => {
       })
     }
 
-    const { name, symbol, description, imageUrl, twitter, telegram, website, discord } = validation.data
+    const { name, symbol, description, imageUrl, twitter, telegram, website, discord, devBuy } = validation.data
+
+    // Calculate minimum deposit: base (0.1) + dev buy amount
+    const devBuySol = devBuy || 0
+    const minDepositSol = BASE_MIN_DEPOSIT_SOL + devBuySol
 
     // Get user's wallets
     const wallets = await privyService.getUserWallets(req.privyUserId!)
@@ -281,7 +286,8 @@ router.post('/', async (req: PrivyRequest, res: Response) => {
         devWalletId: devWallet.id,
         opsWalletId: opsWallet.id,
         depositAddress: devWallet.walletAddress,
-        minDepositSol: MIN_DEPOSIT_SOL,
+        minDepositSol: minDepositSol,
+        devBuySol: devBuySol,
         expiresAt,
       },
     })
@@ -291,6 +297,8 @@ router.post('/', async (req: PrivyRequest, res: Response) => {
       symbol: launch.tokenSymbol,
       privyUserId: req.privyUserId,
       depositAddress: devWallet.walletAddress,
+      minDeposit: minDepositSol,
+      devBuy: devBuySol,
     }, 'Pending launch created')
 
     return res.status(201).json({
@@ -306,10 +314,11 @@ router.post('/', async (req: PrivyRequest, res: Response) => {
           expiresAt: launch.expiresAt,
         },
         depositAddress: devWallet.walletAddress,
-        minDeposit: MIN_DEPOSIT_SOL,
+        minDeposit: minDepositSol,
+        devBuy: devBuySol,
         expiresAt: expiresAt.toISOString(),
       },
-      message: `Pending launch created for ${launch.tokenSymbol}. Send at least ${MIN_DEPOSIT_SOL} SOL to ${devWallet.walletAddress} to launch.`,
+      message: `Pending launch created for ${launch.tokenSymbol}. Send at least ${minDepositSol} SOL to ${devWallet.walletAddress} to launch.`,
     })
   } catch (error) {
     loggers.privy.error({ error: String(error) }, 'Error creating launch')

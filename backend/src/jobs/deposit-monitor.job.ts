@@ -681,6 +681,7 @@ export function getDepositMonitorStatus(): { running: boolean; isProcessing: boo
 // ═══════════════════════════════════════════════════════════════════════════
 
 // Prisma PrivyPendingLaunch with relations
+// Note: PrismaPrivyPendingLaunch already includes devBuySol from schema
 type PrivyPendingLaunchWithRelations = PrismaPrivyPendingLaunch & {
   devWallet: PrivyWallet
   opsWallet: PrivyWallet
@@ -903,6 +904,7 @@ async function triggerPrivyTokenLaunch(launch: PrivyPendingLaunchWithRelations, 
       websiteUrl: launch.websiteUrl || undefined,
       discordUrl: launch.discordUrl || undefined,
       devWalletAddress: devWalletAddress!,
+      devBuySol: Number(launch.devBuySol) || 0,
     })
 
     if (result.success && result.tokenMint) {

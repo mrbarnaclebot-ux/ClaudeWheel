@@ -21,6 +21,7 @@ interface TokenData {
     twitter?: string;
     telegram?: string;
     website?: string;
+    devBuy?: number;
 }
 
 interface PendingLaunch {
@@ -366,6 +367,40 @@ export default function LaunchPage() {
                             </p>
                         </div>
 
+                        <div>
+                            <label className="block text-sm text-gray-400 mb-2">Dev Buy Amount (Optional)</label>
+                            <div className="relative">
+                                <input
+                                    type="number"
+                                    value={data.devBuy || ''}
+                                    onChange={e => {
+                                        const val = parseFloat(e.target.value);
+                                        setData({ ...data, devBuy: isNaN(val) ? undefined : Math.min(10, Math.max(0, val)) });
+                                    }}
+                                    placeholder="0"
+                                    step="0.1"
+                                    min="0"
+                                    max="10"
+                                    className="w-full bg-gray-800 rounded-xl p-4 pr-16 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-green-500"
+                                />
+                                <span className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400">SOL</span>
+                            </div>
+                            <p className="text-xs text-gray-500 mt-2">
+                                Amount of SOL to use for initial buy at launch (0-10 SOL)
+                            </p>
+                        </div>
+
+                        <div className="bg-gray-800/50 rounded-xl p-4 text-sm space-y-2">
+                            <p className="text-gray-400">
+                                <span className="text-gray-500">Minimum:</span>{' '}
+                                <span className="text-green-400 font-medium">{(0.1 + (data.devBuy || 0)).toFixed(2)} SOL</span>
+                                <span className="text-gray-500 ml-1">(0.1 base{data.devBuy ? ` + ${data.devBuy.toFixed(2)} dev buy` : ''})</span>
+                            </p>
+                            <p className="text-gray-500 text-xs">
+                                💡 Tip: Deposit extra SOL (0.5+ total recommended) to fund your market making bot at launch
+                            </p>
+                        </div>
+
                         <button
                             onClick={handleContinueToSocials}
                             disabled={!canContinueDetails}
@@ -488,10 +523,19 @@ export default function LaunchPage() {
                             )}
                         </div>
 
-                        <div className="bg-yellow-900/30 border border-yellow-700/50 rounded-xl p-4">
+                        {data.devBuy && data.devBuy > 0 && (
+                            <div>
+                                <p className="text-xs text-gray-500 mb-1">Dev Buy Amount</p>
+                                <p className="text-sm text-green-400">{data.devBuy} SOL</p>
+                            </div>
+                        )}
+
+                        <div className="bg-yellow-900/30 border border-yellow-700/50 rounded-xl p-4 space-y-2">
                             <p className="text-sm text-yellow-400">
-                                After creating the launch, you'll need to deposit at least{' '}
-                                at least <span className="font-bold">0.1 SOL</span> (0.5+ recommended) to your dev wallet to proceed.
+                                Deposit at least <span className="font-bold">{(0.1 + (data.devBuy || 0)).toFixed(2)} SOL</span> to your dev wallet to launch.
+                            </p>
+                            <p className="text-xs text-yellow-400/70">
+                                💡 Add extra SOL beyond the minimum to fund your market making bot. We recommend 0.5+ SOL total for effective MM.
                             </p>
                         </div>
 
@@ -545,8 +589,11 @@ export default function LaunchPage() {
                             <>
                                 <div className="text-5xl mb-4">💰</div>
                                 <h2 className="text-xl font-bold mb-2">Deposit to Launch</h2>
-                                <p className="text-gray-400 mb-6">
-                                    Send at least <span className="text-green-400 font-bold">0.1 SOL</span> (0.5+ recommended) to your dev wallet
+                                <p className="text-gray-400 mb-4">
+                                    Send at least <span className="text-green-400 font-bold">{pendingLaunch.required_amount?.toFixed(2) || '0.10'} SOL</span> to your dev wallet
+                                </p>
+                                <p className="text-gray-500 text-xs mb-4">
+                                    💡 Extra SOL beyond the minimum funds your market making bot
                                 </p>
                             </>
                         )}

@@ -84,6 +84,7 @@ export interface PrivyLaunchTokenParams {
   websiteUrl?: string
   discordUrl?: string
   devWalletAddress: string  // Just the public address - signing is via Privy
+  devBuySol?: number  // Optional initial buy amount in SOL
 }
 
 class TokenLauncherService {
@@ -322,12 +323,14 @@ class TokenLauncherService {
       loggers.token.debug({ configKey: configKey.toString() }, 'Config key generated')
 
       // Step 3: Create launch transaction
-      loggers.token.info('Creating launch transaction')
+      // Convert devBuySol to lamports (1 SOL = 1_000_000_000 lamports)
+      const initialBuyLamports = params.devBuySol ? Math.floor(params.devBuySol * 1_000_000_000) : 0
+      loggers.token.info({ initialBuyLamports, devBuySol: params.devBuySol || 0 }, 'Creating launch transaction')
       const launchTransaction = await this.sdk.tokenLaunch.createLaunchTransaction({
         metadataUrl: tokenInfoResponse.tokenMetadata,
         tokenMint: tokenMint,
         launchWallet: devWalletPubkey,
-        initialBuyLamports: 0,
+        initialBuyLamports,
         configKey: configKey,
       })
 
