@@ -6,10 +6,7 @@
 import {
   Keypair,
   PublicKey,
-  Transaction,
   VersionedTransaction,
-  Connection,
-  MessageV0,
 } from '@solana/web3.js'
 import bs58 from 'bs58'
 import { env } from '../config/env'
@@ -22,106 +19,26 @@ import { privyService } from './privy.service'
 import { BagsSDK, signAndSendTransaction } from '@bagsfm/bags-sdk'
 
 /**
- * Create a new transaction with a fresh blockhash.
- * For VersionedTransaction, we create an entirely new MessageV0 to ensure
- * the serialization is correct. Direct mutation of the blockhash property
- * can cause serialization issues with Privy's signing API.
- *
- * IMPORTANT: Only call this on UNSIGNED transactions. Any existing signatures
- * will become invalid after blockhash change.
+ * Sign and send a VersionedTransaction using Privy delegated signing.
+ * Mirrors the Bags SDK's signAndSendTransaction pattern - no blockhash modification.
+ * The Bags API returns transactions with fresh blockhashes that should be valid.
  */
-async function refreshTransactionBlockhash(
-  connection: Connection,
-  tx: Transaction
-): Promise<Transaction>
-async function refreshTransactionBlockhash(
-  connection: Connection,
-  tx: VersionedTransaction
-): Promise<VersionedTransaction>
-async function refreshTransactionBlockhash(
-  connection: Connection,
-  tx: Transaction | VersionedTransaction
-): Promise<Transaction | VersionedTransaction> {
-  const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('finalized')
-
-  if (tx instanceof Transaction) {
-    // Legacy Transaction - direct property assignment
-    tx.recentBlockhash = blockhash
-    tx.lastValidBlockHeight = lastValidBlockHeight
-    return tx
-  } else {
-    // VersionedTransaction - create a new MessageV0 to avoid serialization issues
-    // This is safer than direct property mutation which can cause signature verification failures
-    const msg = tx.message as MessageV0
-
-    // Create a new MessageV0 with the same properties but fresh blockhash
-    const newMessage = new MessageV0({
-      header: msg.header,
-      staticAccountKeys: msg.staticAccountKeys,
-      recentBlockhash: blockhash,
-      compiledInstructions: msg.compiledInstructions,
-      addressTableLookups: msg.addressTableLookups,
-    })
-
-    // Create a new VersionedTransaction with the new message
-    // Note: no signatures yet since this is an unsigned transaction
-    return new VersionedTransaction(newMessage)
-  }
-}
-
-/**
- * Helper to determine if an error is retryable
- */
-function isRetryableError(error: Error): boolean {
-  const msg = error.message || ''
-  return msg.includes('BLOCKHASH_EXPIRED') ||
-    msg.includes('SIGNATURE_VERIFICATION_FAILED') ||
-    msg.includes('BROADCAST_FAILED')
-}
-
-/**
- * Sign and send a transaction with retry logic.
- * On transient errors (blockhash, signature verification), retries with a fresh blockhash.
- */
-async function signWithPrivyRetry(
-  connection: Connection,
+async function signAndSendWithPrivy(
   walletAddress: string,
-  tx: VersionedTransaction,
-  maxRetries: number = 3
+  transaction: VersionedTransaction,
+  description: string = 'transaction'
 ): Promise<string> {
-  let lastError: Error | null = null
+  loggers.token.debug({ description }, `Signing ${description} with Privy`)
 
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    try {
-      // Refresh blockhash on every attempt to ensure it's valid
-      const freshTx = await refreshTransactionBlockhash(connection, tx)
+  // Send directly to Privy without any modification - same as SDK approach
+  const signature = await privyService.signAndSendSolanaTransaction(walletAddress, transaction)
 
-      loggers.token.debug({ attempt, maxRetries }, 'Attempting Privy signing')
-
-      const signature = await privyService.signAndSendSolanaTransaction(walletAddress, freshTx)
-      if (!signature) {
-        throw new Error('Privy signing returned null signature')
-      }
-
-      return signature
-    } catch (error: any) {
-      lastError = error
-      loggers.token.warn({ attempt, maxRetries, error: error.message }, 'Privy signing attempt failed')
-
-      // Only retry on transient errors
-      if (!isRetryableError(error) || attempt === maxRetries) {
-        throw error
-      }
-
-      // Wait before retry (exponential backoff: 1s, 2s, 4s)
-      const waitMs = 1000 * Math.pow(2, attempt - 1)
-      loggers.token.info({ waitMs }, 'Waiting before retry')
-      await new Promise(resolve => setTimeout(resolve, waitMs))
-    }
+  if (!signature) {
+    throw new Error(`Privy signing returned null for ${description}`)
   }
 
-  // Should not reach here, but just in case
-  throw lastError || new Error('Privy signing failed after all retries')
+  loggers.token.debug({ signature, description }, `${description} signed and sent`)
+  return signature
 }
 
 export interface LaunchTokenParams {
@@ -317,7 +234,11 @@ class TokenLauncherService {
 
   /**
    * Launch a new token on Bags.fm using Privy delegated signing
-   * Same flow as launchToken but uses Privy API for transaction signing
+   * Same flow as launchToken but uses Privy API for transaction signing.
+   *
+   * IMPORTANT: This follows the same pattern as the Bags SDK's signAndSendTransaction -
+   * we do NOT modify the transaction's blockhash. The Bags API returns transactions
+   * with fresh blockhashes that should be valid for the signing operation.
    */
   async launchTokenWithPrivySigning(params: PrivyLaunchTokenParams): Promise<LaunchResult> {
     if (!this.apiKey || !this.sdk) {
@@ -367,11 +288,17 @@ class TokenLauncherService {
         feeClaimers,
       })
 
-      // Sign and send config transactions using Privy with retry logic
+      // Sign and send config transactions using Privy
+      // Following SDK pattern: no blockhash modification, just sign and send
       if (configResult.transactions && configResult.transactions.length > 0) {
         loggers.token.debug({ transactionCount: configResult.transactions.length }, 'Signing config transactions with Privy')
-        for (const tx of configResult.transactions) {
-          const signature = await signWithPrivyRetry(connection, params.devWalletAddress, tx)
+        for (let i = 0; i < configResult.transactions.length; i++) {
+          const tx = configResult.transactions[i]
+          const signature = await signAndSendWithPrivy(
+            params.devWalletAddress,
+            tx,
+            `config transaction ${i + 1}/${configResult.transactions.length}`
+          )
           // Wait for confirmation
           await connection.confirmTransaction(signature, commitment)
         }
@@ -380,9 +307,15 @@ class TokenLauncherService {
       // Handle bundles if returned
       if (configResult.bundles && configResult.bundles.length > 0) {
         loggers.token.debug({ bundleCount: configResult.bundles.length }, 'Processing bundles with Privy')
-        for (const bundle of configResult.bundles) {
-          for (const tx of bundle) {
-            const signature = await signWithPrivyRetry(connection, params.devWalletAddress, tx)
+        for (let i = 0; i < configResult.bundles.length; i++) {
+          const bundle = configResult.bundles[i]
+          for (let j = 0; j < bundle.length; j++) {
+            const tx = bundle[j]
+            const signature = await signAndSendWithPrivy(
+              params.devWalletAddress,
+              tx,
+              `bundle ${i + 1} transaction ${j + 1}`
+            )
             await connection.confirmTransaction(signature, commitment)
           }
         }
@@ -403,9 +336,14 @@ class TokenLauncherService {
         configKey: configKey,
       })
 
-      // Step 4 & 5: Sign and broadcast using Privy with retry logic
-      loggers.token.info('Signing and broadcasting transaction with Privy')
-      const signature = await signWithPrivyRetry(connection, params.devWalletAddress, launchTransaction)
+      // Step 4 & 5: Sign and broadcast using Privy
+      // Following SDK pattern: no blockhash modification
+      loggers.token.info('Signing and broadcasting launch transaction with Privy')
+      const signature = await signAndSendWithPrivy(
+        params.devWalletAddress,
+        launchTransaction,
+        'launch transaction'
+      )
 
       // Confirm the transaction
       await connection.confirmTransaction(signature, commitment)
