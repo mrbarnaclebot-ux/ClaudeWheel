@@ -10,22 +10,45 @@ import WalletCard from './components/WalletCard'
 import TransactionFeed from './components/TransactionFeed'
 import FeeStats from './components/FeeStats'
 import PriceChart from './components/PriceChart'
-import {
-  supabase,
-  fetchWalletBalances,
-  fetchTransactions as fetchTransactionsFromDB,
-  fetchFeeStats,
-  fetchConfig,
-  subscribeToWalletBalances,
-  subscribeToTransactions,
-  subscribeToFeeStats,
-  subscribeToConfig,
-  type WalletBalance,
-  type Transaction,
-  type FeeStats as FeeStatsType,
-  type Config,
-} from '@/lib/supabase'
-import { fetchStatus } from '@/lib/api'
+
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3002'
+
+// WHEEL token status response type
+interface WheelStatusResponse {
+  success: boolean
+  data?: {
+    token: {
+      mintAddress: string
+      symbol: string
+      decimals: number
+    }
+    wallets: {
+      dev: {
+        address: string
+        solBalance: number
+        tokenBalance: number
+      }
+      ops: {
+        address: string
+        solBalance: number
+        tokenBalance: number
+      }
+    }
+    feeStats: {
+      totalCollected: number
+      todayCollected: number
+      hourCollected: number
+    }
+    flywheel: {
+      isActive: boolean
+      wheelJobRunning: boolean
+      multiUserJobRunning: boolean
+      lastRunAt: string | null
+    }
+    transactionsCount: number
+  }
+  error?: string
+}
 
 interface WalletData {
   devWallet: {
@@ -84,114 +107,52 @@ export default function Dashboard() {
   const [tokenMintAddress, setTokenMintAddress] = useState<string>('')
   const [tokenSymbol, setTokenSymbol] = useState<string>('TOKEN')
 
-  // Load initial data
+  // Load initial data from the new /api/status/wheel endpoint
   const loadData = useCallback(async () => {
     try {
-      // Fetch status from backend API
-      console.log('[Dashboard] Fetching status from backend API...')
-      const status = await fetchStatus()
-      console.log('[Dashboard] Backend status:', status)
-      if (status) {
-        setIsActive(status.is_active)
-        // Update wallet data from API if available
-        if (status.dev_wallet_balance > 0 || status.ops_wallet_balance > 0) {
-          setWalletData(prev => ({
-            ...prev,
-            devWallet: {
-              ...prev.devWallet,
-              solBalance: status.dev_wallet_balance,
-              usdValue: status.dev_wallet_balance * 200, // Approximate USD
-            },
-            opsWallet: {
-              ...prev.opsWallet,
-              solBalance: status.ops_wallet_balance,
-              usdValue: status.ops_wallet_balance * 200,
-            },
-          }))
-          setFeeStats(prev => ({
-            ...prev,
-            totalCollected: status.total_fees_collected,
-          }))
-        }
-      } else {
-        console.warn('[Dashboard] No status received from backend API')
-      }
+      console.log('[Dashboard] Fetching WHEEL status from backend API...')
+      const response = await fetch(`${API_BASE_URL}/api/status/wheel`)
+      const json: WheelStatusResponse = await response.json()
+      console.log('[Dashboard] WHEEL status response:', json)
 
-      // Fetch wallet balances from Supabase
-      console.log('[Dashboard] Fetching wallet balances from Supabase...')
-      const wallets = await fetchWalletBalances()
-      console.log('[Dashboard] Wallet balances:', wallets)
-      if (wallets.length > 0) {
-        const devWallet = wallets.find(w => w.wallet_type === 'dev')
-        const opsWallet = wallets.find(w => w.wallet_type === 'ops')
+      if (json.success && json.data) {
+        const { token, wallets, feeStats: fees, flywheel } = json.data
 
+        // Set token info
+        setTokenMintAddress(token.mintAddress)
+        setTokenSymbol(token.symbol)
+
+        // Set flywheel status
+        setIsActive(flywheel.isActive)
+
+        // Set wallet data from LIVE Solana balances
         setWalletData({
           devWallet: {
-            address: devWallet?.address || '',
-            solBalance: devWallet?.sol_balance || 0,
-            usdValue: devWallet?.usd_value || 0,
+            address: wallets.dev.address,
+            solBalance: wallets.dev.solBalance,
+            usdValue: wallets.dev.solBalance * 200, // Approximate USD
           },
           opsWallet: {
-            address: opsWallet?.address || '',
-            solBalance: opsWallet?.sol_balance || 0,
-            usdValue: opsWallet?.usd_value || 0,
-            tokenBalance: opsWallet?.token_balance || 0,
+            address: wallets.ops.address,
+            solBalance: wallets.ops.solBalance,
+            usdValue: wallets.ops.solBalance * 200,
+            tokenBalance: wallets.ops.tokenBalance,
           },
         })
-      } else {
-        console.warn('[Dashboard] No wallet balances found in Supabase')
-      }
 
-      // Fetch transactions from Supabase
-      console.log('[Dashboard] Fetching transactions from Supabase...')
-      const txs = await fetchTransactionsFromDB(20)
-      console.log('[Dashboard] Transactions:', txs.length, 'found')
-      if (txs.length > 0) {
-        setTransactions(txs.map(tx => ({
-          id: tx.id,
-          type: tx.type === 'fee_collection' ? 'fee' : tx.type as 'buy' | 'sell' | 'transfer',
-          amount: tx.amount,
-          token: tx.token,
-          timestamp: new Date(tx.created_at),
-          status: tx.status,
-        })))
-      } else {
-        console.warn('[Dashboard] No transactions found in Supabase')
-      }
-
-      // Fetch fee stats from Supabase
-      console.log('[Dashboard] Fetching fee stats from Supabase...')
-      const stats = await fetchFeeStats()
-      console.log('[Dashboard] Fee stats:', stats)
-      if (stats) {
+        // Set fee stats
         setFeeStats({
-          totalCollected: stats.total_collected,
-          todayCollected: stats.today_collected,
-          hourCollected: stats.hour_collected,
-          totalChange: stats.total_change || 0,
-          todayChange: stats.today_change || 0,
-          hourChange: stats.hour_change || 0,
+          totalCollected: fees.totalCollected,
+          todayCollected: fees.todayCollected,
+          hourCollected: fees.hourCollected,
+          totalChange: 0,
+          todayChange: 0,
+          hourChange: 0,
         })
-      } else {
-        console.warn('[Dashboard] No fee stats found in Supabase')
-      }
 
-      // Fetch config for token mint address and symbol
-      console.log('[Dashboard] Fetching config from Supabase...')
-      const config = await fetchConfig()
-      console.log('[Dashboard] Config:', config)
-      if (config) {
-        if (config.token_mint_address) {
-          setTokenMintAddress(config.token_mint_address)
-        } else {
-          console.warn('[Dashboard] Config found but token_mint_address is null')
-        }
-        if (config.token_symbol) {
-          setTokenSymbol(config.token_symbol)
-        }
-        setIsActive(config.flywheel_active)
+        console.log('[Dashboard] Data loaded successfully from /api/status/wheel')
       } else {
-        console.warn('[Dashboard] No config found in Supabase (missing id="main" row)')
+        console.warn('[Dashboard] Failed to fetch WHEEL status:', json.error)
       }
     } catch (error) {
       console.error('[Dashboard] Failed to load data:', error)
@@ -200,82 +161,14 @@ export default function Dashboard() {
     }
   }, [])
 
-  // Set up real-time subscriptions
+  // Load data on mount and poll for updates
   useEffect(() => {
     loadData()
-
-    // Subscribe to wallet balance changes
-    const walletSub = subscribeToWalletBalances((payload: WalletBalance) => {
-      setWalletData(prev => {
-        if (payload.wallet_type === 'dev') {
-          return {
-            ...prev,
-            devWallet: {
-              ...prev.devWallet,
-              address: payload.address,
-              solBalance: payload.sol_balance,
-              usdValue: payload.usd_value,
-            },
-          }
-        } else {
-          return {
-            ...prev,
-            opsWallet: {
-              ...prev.opsWallet,
-              address: payload.address,
-              solBalance: payload.sol_balance,
-              usdValue: payload.usd_value,
-              tokenBalance: payload.token_balance,
-            },
-          }
-        }
-      })
-    })
-
-    // Subscribe to new transactions
-    const txSub = subscribeToTransactions((payload: Transaction) => {
-      const newTx: TransactionDisplay = {
-        id: payload.id,
-        type: payload.type === 'fee_collection' ? 'fee' : payload.type as 'buy' | 'sell' | 'transfer',
-        amount: payload.amount,
-        token: payload.token,
-        timestamp: new Date(payload.created_at),
-        status: payload.status,
-      }
-      setTransactions(prev => [newTx, ...prev.slice(0, 19)])
-    })
-
-    // Subscribe to fee stats changes
-    const feeStatsSub = subscribeToFeeStats((payload: FeeStatsType) => {
-      setFeeStats({
-        totalCollected: payload.total_collected,
-        todayCollected: payload.today_collected,
-        hourCollected: payload.hour_collected,
-        totalChange: payload.total_change || 0,
-        todayChange: payload.today_change || 0,
-        hourChange: payload.hour_change || 0,
-      })
-    })
-
-    // Subscribe to config changes (token address, symbol, etc.)
-    const configSub = subscribeToConfig((payload: Config) => {
-      if (payload.token_mint_address) {
-        setTokenMintAddress(payload.token_mint_address)
-      }
-      if (payload.token_symbol) {
-        setTokenSymbol(payload.token_symbol)
-      }
-      setIsActive(payload.flywheel_active)
-    })
 
     // Refresh data periodically (every 30 seconds)
     const refreshInterval = setInterval(loadData, 30000)
 
     return () => {
-      supabase.removeChannel(walletSub)
-      supabase.removeChannel(txSub)
-      supabase.removeChannel(feeStatsSub)
-      supabase.removeChannel(configSub)
       clearInterval(refreshInterval)
     }
   }, [loadData])

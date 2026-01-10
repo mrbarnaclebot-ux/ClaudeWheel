@@ -1,10 +1,13 @@
 import { Router, Request, Response } from 'express'
 import { env } from '../config/env'
 import { supabase } from '../config/database'
-import { connection } from '../config/solana'
+import { connection, getDevWallet, getOpsWallet } from '../config/solana'
+import { PublicKey, LAMPORTS_PER_SOL } from '@solana/web3.js'
+import { getAssociatedTokenAddress, getAccount } from '@solana/spl-token'
 import type { ApiResponse, FlywheelStatus } from '../types'
 import { loggers } from '../utils/logger'
 import { getMultiUserFlywheelJobStatus } from '../jobs/multi-flywheel.job'
+import { getWheelFlywheelJobStatus } from '../jobs/wheel-flywheel.job'
 
 const router = Router()
 
@@ -161,6 +164,145 @@ router.get('/logs', (req: Request, res: Response) => {
     message: 'In-memory logs are deprecated. Use structured logging with pino and external log aggregation.',
     timestamp: new Date().toISOString(),
   })
+})
+
+// ═══════════════════════════════════════════════════════════════════════════
+// WHEEL TOKEN STATUS (Public - Live Solana Data)
+// ═══════════════════════════════════════════════════════════════════════════
+
+// GET /api/status/wheel - Get LIVE WHEEL token data from Solana
+router.get('/wheel', async (_req: Request, res: Response) => {
+  try {
+    const tokenMint = new PublicKey(env.tokenMintAddress)
+
+    // Get wallet keypairs
+    const devWalletKeypair = getDevWallet()
+    const opsWalletKeypair = getOpsWallet()
+
+    // Get wallet addresses
+    const devWalletAddress = devWalletKeypair?.publicKey?.toBase58() || env.devWalletAddress || ''
+    const opsWalletAddress = opsWalletKeypair?.publicKey?.toBase58() || ''
+
+    if (!devWalletAddress || !opsWalletAddress) {
+      return res.json({
+        success: false,
+        error: 'Wallet configuration missing',
+        timestamp: new Date().toISOString(),
+      })
+    }
+
+    const devPubkey = new PublicKey(devWalletAddress)
+    const opsPubkey = new PublicKey(opsWalletAddress)
+
+    // Fetch SOL balances in parallel
+    const [devSolBalance, opsSolBalance] = await Promise.all([
+      connection.getBalance(devPubkey),
+      connection.getBalance(opsPubkey),
+    ])
+
+    // Fetch token balances
+    let devTokenBalance = 0
+    let opsTokenBalance = 0
+
+    try {
+      const devTokenAccount = await getAssociatedTokenAddress(tokenMint, devPubkey)
+      const devTokenInfo = await getAccount(connection, devTokenAccount)
+      devTokenBalance = Number(devTokenInfo.amount) / Math.pow(10, env.tokenDecimals)
+    } catch {
+      // Token account doesn't exist or is empty
+    }
+
+    try {
+      const opsTokenAccount = await getAssociatedTokenAddress(tokenMint, opsPubkey)
+      const opsTokenInfo = await getAccount(connection, opsTokenAccount)
+      opsTokenBalance = Number(opsTokenInfo.amount) / Math.pow(10, env.tokenDecimals)
+    } catch {
+      // Token account doesn't exist or is empty
+    }
+
+    // Get flywheel status
+    const wheelFlywheelStatus = getWheelFlywheelJobStatus()
+    const multiFlywheelStatus = getMultiUserFlywheelJobStatus()
+
+    // Get fee stats from Supabase (if available)
+    let totalFeesCollected = 0
+    let todayFeesCollected = 0
+    let hourFeesCollected = 0
+
+    if (supabase) {
+      try {
+        const { data: feeStats } = await supabase
+          .from('fee_stats')
+          .select('*')
+          .eq('id', 'main')
+          .single()
+
+        if (feeStats) {
+          totalFeesCollected = feeStats.total_collected || 0
+          todayFeesCollected = feeStats.today_collected || 0
+          hourFeesCollected = feeStats.hour_collected || 0
+        }
+      } catch {
+        // Fee stats table might not exist or be empty
+      }
+    }
+
+    // Get recent transactions count from Supabase
+    let recentTransactionsCount = 0
+    if (supabase) {
+      try {
+        const { count } = await supabase
+          .from('transactions')
+          .select('*', { count: 'exact', head: true })
+        recentTransactionsCount = count || 0
+      } catch {
+        // Transactions table might not exist
+      }
+    }
+
+    res.json({
+      success: true,
+      data: {
+        token: {
+          mintAddress: env.tokenMintAddress,
+          symbol: env.tokenSymbol,
+          decimals: env.tokenDecimals,
+        },
+        wallets: {
+          dev: {
+            address: devWalletAddress,
+            solBalance: devSolBalance / LAMPORTS_PER_SOL,
+            tokenBalance: devTokenBalance,
+          },
+          ops: {
+            address: opsWalletAddress,
+            solBalance: opsSolBalance / LAMPORTS_PER_SOL,
+            tokenBalance: opsTokenBalance,
+          },
+        },
+        feeStats: {
+          totalCollected: totalFeesCollected,
+          todayCollected: todayFeesCollected,
+          hourCollected: hourFeesCollected,
+        },
+        flywheel: {
+          isActive: wheelFlywheelStatus.flywheelRunning || multiFlywheelStatus.running,
+          wheelJobRunning: wheelFlywheelStatus.flywheelRunning,
+          multiUserJobRunning: multiFlywheelStatus.running,
+          lastRunAt: wheelFlywheelStatus.mmStatus.lastRunAt || multiFlywheelStatus.lastRunAt || null,
+        },
+        transactionsCount: recentTransactionsCount,
+      },
+      timestamp: new Date().toISOString(),
+    })
+  } catch (error: any) {
+    loggers.server.error({ error: error.message }, 'Failed to fetch WHEEL status')
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch WHEEL token status',
+      timestamp: new Date().toISOString(),
+    })
+  }
 })
 
 export default router
