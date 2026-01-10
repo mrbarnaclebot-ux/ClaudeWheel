@@ -45,6 +45,7 @@ export interface ClaimablePosition {
   claimableAmount: number
   claimableAmountUsd: number
   lastClaimTime: string | null
+  _rawPosition?: unknown // SDK raw position for claim tx generation
 }
 
 export interface ClaimStats {
@@ -401,8 +402,41 @@ class BagsFmService {
 
   /**
    * Get claimable fee positions for a wallet
+   * Uses SDK if available, falls back to REST API
    */
   async getClaimablePositions(walletAddress: string): Promise<ClaimablePosition[]> {
+    // Try SDK first (preferred method)
+    if (this.sdk) {
+      try {
+        const positions = await this.sdk.fee.getAllClaimablePositions(
+          new PublicKey(walletAddress)
+        )
+
+        loggers.bags.info({
+          wallet: walletAddress,
+          positionsCount: positions.length,
+          positions: positions.map(p => ({
+            baseMint: p.baseMint,
+            claimableLamports: p.totalClaimableLamportsUserShare,
+            claimableSOL: p.totalClaimableLamportsUserShare / 1e9,
+          })),
+        }, 'SDK claimable positions fetched')
+
+        return positions.map(p => ({
+          tokenMint: p.baseMint || '',
+          tokenSymbol: '', // SDK doesn't return symbol
+          claimableAmount: p.totalClaimableLamportsUserShare / 1e9, // Convert lamports to SOL
+          claimableAmountUsd: 0, // SDK doesn't return USD value
+          lastClaimTime: null,
+          // Store raw position for claim transaction generation
+          _rawPosition: p,
+        })) as ClaimablePosition[]
+      } catch (error) {
+        loggers.bags.error({ error: String(error) }, 'SDK getAllClaimablePositions failed, falling back to REST API')
+      }
+    }
+
+    // Fallback to REST API
     const data = await this.fetch<any[]>(`/token-launch/claimable-positions?wallet=${walletAddress}`)
 
     if (!data || !Array.isArray(data)) return []
@@ -580,11 +614,71 @@ class BagsFmService {
 
   /**
    * Generate claim transactions for claimable fees
+   * Uses SDK if available, falls back to REST API
    */
   async generateClaimTransactions(
     walletAddress: string,
     tokenMints: string[]
   ): Promise<string[] | null> {
+    // Try SDK approach - get positions first, then generate claim txs
+    if (this.sdk) {
+      try {
+        const wallet = new PublicKey(walletAddress)
+        const positions = await this.sdk.fee.getAllClaimablePositions(wallet)
+
+        // Filter positions for requested token mints
+        const matchingPositions = positions.filter(p =>
+          tokenMints.includes(p.baseMint)
+        )
+
+        if (matchingPositions.length === 0) {
+          loggers.bags.warn({
+            wallet: walletAddress,
+            requestedMints: tokenMints,
+            availableMints: positions.map(p => p.baseMint),
+          }, 'No matching positions found for requested token mints')
+          return null
+        }
+
+        loggers.bags.info({
+          wallet: walletAddress,
+          matchingPositions: matchingPositions.length,
+          positions: matchingPositions.map(p => ({
+            baseMint: p.baseMint,
+            claimableSOL: p.totalClaimableLamportsUserShare / 1e9,
+          })),
+        }, 'Generating SDK claim transactions')
+
+        // Generate claim transactions for each position
+        const allTransactions: string[] = []
+        for (const position of matchingPositions) {
+          try {
+            const txs = await this.sdk.fee.getClaimTransaction(wallet, position)
+            // Serialize transactions to base64
+            for (const tx of txs) {
+              const serialized = tx.serialize({ requireAllSignatures: false })
+              allTransactions.push(Buffer.from(serialized).toString('base64'))
+            }
+          } catch (txError) {
+            loggers.bags.error({
+              error: String(txError),
+              baseMint: position.baseMint,
+            }, 'Failed to generate claim transaction for position')
+          }
+        }
+
+        if (allTransactions.length > 0) {
+          loggers.bags.info({
+            transactionCount: allTransactions.length,
+          }, 'SDK claim transactions generated')
+          return allTransactions
+        }
+      } catch (error) {
+        loggers.bags.error({ error: String(error) }, 'SDK claim transaction generation failed, falling back to REST API')
+      }
+    }
+
+    // Fallback to REST API
     const data = await this.fetch<any>('/token-launch/claim-txs/v2', {
       method: 'POST',
       body: JSON.stringify({

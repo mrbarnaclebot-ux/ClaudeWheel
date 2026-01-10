@@ -3307,6 +3307,97 @@ router.post('/wheel/sell', verifyAdminAuth, async (req: Request, res: Response) 
   }
 })
 
+/**
+ * GET /api/admin/wheel/claimable
+ * Check claimable fees for WHEEL token (for debugging)
+ */
+router.get('/wheel/claimable', verifyAdminAuth, async (_req: Request, res: Response) => {
+  try {
+    const devWallet = getDevWallet()
+
+    if (!devWallet) {
+      return res.status(400).json({
+        error: 'DEV_WALLET_PRIVATE_KEY not configured',
+        devWalletConfigured: false,
+      })
+    }
+
+    const devWalletAddress = devWallet.publicKey.toString()
+
+    // Fetch claimable positions from Bags.fm
+    const positions = await bagsFmService.getClaimablePositions(devWalletAddress)
+    const wheelPosition = positions?.find(p => p.tokenMint === PLATFORM_TOKEN_MINT)
+
+    return res.json({
+      success: true,
+      devWalletAddress,
+      platformTokenMint: PLATFORM_TOKEN_MINT,
+      allPositions: positions || [],
+      wheelPosition: wheelPosition || null,
+      claimableAmountSol: wheelPosition?.claimableAmount || 0,
+      claimableAmountUsd: wheelPosition?.claimableAmountUsd || 0,
+      claimThresholdSol: parseFloat(process.env.WHEEL_CLAIM_THRESHOLD_SOL || '0.05'),
+      wouldClaim: (wheelPosition?.claimableAmount || 0) >= parseFloat(process.env.WHEEL_CLAIM_THRESHOLD_SOL || '0.05'),
+    })
+  } catch (error) {
+    loggers.claim.error({ error: String(error) }, 'Error checking WHEEL claimable')
+    return res.status(500).json({ error: 'Failed to check claimable fees', details: String(error) })
+  }
+})
+
+/**
+ * POST /api/admin/wheel/claim
+ * Manually trigger WHEEL claim (for debugging)
+ */
+router.post('/wheel/claim', verifyAdminAuth, async (_req: Request, res: Response) => {
+  try {
+    const { wheelClaimService } = await import('../services/wheel-claim.service')
+
+    loggers.claim.info('🔄 Admin requested manual WHEEL claim')
+
+    const result = await wheelClaimService.runClaimCycle()
+
+    if (!result) {
+      // Get more debug info
+      const devWallet = getDevWallet()
+      const positions = devWallet
+        ? await bagsFmService.getClaimablePositions(devWallet.publicKey.toString())
+        : []
+      const wheelPosition = positions?.find(p => p.tokenMint === PLATFORM_TOKEN_MINT)
+
+      return res.json({
+        success: false,
+        message: 'No claim executed',
+        reason: !devWallet
+          ? 'DEV_WALLET_PRIVATE_KEY not configured'
+          : !wheelPosition
+            ? 'No WHEEL position found in claimable positions'
+            : wheelPosition.claimableAmount < parseFloat(process.env.WHEEL_CLAIM_THRESHOLD_SOL || '0.05')
+              ? `Below threshold (${wheelPosition.claimableAmount} < ${process.env.WHEEL_CLAIM_THRESHOLD_SOL || '0.05'})`
+              : 'Claim cycle returned null (check logs)',
+        debug: {
+          devWalletConfigured: !!devWallet,
+          devWalletAddress: devWallet?.publicKey.toString() || null,
+          claimableAmount: wheelPosition?.claimableAmount || 0,
+          threshold: parseFloat(process.env.WHEEL_CLAIM_THRESHOLD_SOL || '0.05'),
+        },
+      })
+    }
+
+    return res.json({
+      success: result.success,
+      amountClaimedSol: result.amountClaimedSol,
+      amountTransferredSol: result.amountTransferredSol,
+      claimSignature: result.claimSignature,
+      transferSignature: result.transferSignature,
+      error: result.error,
+    })
+  } catch (error) {
+    loggers.claim.error({ error: String(error) }, 'Error executing manual WHEEL claim')
+    return res.status(500).json({ error: 'Failed to execute claim', details: String(error) })
+  }
+})
+
 // ═══════════════════════════════════════════════════════════════════════════
 // PLATFORM SETTINGS
 // Global platform configuration
@@ -3316,7 +3407,7 @@ router.post('/wheel/sell', verifyAdminAuth, async (req: Request, res: Response) 
  * GET /api/admin/settings
  * Get platform settings (admin only)
  */
-router.get('/settings', verifyAdminAuth, async (req: Request, res: Response) => {
+router.get('/settings', verifyAdminAuth, async (_req: Request, res: Response) => {
   try {
     // Get job status intervals from environment
     const claimJobStatus = getClaimJobStatus()
