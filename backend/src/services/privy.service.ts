@@ -243,8 +243,19 @@ class PrivyService {
     }
 
     try {
+      // Look up the Privy wallet ID from our database
+      let walletId: string | undefined
+      if (isPrismaConfigured()) {
+        const wallet = await prisma.privyWallet.findUnique({
+          where: { walletAddress },
+          select: { privyWalletId: true },
+        })
+        walletId = wallet?.privyWalletId
+      }
+
+      // Use walletId if available (preferred), otherwise fall back to address
       const { hash } = await this.client.walletApi.solana.signAndSendTransaction({
-        address: walletAddress,
+        ...(walletId ? { walletId } : { address: walletAddress }),
         chainType: 'solana',
         transaction,
         caip2,
