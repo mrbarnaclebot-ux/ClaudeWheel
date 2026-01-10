@@ -31,7 +31,6 @@ import {
   getPrivyFlywheelState,
   updatePrivyFlywheelState,
 } from './user-token.service'
-import { privyService } from './privy.service'
 
 // ═══════════════════════════════════════════════════════════════════════════
 // TYPES
@@ -1839,7 +1838,7 @@ class MultiUserMMService {
 
   /**
    * Execute swap with Privy delegated signing
-   * Handles blockhash expiry by getting fresh transaction and retrying
+   * Uses sign-only + self-broadcast pattern for reliability (like WHEEL flywheel)
    */
   private async executeSwapWithPrivySigning(
     connection: Connection,
@@ -1849,7 +1848,7 @@ class MultiUserMMService {
     maxRetries: number = 3
   ): Promise<string | null> {
     for (let attempt = 0; attempt < maxRetries; attempt++) {
-      // Get fresh swap transaction for each attempt
+      // Get fresh swap transaction for each attempt (fresh blockhash each time)
       const swapData = await this.generateSwapTx(route, walletAddress, quoteResponse)
 
       if (!swapData) {
@@ -1872,49 +1871,29 @@ class MultiUserMMService {
         return null
       }
 
-      // Use Privy to sign and send
-      try {
-        const signature = await privyService.signAndSendSolanaTransaction(walletAddress, transaction)
+      // Use sendTransactionWithPrivySigning utility (sign-only + self-broadcast)
+      // This is faster than signAndSendSolanaTransaction because we broadcast immediately after signing
+      const result = await sendTransactionWithPrivySigning(connection, transaction, walletAddress, {
+        maxRetries: 1, // We handle retries ourselves with fresh transactions
+        logContext: { service: 'privy-flywheel', route, attempt: attempt + 1 },
+      })
 
-        if (!signature) {
-          loggers.flywheel.error({ route, walletAddress, attempt }, 'Privy signing returned null')
-          continue
-        }
-
-        // Wait for confirmation
-        try {
-          const latestBlockhash = await connection.getLatestBlockhash('confirmed')
-          const confirmation = await connection.confirmTransaction({
-            signature,
-            blockhash: latestBlockhash.blockhash,
-            lastValidBlockHeight: latestBlockhash.lastValidBlockHeight,
-          }, 'confirmed')
-
-          if (confirmation.value.err) {
-            loggers.flywheel.error({ route, signature, error: confirmation.value.err }, 'Privy transaction failed on-chain')
-            return null
-          }
-        } catch (error) {
-          loggers.flywheel.warn({ route, signature, error: String(error) }, 'Could not confirm Privy transaction, continuing anyway')
-        }
-
-        loggers.flywheel.info({ route, signature, attempt: attempt + 1 }, 'Privy swap executed successfully')
-        return signature
-      } catch (error) {
-        const errorMsg = String(error)
-
-        // Check if it's a blockhash expiry error - retry with fresh transaction
-        if (errorMsg.includes('BLOCKHASH_EXPIRED') || errorMsg.includes('Blockhash not found') || errorMsg.includes('block height exceeded')) {
-          loggers.flywheel.warn({ route, attempt: attempt + 1, maxRetries }, 'Blockhash expired, retrying with fresh transaction')
-          // Small delay before retry
-          await new Promise(resolve => setTimeout(resolve, 500))
-          continue
-        }
-
-        // Non-retryable error
-        loggers.flywheel.error({ route, walletAddress, error: errorMsg, attempt }, 'Privy signing failed with non-retryable error')
-        return null
+      if (result.success && result.signature) {
+        loggers.flywheel.info({ route, signature: result.signature, attempt: attempt + 1 }, 'Privy swap executed successfully')
+        return result.signature
       }
+
+      // Check if error is retryable
+      const errorMsg = result.error || 'Unknown error'
+      if (errorMsg.includes('Blockhash') || errorMsg.includes('blockhash') || errorMsg.includes('block height')) {
+        loggers.flywheel.warn({ route, attempt: attempt + 1, maxRetries, error: errorMsg }, 'Blockhash issue, retrying with fresh transaction')
+        await new Promise(resolve => setTimeout(resolve, 300))
+        continue
+      }
+
+      // Non-retryable error
+      loggers.flywheel.error({ route, walletAddress, error: errorMsg, attempt: attempt + 1 }, 'Privy swap failed')
+      return null
     }
 
     loggers.flywheel.error({ route, walletAddress, maxRetries }, 'Privy swap failed after all retries')
