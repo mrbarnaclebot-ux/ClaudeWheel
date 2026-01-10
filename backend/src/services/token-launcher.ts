@@ -7,6 +7,7 @@ import {
   Keypair,
   PublicKey,
   VersionedTransaction,
+  Connection,
 } from '@solana/web3.js'
 import bs58 from 'bs58'
 import { env } from '../config/env'
@@ -20,17 +21,38 @@ import { BagsSDK, signAndSendTransaction } from '@bagsfm/bags-sdk'
 
 /**
  * Sign and send a VersionedTransaction using Privy delegated signing.
- * Mirrors the Bags SDK's signAndSendTransaction pattern - no blockhash modification.
- * The Bags API returns transactions with fresh blockhashes that should be valid.
+ *
+ * IMPORTANT: Refreshes blockhash before sending to handle Privy API latency.
+ * The Bags API returns transactions, but by the time Privy signs and broadcasts,
+ * the original blockhash may have expired. We update the blockhash in-place
+ * on the message object (safe because transaction is unsigned).
  */
 async function signAndSendWithPrivy(
+  connection: Connection,
   walletAddress: string,
   transaction: VersionedTransaction,
   description: string = 'transaction'
 ): Promise<string> {
   loggers.token.debug({ description }, `Signing ${description} with Privy`)
 
-  // Send directly to Privy without any modification - same as SDK approach
+  // Get fresh blockhash to prevent expiry during Privy API latency
+  // Using 'finalized' commitment for longer validity window
+  const { blockhash } = await connection.getLatestBlockhash('finalized')
+
+  // Update blockhash in-place on the message
+  // This is safe because the transaction is unsigned (signatures array is empty)
+  // We're modifying the existing message object, not creating a new one
+  const message = transaction.message as any
+  const oldBlockhash = message.recentBlockhash
+  message.recentBlockhash = blockhash
+
+  loggers.token.debug({
+    description,
+    oldBlockhash: oldBlockhash?.slice(0, 8) + '...',
+    newBlockhash: blockhash.slice(0, 8) + '...'
+  }, 'Updated blockhash')
+
+  // Send to Privy for signing and broadcasting
   const signature = await privyService.signAndSendSolanaTransaction(walletAddress, transaction)
 
   if (!signature) {
@@ -289,12 +311,13 @@ class TokenLauncherService {
       })
 
       // Sign and send config transactions using Privy
-      // Following SDK pattern: no blockhash modification, just sign and send
+      // Refresh blockhash before each to handle Privy API latency
       if (configResult.transactions && configResult.transactions.length > 0) {
         loggers.token.debug({ transactionCount: configResult.transactions.length }, 'Signing config transactions with Privy')
         for (let i = 0; i < configResult.transactions.length; i++) {
           const tx = configResult.transactions[i]
           const signature = await signAndSendWithPrivy(
+            connection,
             params.devWalletAddress,
             tx,
             `config transaction ${i + 1}/${configResult.transactions.length}`
@@ -312,6 +335,7 @@ class TokenLauncherService {
           for (let j = 0; j < bundle.length; j++) {
             const tx = bundle[j]
             const signature = await signAndSendWithPrivy(
+              connection,
               params.devWalletAddress,
               tx,
               `bundle ${i + 1} transaction ${j + 1}`
@@ -337,9 +361,10 @@ class TokenLauncherService {
       })
 
       // Step 4 & 5: Sign and broadcast using Privy
-      // Following SDK pattern: no blockhash modification
+      // Refresh blockhash to handle Privy API latency
       loggers.token.info('Signing and broadcasting launch transaction with Privy')
       const signature = await signAndSendWithPrivy(
+        connection,
         params.devWalletAddress,
         launchTransaction,
         'launch transaction'
