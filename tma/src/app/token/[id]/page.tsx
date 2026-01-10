@@ -126,7 +126,7 @@ export default function TokenDetailPage() {
             const res = await api.get(`/api/privy/launches/devbuy-balance/${tokenId}`, {
                 headers: { Authorization: `Bearer ${accessToken}` },
             });
-            return res.data.data as { tokenBalance: number; tokenSymbol: string };
+            return res.data.data as { devTokenBalance: number; opsSolBalance: number; tokenSymbol: string };
         },
         enabled: !!tokenId,
         refetchInterval: 30000, // Refresh every 30s
@@ -274,20 +274,20 @@ export default function TokenDetailPage() {
             >
                 <div className="bg-gray-800/50 rounded-xl p-3 text-center">
                     <p className="text-lg font-bold text-green-400">
-                        {devBuyBalance?.tokenBalance?.toLocaleString() || '0'}
+                        {devBuyBalance?.devTokenBalance?.toLocaleString() || '0'}
                     </p>
                     <p className="text-xs text-gray-400">Dev Supply</p>
                 </div>
                 <div className="bg-gray-800/50 rounded-xl p-3 text-center">
                     <p className="text-lg font-bold text-green-400">
-                        {token.balance?.ops_sol?.toFixed(3) || '0.000'}
+                        {devBuyBalance?.opsSolBalance?.toFixed(3) || '0.000'}
                     </p>
                     <p className="text-xs text-gray-400">Ops SOL</p>
                 </div>
             </motion.div>
 
             {/* Dev Buy Actions (only show if tokens in dev wallet) */}
-            {devBuyBalance && devBuyBalance.tokenBalance > 0 && (
+            {devBuyBalance && devBuyBalance.devTokenBalance > 0 && (
                 <motion.div
                     initial={{ opacity: 0, y: 10 }}
                     animate={{ opacity: 1, y: 0 }}
@@ -298,7 +298,7 @@ export default function TokenDetailPage() {
                         <div>
                             <p className="font-medium text-yellow-400">Dev Buy Tokens</p>
                             <p className="text-sm text-yellow-400/70">
-                                {devBuyBalance.tokenBalance.toLocaleString()} {devBuyBalance.tokenSymbol} in dev wallet
+                                {devBuyBalance.devTokenBalance.toLocaleString()} {devBuyBalance.tokenSymbol} in dev wallet
                             </p>
                         </div>
                         <button

@@ -746,6 +746,7 @@ router.get('/devbuy-balance/:tokenId', async (req: PrivyRequest, res: Response) 
       },
       include: {
         devWallet: true,
+        opsWallet: true,
       },
     })
 
@@ -764,21 +765,34 @@ router.get('/devbuy-balance/:tokenId', async (req: PrivyRequest, res: Response) 
       })
     }
 
-    // Get token balance
-    const { PublicKey } = await import('@solana/web3.js')
-    const { getTokenBalance } = await import('../config/solana')
+    // Get token balance and SOL balances
+    const { PublicKey, LAMPORTS_PER_SOL } = await import('@solana/web3.js')
+    const { getTokenBalance, getConnection } = await import('../config/solana')
 
     const devPubkey = new PublicKey(devWalletAddress)
     const tokenMintPubkey = new PublicKey(token.tokenMintAddress)
+
+    // Get dev wallet token balance
     const tokenBalance = await getTokenBalance(devPubkey, tokenMintPubkey)
+
+    // Get ops wallet SOL balance
+    let opsSolBalance = 0
+    if (token.opsWallet?.walletAddress) {
+      const opsPubkey = new PublicKey(token.opsWallet.walletAddress)
+      const connection = getConnection()
+      const opsLamports = await connection.getBalance(opsPubkey)
+      opsSolBalance = opsLamports / LAMPORTS_PER_SOL
+    }
 
     return res.json({
       success: true,
       data: {
         tokenId,
         tokenSymbol: token.tokenSymbol,
-        balance: tokenBalance,
+        devTokenBalance: tokenBalance,
+        opsSolBalance,
         devWalletAddress,
+        opsWalletAddress: token.opsWallet?.walletAddress,
       },
     })
   } catch (error) {
