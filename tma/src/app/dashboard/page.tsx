@@ -14,6 +14,7 @@ interface Token {
     token_name: string;
     token_symbol: string;
     token_image?: string;
+    token_source?: 'launched' | 'registered' | 'mm_only';
     config?: {
         flywheel_active: boolean;
     };
@@ -48,20 +49,33 @@ export default function DashboardPage() {
         hapticFeedback('light');
     };
 
+    const getSourceBadge = (source?: string) => {
+        switch (source) {
+            case 'launched':
+                return { label: 'Launched', class: 'badge-success' };
+            case 'registered':
+                return { label: 'Registered', class: 'badge-accent' };
+            case 'mm_only':
+                return { label: 'MM Only', class: 'badge-warning' };
+            default:
+                return null;
+        }
+    };
+
     return (
-        <div className="min-h-screen p-4">
+        <div className="min-h-screen bg-void p-4">
             {/* Header */}
             <div className="flex items-center justify-between mb-6">
                 <div>
-                    <h1 className="text-xl font-bold">ClaudeWheel</h1>
-                    <p className="text-sm text-gray-400">
+                    <h1 className="text-xl font-bold text-text-primary wood-text">ClaudeWheel</h1>
+                    <p className="text-sm text-text-muted">
                         Hey, {telegramUser?.firstName || 'there'}!
                     </p>
                 </div>
                 <Link
                     href="/settings"
                     onClick={handleLinkClick}
-                    className="w-10 h-10 bg-gray-800 rounded-full flex items-center justify-center"
+                    className="w-10 h-10 bg-bg-card border border-border-subtle rounded-full flex items-center justify-center hover:border-border-accent transition-colors"
                 >
                     ⚙️
                 </Link>
@@ -72,22 +86,22 @@ export default function DashboardPage() {
                 <motion.div
                     initial={{ opacity: 0, y: 10 }}
                     animate={{ opacity: 1, y: 0 }}
-                    className="bg-gray-800/50 rounded-xl p-4 mb-6"
+                    className="bg-bg-card border border-border-subtle rounded-xl p-4 mb-6"
                 >
-                    <h2 className="text-sm font-medium text-gray-400 mb-3">Your Wallets</h2>
+                    <h2 className="text-sm font-medium text-text-muted mb-3">Your Wallets</h2>
                     <div className="space-y-2">
                         {devWallet && (
                             <div className="flex items-center justify-between">
-                                <span className="text-xs text-gray-500">Dev Wallet</span>
-                                <p className="text-green-400 font-mono text-xs truncate max-w-[200px]">
+                                <span className="text-xs text-text-muted">Dev Wallet</span>
+                                <p className="text-accent-primary font-mono text-xs truncate max-w-[200px]">
                                     {devWallet.address}
                                 </p>
                             </div>
                         )}
                         {opsWallet && (
                             <div className="flex items-center justify-between">
-                                <span className="text-xs text-gray-500">Ops Wallet</span>
-                                <p className="text-green-400 font-mono text-xs truncate max-w-[200px]">
+                                <span className="text-xs text-text-muted">Ops Wallet</span>
+                                <p className="text-accent-primary font-mono text-xs truncate max-w-[200px]">
                                     {opsWallet.address}
                                 </p>
                             </div>
@@ -101,7 +115,7 @@ export default function DashboardPage() {
                 <Link
                     href="/launch"
                     onClick={handleLinkClick}
-                    className="bg-green-600 hover:bg-green-500 rounded-xl p-4 text-center transition-colors"
+                    className="bg-accent-primary hover:bg-accent-secondary text-bg-void rounded-xl p-4 text-center transition-all btn-press hover:shadow-wood-glow"
                 >
                     <div className="text-2xl mb-1">🚀</div>
                     <div className="font-medium text-sm">Launch</div>
@@ -109,17 +123,17 @@ export default function DashboardPage() {
                 <Link
                     href="/mm"
                     onClick={handleLinkClick}
-                    className="bg-blue-600 hover:bg-blue-500 rounded-xl p-4 text-center transition-colors"
+                    className="bg-accent-cyan hover:bg-accent-cyan/80 text-bg-void rounded-xl p-4 text-center transition-all btn-press"
                 >
                     <div className="text-2xl mb-1">📈</div>
                     <div className="font-medium text-sm">MM Mode</div>
                 </Link>
                 <div
-                    className="bg-gray-800/50 rounded-xl p-4 text-center opacity-50 cursor-not-allowed"
+                    className="bg-bg-card border border-border-subtle rounded-xl p-4 text-center opacity-50 cursor-not-allowed"
                 >
                     <div className="text-2xl mb-1">📝</div>
-                    <div className="font-medium text-sm text-gray-400">Register</div>
-                    <div className="text-xs text-gray-500">Soon</div>
+                    <div className="font-medium text-sm text-text-muted">Register</div>
+                    <div className="text-xs text-text-muted">Soon</div>
                 </div>
             </div>
 
@@ -131,44 +145,45 @@ export default function DashboardPage() {
                     transition={{ delay: 0.1 }}
                     className="grid grid-cols-3 gap-3 mb-6"
                 >
-                    <div className="bg-gray-800/50 rounded-xl p-3 text-center">
-                        <p className="text-2xl font-bold text-green-400">{tokens.length}</p>
-                        <p className="text-xs text-gray-400">Tokens</p>
+                    <div className="bg-bg-card border border-border-subtle rounded-xl p-3 text-center">
+                        <p className="text-2xl font-bold text-accent-primary font-mono">{tokens.length}</p>
+                        <p className="text-xs text-text-muted">Tokens</p>
                     </div>
-                    <div className="bg-gray-800/50 rounded-xl p-3 text-center">
-                        <p className="text-2xl font-bold text-green-400">
+                    <div className="bg-bg-card border border-border-subtle rounded-xl p-3 text-center">
+                        <p className="text-2xl font-bold text-success font-mono">
                             {tokens.filter(t => t.config?.flywheel_active).length}
                         </p>
-                        <p className="text-xs text-gray-400">Active</p>
+                        <p className="text-xs text-text-muted">Active</p>
                     </div>
-                    <div className="bg-gray-800/50 rounded-xl p-3 text-center">
-                        <p className="text-2xl font-bold text-green-400">
+                    <div className="bg-bg-card border border-border-subtle rounded-xl p-3 text-center">
+                        <p className="text-2xl font-bold text-text-secondary font-mono">
                             {tokens.filter(t => !t.config?.flywheel_active).length}
                         </p>
-                        <p className="text-xs text-gray-400">Paused</p>
+                        <p className="text-xs text-text-muted">Paused</p>
                     </div>
                 </motion.div>
             )}
 
             {/* Tokens List */}
             <div className="space-y-3">
-                <h2 className="text-lg font-medium">Your Tokens</h2>
+                <h2 className="text-lg font-medium text-text-primary">Your Tokens</h2>
 
                 {isLoading ? (
-                    <div className="bg-gray-800/50 rounded-xl p-8 text-center">
-                        <div className="animate-spin w-6 h-6 border-2 border-green-500 border-t-transparent rounded-full mx-auto" />
+                    <div className="bg-bg-card border border-border-subtle rounded-xl p-8 text-center">
+                        <div className="animate-spin w-6 h-6 border-2 border-accent-primary border-t-transparent rounded-full mx-auto" />
                     </div>
                 ) : tokens?.length === 0 ? (
                     <motion.div
                         initial={{ opacity: 0 }}
                         animate={{ opacity: 1 }}
-                        className="bg-gray-800/50 rounded-xl p-8 text-center"
+                        className="bg-bg-card border border-border-subtle rounded-xl p-8 text-center"
                     >
-                        <p className="text-gray-400 mb-4">No tokens yet</p>
+                        <div className="text-3xl mb-3">🎡</div>
+                        <p className="text-text-muted mb-4">No tokens yet</p>
                         <Link
                             href="/launch"
                             onClick={handleLinkClick}
-                            className="text-green-400 hover:text-green-300"
+                            className="text-accent-primary hover:text-accent-secondary transition-colors"
                         >
                             Launch your first token →
                         </Link>
@@ -185,6 +200,7 @@ export default function DashboardPage() {
                                 token={token}
                                 index={index}
                                 onLinkClick={handleLinkClick}
+                                sourceBadge={getSourceBadge(token.token_source)}
                             />
                         ))}
                     </motion.div>
@@ -197,11 +213,13 @@ export default function DashboardPage() {
 function TokenCard({
     token,
     index,
-    onLinkClick
+    onLinkClick,
+    sourceBadge
 }: {
     token: Token;
     index: number;
     onLinkClick: () => void;
+    sourceBadge: { label: string; class: string } | null;
 }) {
     return (
         <motion.div
@@ -212,7 +230,7 @@ function TokenCard({
             <Link
                 href={`/token/${token.id}`}
                 onClick={onLinkClick}
-                className="block bg-gray-800/50 rounded-xl p-4 hover:bg-gray-800/70 transition-colors"
+                className="block bg-bg-card border border-border-subtle rounded-xl p-4 hover:border-border-accent hover:bg-bg-card-hover transition-all"
             >
                 <div className="flex items-center justify-between">
                     <div className="flex items-center gap-3">
@@ -220,27 +238,40 @@ function TokenCard({
                             <img
                                 src={token.token_image}
                                 alt={token.token_symbol}
-                                className="w-10 h-10 rounded-full object-cover"
+                                className="w-10 h-10 rounded-full object-cover border-2 border-border-accent"
                             />
                         ) : (
-                            <div className="w-10 h-10 bg-gray-700 rounded-full flex items-center justify-center text-lg font-bold">
+                            <div className="w-10 h-10 bg-bg-secondary border-2 border-border-accent rounded-full flex items-center justify-center text-lg font-bold text-accent-primary">
                                 {token.token_symbol[0]}
                             </div>
                         )}
                         <div>
-                            <div className="font-medium">{token.token_symbol}</div>
-                            <div className="text-sm text-gray-400">
+                            <div className="font-medium text-text-primary flex items-center gap-2">
+                                {token.token_symbol}
+                                {sourceBadge && (
+                                    <span className={`badge text-[10px] py-0 px-1.5 ${sourceBadge.class}`}>
+                                        {sourceBadge.label}
+                                    </span>
+                                )}
+                            </div>
+                            <div className="text-sm flex items-center gap-1.5">
                                 {token.config?.flywheel_active ? (
-                                    <span className="text-green-400">● Active</span>
+                                    <>
+                                        <span className="status-dot active" />
+                                        <span className="text-success">Active</span>
+                                    </>
                                 ) : (
-                                    <span className="text-gray-500">○ Paused</span>
+                                    <>
+                                        <span className="w-2 h-2 rounded-full bg-text-muted" />
+                                        <span className="text-text-muted">Paused</span>
+                                    </>
                                 )}
                             </div>
                         </div>
                     </div>
                     <div className="text-right">
-                        <div className="text-sm text-gray-400">Balance</div>
-                        <div className="font-mono text-sm">
+                        <div className="text-xs text-text-muted">Balance</div>
+                        <div className="font-mono text-sm text-text-primary">
                             {token.balance?.dev_sol !== undefined
                                 ? `${token.balance.dev_sol.toFixed(3)} SOL`
                                 : '—'

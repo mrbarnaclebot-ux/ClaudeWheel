@@ -1,22 +1,89 @@
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Playfair+Display:wght@400;500;600;700&family=DM+Sans:wght@400;500;600;700&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
+/* ═══════════════════════════════════════════════════════════════════════════
+   CLAUDE WHEEL TMA - DESIGN SYSTEM
+   Matching main UI rustic wooden wheel aesthetic
+   ═══════════════════════════════════════════════════════════════════════════ */
+
 :root {
-  /* Telegram theme variables fallbacks */
-  --tg-theme-bg-color: #1c1c1e;
-  --tg-theme-text-color: #ffffff;
-  --tg-theme-hint-color: #8e8e93;
-  --tg-theme-link-color: #007aff;
-  --tg-theme-button-color: #007aff;
-  --tg-theme-button-text-color: #ffffff;
-  --tg-theme-secondary-bg-color: #2c2c2e;
+  /* ─── Backgrounds (Warm Dark Theme - matching main UI exactly) ─── */
+  --bg-void: #191814;
+  --bg-primary: #1f1e19;
+  --bg-secondary: #252420;
+  --bg-card: #2a2822;
+  --bg-card-hover: #35332b;
+  --bg-gradient: linear-gradient(180deg, #1f1e19 0%, #191814 100%);
+
+  /* ─── Wood Color Palette ─── */
+  --wood-dark: #654321;
+  --wood-medium: #8B4513;
+  --wood-light: #CD853F;
+  --wood-accent: #DEB887;
+  --wood-highlight: #F4A460;
+  --wood-glow: rgba(205, 133, 63, 0.4);
+  --wood-glow-strong: rgba(222, 184, 135, 0.6);
+
+  /* ─── Primary Accent Colors ─── */
+  --accent-primary: #CD853F;
+  --accent-secondary: #8B4513;
+  --accent-tertiary: #A0522D;
+  --accent-glow: rgba(205, 133, 63, 0.4);
+  --accent-glow-strong: rgba(205, 133, 63, 0.6);
+
+  /* ─── Copper/Bronze Accent ─── */
+  --copper: #B87333;
+  --copper-light: #DA8A67;
+  --bronze: #CD7F32;
+
+  /* ─── Status Colors ─── */
+  --success: #5D8C3E;
+  --success-glow: rgba(93, 140, 62, 0.3);
+  --error: #A63D2F;
+  --error-glow: rgba(166, 61, 47, 0.3);
+  --warning: #C9A227;
+
+  /* ─── Text Hierarchy (Warm Cream) ─── */
+  --text-primary: #F5F0E6;
+  --text-secondary: #C9C2B5;
+  --text-muted: #7A756B;
+
+  /* ─── Borders ─── */
+  --border-subtle: rgba(205, 133, 63, 0.12);
+  --border-accent: rgba(205, 133, 63, 0.35);
+  --border-glow: rgba(205, 133, 63, 0.5);
+
+  /* ─── Typography ─── */
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+  --font-display: 'Playfair Display', serif;
+  --font-body: 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+
+  /* ─── Telegram Theme Fallbacks ─── */
+  --tg-theme-bg-color: #191814;
+  --tg-theme-text-color: #F5F0E6;
+  --tg-theme-hint-color: #7A756B;
+  --tg-theme-link-color: #CD853F;
+  --tg-theme-button-color: #CD853F;
+  --tg-theme-button-text-color: #191814;
+  --tg-theme-secondary-bg-color: #252420;
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   BASE STYLES
+   ═══════════════════════════════════════════════════════════════════════════ */
 
 * {
   box-sizing: border-box;
   padding: 0;
   margin: 0;
+  -webkit-tap-highlight-color: transparent;
+}
+
+html {
+  scroll-behavior: smooth;
 }
 
 html,
@@ -28,22 +95,23 @@ body {
 }
 
 body {
-  background-color: var(--tg-theme-bg-color);
-  color: var(--tg-theme-text-color);
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  font-family: var(--font-body);
+  background: var(--bg-void);
+  color: var(--text-primary);
+  line-height: 1.6;
+  min-height: 100vh;
 }
 
-/* Smooth scrolling */
-html {
-  scroll-behavior: smooth;
+/* Selection */
+::selection {
+  background: var(--accent-primary);
+  color: var(--bg-void);
 }
 
-/* Remove tap highlight on mobile */
-* {
-  -webkit-tap-highlight-color: transparent;
-}
+/* ═══════════════════════════════════════════════════════════════════════════
+   SCROLLBAR
+   ═══════════════════════════════════════════════════════════════════════════ */
 
-/* Custom scrollbar for webkit browsers */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
@@ -54,15 +122,37 @@ html {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.2);
+  background: var(--accent-tertiary);
   border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.3);
+  background: var(--accent-primary);
 }
 
-/* Utility classes */
+/* ═══════════════════════════════════════════════════════════════════════════
+   TYPOGRAPHY
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--font-display);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--text-primary);
+}
+
+.font-mono {
+  font-family: var(--font-mono);
+}
+
+.font-display {
+  font-family: var(--font-display);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   UTILITY CLASSES
+   ═══════════════════════════════════════════════════════════════════════════ */
+
 .safe-area-inset-top {
   padding-top: env(safe-area-inset-top);
 }
@@ -71,7 +161,330 @@ html {
   padding-bottom: env(safe-area-inset-bottom);
 }
 
-/* Animation utilities */
+/* ═══════════════════════════════════════════════════════════════════════════
+   CARD STYLES
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  position: relative;
+  overflow: hidden;
+  transition: all 0.3s ease;
+}
+
+.card:hover {
+  background: var(--bg-card-hover);
+  border-color: var(--border-accent);
+}
+
+.card-glow {
+  background: var(--bg-card);
+  border: 1px solid var(--border-accent);
+  border-radius: 12px;
+  position: relative;
+  overflow: hidden;
+  box-shadow: 0 0 20px var(--accent-glow);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   BUTTONS
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.btn {
+  font-family: var(--font-mono);
+  font-size: 0.875rem;
+  font-weight: 500;
+  padding: 0.5rem 1rem;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+}
+
+.btn-primary {
+  background: var(--accent-primary);
+  color: var(--bg-void);
+  border-color: var(--accent-primary);
+}
+
+.btn-primary:hover {
+  background: var(--accent-secondary);
+  box-shadow: 0 0 20px var(--accent-glow);
+}
+
+.btn-primary:active {
+  transform: scale(0.98);
+}
+
+.btn-outline {
+  background: transparent;
+  color: var(--accent-primary);
+  border-color: var(--accent-primary);
+}
+
+.btn-outline:hover {
+  background: rgba(205, 133, 63, 0.1);
+  box-shadow: 0 0 15px var(--accent-glow);
+}
+
+.btn-press:active {
+  transform: scale(0.98);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   GLOW EFFECTS
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.glow-accent {
+  box-shadow:
+    0 0 20px var(--accent-glow),
+    0 0 40px var(--accent-glow);
+}
+
+.glow-accent-strong {
+  box-shadow:
+    0 0 30px var(--accent-glow-strong),
+    0 0 60px var(--accent-glow);
+}
+
+.glow-success {
+  box-shadow:
+    0 0 20px var(--success-glow),
+    0 0 40px var(--success-glow);
+}
+
+.glow-error {
+  box-shadow:
+    0 0 20px var(--error-glow),
+    0 0 40px var(--error-glow);
+}
+
+.text-glow {
+  text-shadow: 0 0 10px var(--accent-glow), 0 0 20px var(--accent-glow);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   STATUS INDICATORS
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  position: relative;
+}
+
+.status-dot.active {
+  background: var(--success);
+  box-shadow: 0 0 10px var(--success-glow);
+}
+
+.status-dot.active::before {
+  content: '';
+  position: absolute;
+  inset: -3px;
+  border-radius: 50%;
+  background: var(--success);
+  opacity: 0.3;
+  animation: pulse-ring 2s ease-out infinite;
+}
+
+@keyframes pulse-ring {
+  0% { transform: scale(1); opacity: 0.3; }
+  100% { transform: scale(2); opacity: 0; }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   BADGE STYLES
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.badge {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.badge-success {
+  background: rgba(93, 140, 62, 0.15);
+  color: var(--success);
+  border: 1px solid rgba(93, 140, 62, 0.3);
+}
+
+.badge-accent {
+  background: rgba(205, 133, 63, 0.15);
+  color: var(--accent-primary);
+  border: 1px solid var(--border-accent);
+}
+
+.badge-warning {
+  background: rgba(201, 162, 39, 0.15);
+  color: var(--warning);
+  border: 1px solid rgba(201, 162, 39, 0.3);
+}
+
+.badge-error {
+  background: rgba(166, 61, 47, 0.15);
+  color: var(--error);
+  border: 1px solid rgba(166, 61, 47, 0.3);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   TRANSACTION FEED STYLES
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.feed-item {
+  padding: 0.75rem;
+  border-bottom: 1px solid var(--border-subtle);
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  animation: slide-in 0.3s ease-out;
+  transition: background 0.2s ease;
+}
+
+.feed-item:hover {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+@keyframes slide-in {
+  from {
+    opacity: 0;
+    transform: translateX(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.feed-type.buy {
+  color: var(--success);
+}
+
+.feed-type.sell {
+  color: var(--error);
+}
+
+.feed-type.transfer {
+  color: var(--accent-cyan);
+}
+
+.feed-type.claim {
+  color: var(--accent-primary);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   WOOD THEMED COMPONENTS
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.wood-card {
+  background: linear-gradient(
+    135deg,
+    var(--bg-card) 0%,
+    rgba(101, 67, 33, 0.1) 50%,
+    var(--bg-card) 100%
+  );
+  border: 1px solid var(--border-accent);
+  border-radius: 12px;
+  position: relative;
+  overflow: hidden;
+  transition: all 0.3s ease;
+}
+
+.wood-card:hover {
+  border-color: var(--wood-light);
+  box-shadow:
+    0 4px 20px rgba(0, 0, 0, 0.3),
+    0 0 40px rgba(205, 133, 63, 0.1);
+}
+
+.wood-btn {
+  font-family: var(--font-mono);
+  font-size: 0.875rem;
+  font-weight: 600;
+  padding: 0.625rem 1.25rem;
+  border-radius: 8px;
+  border: 1px solid var(--wood-dark);
+  background: linear-gradient(135deg, var(--wood-dark) 0%, var(--wood-medium) 100%);
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+}
+
+.wood-btn:hover {
+  background: linear-gradient(135deg, var(--wood-medium) 0%, var(--wood-light) 100%);
+  border-color: var(--wood-light);
+  box-shadow: 0 4px 15px rgba(139, 69, 19, 0.4);
+}
+
+.wood-btn:active {
+  transform: scale(0.98);
+}
+
+/* Rustic divider */
+.rustic-divider {
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    var(--wood-dark) 20%,
+    var(--wood-light) 50%,
+    var(--wood-dark) 80%,
+    transparent 100%
+  );
+}
+
+/* Lantern glow effect */
+.lantern-glow {
+  animation: lantern-flicker 3s ease-in-out infinite;
+}
+
+@keyframes lantern-flicker {
+  0%, 100% {
+    box-shadow:
+      0 0 10px rgba(205, 133, 63, 0.4),
+      0 0 20px rgba(205, 133, 63, 0.2);
+    opacity: 1;
+  }
+  50% {
+    box-shadow:
+      0 0 15px rgba(205, 133, 63, 0.6),
+      0 0 30px rgba(205, 133, 63, 0.3);
+    opacity: 0.95;
+  }
+}
+
+/* Wood text gradient */
+.wood-text {
+  background: linear-gradient(
+    135deg,
+    var(--wood-accent) 0%,
+    var(--wood-light) 50%,
+    var(--wood-highlight) 100%
+  );
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   ANIMATIONS
+   ═══════════════════════════════════════════════════════════════════════════ */
+
 @keyframes spin {
   from {
     transform: rotate(0deg);
@@ -85,7 +498,66 @@ html {
   animation: spin 1s linear infinite;
 }
 
-/* Button press effect */
-.btn-press:active {
-  transform: scale(0.98);
+@keyframes pulse-glow {
+  0%, 100% {
+    box-shadow: 0 0 20px var(--accent-glow);
+    opacity: 1;
+  }
+  50% {
+    box-shadow: 0 0 40px var(--accent-glow-strong);
+    opacity: 0.9;
+  }
+}
+
+.animate-pulse-glow {
+  animation: pulse-glow 2s ease-in-out infinite;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   RESPONSIVE
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+@media (max-width: 768px) {
+  h1 {
+    font-size: 1.5rem;
+  }
+
+  h2 {
+    font-size: 1.25rem;
+  }
+
+  .card {
+    border-radius: 10px;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   GRADIENT TEXT
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.gradient-text {
+  background: linear-gradient(135deg, var(--accent-primary) 0%, var(--wood-accent) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   COUNTER ANIMATION (for stats)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.counter {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   TRUNCATE UTILITIES
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.truncate-address {
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }

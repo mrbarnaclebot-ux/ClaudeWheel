@@ -1,16 +1,16 @@
-@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Outfit:wght@400;500;600;700;800&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Playfair+Display:wght@400;500;600;700;800;900&family=DM+Sans:wght@400;500;600;700&display=swap');
 
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   CLAUDE CODE FLYWHEEL - DESIGN SYSTEM
-   Mission Control for Autonomous Crypto
+   CLAUDE WHEEL - DESIGN SYSTEM
+   Rustic Wooden Wheel Aesthetic
    ═══════════════════════════════════════════════════════════════════════════ */
 
 :root {
-  /* ─── Backgrounds (Warm Dark Theme) ─── */
+  /* ─── Backgrounds (Warm Dark Theme - Original) ─── */
   --bg-void: #191814;
   --bg-primary: #1f1e19;
   --bg-secondary: #252420;
@@ -18,39 +18,50 @@
   --bg-card-hover: #35332b;
   --bg-gradient: linear-gradient(180deg, #1f1e19 0%, #191814 100%);
 
-  /* ─── WHEEL Primary Accent (Warm Orange) ─── */
-  --accent-primary: #f0a381;
-  --accent-secondary: #7b462d;
-  --accent-tertiary: #e16939;
-  --accent-glow: rgba(240, 163, 129, 0.4);
-  --accent-glow-strong: rgba(240, 163, 129, 0.6);
+  /* ─── Wood Color Palette ─── */
+  --wood-dark: #654321;
+  --wood-medium: #8B4513;
+  --wood-light: #CD853F;
+  --wood-accent: #DEB887;
+  --wood-highlight: #F4A460;
+  --wood-glow: rgba(205, 133, 63, 0.4);
+  --wood-glow-strong: rgba(222, 184, 135, 0.6);
 
-  /* ─── Cyan Contrast ─── */
-  --accent-cyan: #4ecdc4;
-  --accent-cyan-glow: rgba(78, 205, 196, 0.3);
+  /* ─── Legacy Accent (for compatibility) ─── */
+  --accent-primary: #CD853F;
+  --accent-secondary: #8B4513;
+  --accent-tertiary: #A0522D;
+  --accent-glow: rgba(205, 133, 63, 0.4);
+  --accent-glow-strong: rgba(205, 133, 63, 0.6);
+
+  /* ─── Copper/Bronze Accent ─── */
+  --copper: #B87333;
+  --copper-light: #DA8A67;
+  --bronze: #CD7F32;
 
   /* ─── Status Colors ─── */
-  --success: #3fb950;
-  --success-glow: rgba(63, 185, 80, 0.3);
-  --error: #f85149;
-  --warning: #d29922;
+  --success: #5D8C3E;
+  --success-glow: rgba(93, 140, 62, 0.3);
+  --error: #A63D2F;
+  --warning: #C9A227;
 
-  /* ─── Text Hierarchy (Warm) ─── */
-  --text-primary: #edece6;
-  --text-secondary: #a8a79f;
-  --text-muted: #6b6a62;
+  /* ─── Text Hierarchy (Warm Cream) ─── */
+  --text-primary: #F5F0E6;
+  --text-secondary: #C9C2B5;
+  --text-muted: #7A756B;
 
   /* ─── Borders ─── */
-  --border-subtle: rgba(237, 236, 230, 0.08);
-  --border-accent: rgba(240, 163, 129, 0.3);
-  --border-glow: rgba(240, 163, 129, 0.5);
+  --border-subtle: rgba(205, 133, 63, 0.12);
+  --border-accent: rgba(205, 133, 63, 0.35);
+  --border-glow: rgba(205, 133, 63, 0.5);
 
   /* ─── Typography ─── */
   --font-mono: 'JetBrains Mono', monospace;
-  --font-display: 'Outfit', sans-serif;
+  --font-display: 'Playfair Display', serif;
+  --font-body: 'DM Sans', sans-serif;
 
-  /* ─── Scan Lines ─── */
-  --scanline: rgba(237, 236, 230, 0.015);
+  /* ─── Textures ─── */
+  --grain-opacity: 0.04;
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -650,4 +661,308 @@ h3 {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   WOODEN WHEEL THEME COMPONENTS
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* Wood Card - Rustic card with wood grain effect */
+.wood-card {
+  background: linear-gradient(
+    135deg,
+    var(--bg-card) 0%,
+    rgba(101, 67, 33, 0.1) 50%,
+    var(--bg-card) 100%
+  );
+  border: 1px solid var(--border-accent);
+  border-radius: 12px;
+  position: relative;
+  overflow: hidden;
+  transition: all 0.3s ease;
+}
+
+.wood-card::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(90deg, transparent 49%, rgba(205, 133, 63, 0.03) 50%, transparent 51%),
+    linear-gradient(0deg, transparent 49%, rgba(205, 133, 63, 0.02) 50%, transparent 51%);
+  background-size: 20px 20px;
+  pointer-events: none;
+}
+
+.wood-card:hover {
+  border-color: var(--wood-light);
+  box-shadow:
+    0 4px 20px rgba(0, 0, 0, 0.3),
+    0 0 40px rgba(205, 133, 63, 0.1);
+  transform: translateY(-2px);
+}
+
+/* Wood grain texture overlay */
+.wood-grain {
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 400 400' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.015' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E");
+  opacity: 0.08;
+}
+
+/* Wood-themed button */
+.wood-btn {
+  font-family: var(--font-mono);
+  font-size: 0.875rem;
+  font-weight: 600;
+  padding: 0.625rem 1.25rem;
+  border-radius: 8px;
+  border: 1px solid var(--wood-dark);
+  background: linear-gradient(135deg, var(--wood-dark) 0%, var(--wood-medium) 100%);
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+}
+
+.wood-btn:hover {
+  background: linear-gradient(135deg, var(--wood-medium) 0%, var(--wood-light) 100%);
+  border-color: var(--wood-light);
+  box-shadow: 0 4px 15px rgba(139, 69, 19, 0.4);
+  transform: translateY(-1px);
+}
+
+.wood-btn:active {
+  transform: translateY(0);
+}
+
+/* Wood tab button */
+.wood-tab {
+  position: relative;
+  overflow: hidden;
+}
+
+.wood-tab::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  width: 0;
+  height: 2px;
+  background: var(--wood-accent);
+  transition: all 0.3s ease;
+  transform: translateX(-50%);
+}
+
+.wood-tab:hover::after {
+  width: 80%;
+}
+
+/* Wheel hero section */
+.wheel-hero {
+  position: relative;
+  background: radial-gradient(
+    ellipse at center,
+    rgba(139, 69, 19, 0.1) 0%,
+    transparent 60%
+  );
+}
+
+/* Copper/Bronze accents */
+.copper-accent {
+  color: var(--copper);
+}
+
+.copper-glow {
+  box-shadow:
+    0 0 20px rgba(184, 115, 51, 0.3),
+    0 0 40px rgba(184, 115, 51, 0.2);
+}
+
+/* Rustic divider */
+.rustic-divider {
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    var(--wood-dark) 20%,
+    var(--wood-light) 50%,
+    var(--wood-dark) 80%,
+    transparent 100%
+  );
+}
+
+/* Wood text gradient */
+.wood-text {
+  background: linear-gradient(
+    135deg,
+    var(--wood-accent) 0%,
+    var(--wood-light) 50%,
+    var(--wood-highlight) 100%
+  );
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* Lantern glow effect (for active indicators) */
+.lantern-glow {
+  animation: lantern-flicker 3s ease-in-out infinite;
+}
+
+@keyframes lantern-flicker {
+  0%, 100% {
+    box-shadow:
+      0 0 10px rgba(205, 133, 63, 0.4),
+      0 0 20px rgba(205, 133, 63, 0.2);
+    opacity: 1;
+  }
+  50% {
+    box-shadow:
+      0 0 15px rgba(205, 133, 63, 0.6),
+      0 0 30px rgba(205, 133, 63, 0.3);
+    opacity: 0.95;
+  }
+}
+
+/* Aged paper texture for cards */
+.aged-paper {
+  background:
+    linear-gradient(
+      to bottom,
+      rgba(245, 240, 230, 0.02) 0%,
+      rgba(245, 240, 230, 0.01) 100%
+    ),
+    var(--bg-card);
+}
+
+/* Rope border effect */
+.rope-border {
+  border: 2px dashed var(--wood-dark);
+  border-radius: 8px;
+}
+
+/* Wheel spinning animation for loading states */
+.wheel-spin {
+  animation: wheel-rotate 2s linear infinite;
+}
+
+@keyframes wheel-rotate {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* Forge glow (for hot/active states) */
+.forge-glow {
+  box-shadow:
+    0 0 20px rgba(166, 61, 47, 0.4),
+    0 0 40px rgba(166, 61, 47, 0.2),
+    inset 0 0 20px rgba(166, 61, 47, 0.1);
+}
+
+/* Patina effect for metallic elements */
+.patina {
+  background: linear-gradient(
+    135deg,
+    var(--copper) 0%,
+    #6B8E6B 50%,
+    var(--copper) 100%
+  );
+}
+
+/* Section header with decorative elements */
+.section-header {
+  position: relative;
+  display: inline-block;
+}
+
+.section-header::before,
+.section-header::after {
+  content: '◆';
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--wood-dark);
+  font-size: 0.75rem;
+}
+
+.section-header::before {
+  left: -1.5rem;
+}
+
+.section-header::after {
+  right: -1.5rem;
+}
+
+/* Vintage badge */
+.vintage-badge {
+  font-family: var(--font-display);
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 0.25rem 0.75rem;
+  border-radius: 999px;
+  background: linear-gradient(135deg, var(--wood-dark) 0%, var(--wood-medium) 100%);
+  color: var(--wood-accent);
+  border: 1px solid var(--wood-light);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+
+/* Stats container with carved look */
+.carved-stats {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-accent);
+  border-radius: 12px;
+  box-shadow:
+    inset 0 2px 4px rgba(0, 0, 0, 0.3),
+    inset 0 -1px 2px rgba(205, 133, 63, 0.1);
+}
+
+/* Craftsman tooltip */
+.craftsman-tooltip {
+  background: var(--bg-card);
+  border: 1px solid var(--wood-dark);
+  border-radius: 6px;
+  padding: 0.5rem 0.75rem;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+
+/* Override existing card styles for wood theme */
+.card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  position: relative;
+  overflow: hidden;
+  transition: all 0.3s ease;
+}
+
+.card:hover {
+  background: var(--bg-card-hover);
+  border-color: var(--border-accent);
+  transform: translateY(-2px);
+  box-shadow: 0 8px 25px rgba(0, 0, 0, 0.3);
+}
+
+/* Updated glow effects for wood theme */
+.glow-accent {
+  box-shadow:
+    0 0 20px var(--wood-glow),
+    0 0 40px var(--wood-glow),
+    inset 0 0 20px rgba(205, 133, 63, 0.05);
+}
+
+.glow-accent-strong {
+  box-shadow:
+    0 0 30px var(--wood-glow-strong),
+    0 0 60px var(--wood-glow),
+    0 0 100px rgba(205, 133, 63, 0.2),
+    inset 0 0 30px rgba(205, 133, 63, 0.1);
+}
+
+.text-glow {
+  text-shadow: 0 0 10px var(--wood-glow), 0 0 20px var(--wood-glow);
 }

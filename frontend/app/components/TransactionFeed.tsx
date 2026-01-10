@@ -59,21 +59,29 @@ export default function TransactionFeed({ transactions }: TransactionFeedProps) 
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.5, delay: 0.3 }}
-      className="card-glow bg-bg-card overflow-hidden h-full flex flex-col"
+      className="card overflow-hidden h-full flex flex-col"
     >
       {/* Header */}
-      <div className="p-5 border-b border-border-subtle flex items-center justify-between flex-shrink-0">
-        <div className="flex items-center gap-2">
-          <motion.span
-            className="text-accent-primary text-lg"
-            animate={{ opacity: [1, 0.5, 1] }}
-            transition={{ duration: 1.5, repeat: Infinity }}
-          >
-            ▶
-          </motion.span>
-          <h3 className="text-sm font-mono font-semibold text-text-primary uppercase">
-            Live Feed
-          </h3>
+      <div className="p-5 border-b border-border-subtle flex items-center justify-between flex-shrink-0 bg-bg-secondary/50">
+        <div className="flex items-center gap-3">
+          <div className="w-8 h-8 rounded-lg bg-accent-primary/10 flex items-center justify-center">
+            <motion.svg
+              className="w-4 h-4 text-accent-primary"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+              animate={{ opacity: [1, 0.5, 1] }}
+              transition={{ duration: 1.5, repeat: Infinity }}
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+            </motion.svg>
+          </div>
+          <div>
+            <h3 className="text-sm font-display font-semibold text-accent-primary uppercase tracking-wide">
+              Live Feed
+            </h3>
+            <p className="text-xs font-mono text-text-muted">Real-time transactions</p>
+          </div>
         </div>
         <div className="flex items-center gap-2">
           <motion.span
@@ -81,12 +89,11 @@ export default function TransactionFeed({ transactions }: TransactionFeedProps) 
             animate={{ opacity: [1, 0.3, 1] }}
             transition={{ duration: 1, repeat: Infinity }}
           />
-          <span className="badge badge-success text-xs">STREAMING</span>
+          <span className="px-2 py-1 rounded-md bg-success/15 text-success text-xs font-mono font-semibold uppercase">
+            Streaming
+          </span>
         </div>
       </div>
-
-      {/* Divider line */}
-      <div className="h-px bg-gradient-to-r from-transparent via-border-accent to-transparent" />
 
       {/* Transaction list */}
       <div
@@ -95,46 +102,66 @@ export default function TransactionFeed({ transactions }: TransactionFeedProps) 
         style={{ maxHeight: '350px' }}
       >
         <AnimatePresence mode="popLayout">
-          {transactions.map((tx, index) => {
-            const config = typeConfig[tx.type]
-            return (
-              <motion.div
-                key={tx.id}
-                initial={{ opacity: 0, x: -20, height: 0 }}
-                animate={{ opacity: 1, x: 0, height: 'auto' }}
-                exit={{ opacity: 0, x: 20, height: 0 }}
-                transition={{ duration: 0.3 }}
-                className="feed-item"
-              >
-                {/* Timestamp */}
-                <span className="feed-timestamp hidden md:block min-w-[70px]">
-                  [{formatTimestamp(tx.timestamp)}]
-                </span>
+          {transactions.length === 0 ? (
+            <div className="p-8 text-center">
+              <div className="w-12 h-12 mx-auto mb-3 rounded-full bg-bg-secondary flex items-center justify-center">
+                <svg className="w-6 h-6 text-text-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+                </svg>
+              </div>
+              <p className="text-sm font-mono text-text-muted">Waiting for transactions...</p>
+            </div>
+          ) : (
+            transactions.map((tx) => {
+              const config = typeConfig[tx.type]
+              return (
+                <motion.div
+                  key={tx.id}
+                  initial={{ opacity: 0, x: -20, height: 0 }}
+                  animate={{ opacity: 1, x: 0, height: 'auto' }}
+                  exit={{ opacity: 0, x: 20, height: 0 }}
+                  transition={{ duration: 0.3 }}
+                  className="px-4 py-3 border-b border-border-subtle hover:bg-bg-card-hover transition-colors flex items-center gap-3"
+                >
+                  {/* Type indicator */}
+                  <div className={`w-2 h-2 rounded-full ${
+                    tx.type === 'fee' ? 'bg-accent-primary' :
+                    tx.type === 'buy' ? 'bg-success' :
+                    tx.type === 'sell' ? 'bg-error' :
+                    'bg-accent-cyan'
+                  }`} />
 
-                {/* Type badge */}
-                <span className={`feed-type ${config.color}`}>
-                  {config.label}
-                </span>
+                  {/* Timestamp */}
+                  <span className="text-xs font-mono text-text-muted hidden md:block min-w-[65px]">
+                    {formatTimestamp(tx.timestamp)}
+                  </span>
 
-                {/* Dashed line */}
-                <span className="hidden md:block flex-1 border-b border-dashed border-border-subtle mx-2" />
+                  {/* Type badge */}
+                  <span className={`
+                    px-2 py-0.5 rounded text-xs font-mono font-semibold uppercase
+                    ${config.bgColor} ${config.color}
+                  `}>
+                    {config.label}
+                  </span>
 
-                {/* Amount */}
-                <span className={`feed-amount ${config.color}`}>
-                  {config.prefix}
-                  {tx.token === 'SOL'
-                    ? formatSOL(tx.amount)
-                    : formatNumber(tx.amount)
-                  }
-                  {' '}
-                  <span className="text-text-muted">{tx.token}</span>
-                </span>
+                  {/* Dashed line */}
+                  <span className="hidden md:block flex-1 border-b border-dashed border-border-subtle" />
 
-                {/* Status */}
-                <span className="feed-status">
+                  {/* Amount */}
+                  <span className={`font-mono font-semibold ${config.color}`}>
+                    {config.prefix}
+                    {tx.token === 'SOL'
+                      ? formatSOL(tx.amount)
+                      : formatNumber(tx.amount)
+                    }
+                    {' '}
+                    <span className="text-text-muted text-sm">{tx.token}</span>
+                  </span>
+
+                  {/* Status */}
                   {tx.status === 'confirmed' && (
                     <motion.svg
-                      className="w-4 h-4"
+                      className="w-4 h-4 text-success"
                       fill="none"
                       viewBox="0 0 24 24"
                       stroke="currentColor"
@@ -145,20 +172,24 @@ export default function TransactionFeed({ transactions }: TransactionFeedProps) 
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                     </motion.svg>
                   )}
-                </span>
-              </motion.div>
-            )
-          })}
+                </motion.div>
+              )
+            })
+          )}
         </AnimatePresence>
       </div>
 
       {/* Footer */}
-      <div className="p-3 border-t border-border-subtle flex items-center justify-center text-xs font-mono text-text-muted">
+      <div className="p-3 border-t border-border-subtle flex items-center justify-center bg-bg-secondary/30">
         <motion.span
+          className="text-xs font-mono text-text-muted flex items-center gap-2"
           animate={{ opacity: [1, 0.5, 1] }}
           transition={{ duration: 2, repeat: Infinity }}
         >
-          ▼ Auto-scrolling
+          <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" />
+          </svg>
+          Auto-scrolling
         </motion.span>
       </div>
     </motion.div>

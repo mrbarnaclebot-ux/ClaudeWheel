@@ -5,7 +5,7 @@ import { usePrivy } from '@privy-io/react-auth';
 import { useTelegram } from '@/components/TelegramProvider';
 import { api } from '@/lib/api';
 import Link from 'next/link';
-import { motion } from 'framer-motion';
+import { motion, AnimatePresence } from 'framer-motion';
 import { useParams } from 'next/navigation';
 import { useState } from 'react';
 
@@ -55,11 +55,24 @@ interface TokenDetails {
 
 interface Transaction {
     id: string;
-    type: 'buy' | 'sell' | 'transfer';
+    type: 'buy' | 'sell' | 'transfer' | 'claim';
     amount: number;
+    amountUsd?: number;
     signature: string;
     status: string;
+    inputMint?: string;
+    outputMint?: string;
+    inputAmount?: number;
+    outputAmount?: number;
+    pricePerToken?: number;
     created_at: string;
+}
+
+interface TransactionsResponse {
+    transactions: Transaction[];
+    total: number;
+    limit: number;
+    offset: number;
 }
 
 export default function TokenDetailPage() {
@@ -74,6 +87,8 @@ export default function TokenDetailPage() {
     const [devBuyAction, setDevBuyAction] = useState<'burn' | 'sell' | 'transfer' | null>(null);
     const [showWithdraw, setShowWithdraw] = useState(false);
     const [withdrawAddress, setWithdrawAddress] = useState('');
+    const [transactionPage, setTransactionPage] = useState(0);
+    const TRANSACTIONS_PER_PAGE = 10;
 
     // Fetch token details
     const { data: token, isLoading, error } = useQuery({
@@ -88,15 +103,19 @@ export default function TokenDetailPage() {
         enabled: !!tokenId,
     });
 
-    // Fetch recent transactions
-    const { data: transactions } = useQuery({
-        queryKey: ['token-transactions', tokenId],
+    // Fetch transactions with pagination
+    const { data: transactionsData, isLoading: isLoadingTransactions } = useQuery({
+        queryKey: ['token-transactions', tokenId, transactionPage],
         queryFn: async () => {
             const accessToken = await getAccessToken();
             const res = await api.get(`/api/privy/tokens/${tokenId}/transactions`, {
                 headers: { Authorization: `Bearer ${accessToken}` },
+                params: {
+                    limit: TRANSACTIONS_PER_PAGE,
+                    offset: transactionPage * TRANSACTIONS_PER_PAGE,
+                },
             });
-            return res.data.transactions as Transaction[];
+            return res.data as TransactionsResponse;
         },
         enabled: !!tokenId,
     });
@@ -132,7 +151,7 @@ export default function TokenDetailPage() {
             return res.data.data as { devTokenBalance: number; opsSolBalance: number; tokenSymbol: string };
         },
         enabled: !!tokenId,
-        refetchInterval: 30000, // Refresh every 30s
+        refetchInterval: 30000,
     });
 
     // Dev buy action mutation
@@ -192,20 +211,57 @@ export default function TokenDetailPage() {
         hapticFeedback('light');
     };
 
+    const formatTimeAgo = (dateString: string) => {
+        const date = new Date(dateString);
+        const now = new Date();
+        const diffMs = now.getTime() - date.getTime();
+        const diffMins = Math.floor(diffMs / 60000);
+        const diffHours = Math.floor(diffMs / 3600000);
+        const diffDays = Math.floor(diffMs / 86400000);
+
+        if (diffMins < 1) return 'Just now';
+        if (diffMins < 60) return `${diffMins}m ago`;
+        if (diffHours < 24) return `${diffHours}h ago`;
+        return `${diffDays}d ago`;
+    };
+
+    const getTransactionIcon = (type: string) => {
+        switch (type) {
+            case 'buy': return '↓';
+            case 'sell': return '↑';
+            case 'transfer': return '→';
+            case 'claim': return '◆';
+            default: return '•';
+        }
+    };
+
+    const getTransactionColor = (type: string) => {
+        switch (type) {
+            case 'buy': return 'bg-success/20 text-success border-success/30';
+            case 'sell': return 'bg-error/20 text-error border-error/30';
+            case 'transfer': return 'bg-accent-cyan/20 text-accent-cyan border-accent-cyan/30';
+            case 'claim': return 'bg-accent-primary/20 text-accent-primary border-accent-primary/30';
+            default: return 'bg-bg-card text-text-secondary';
+        }
+    };
+
+    const totalPages = transactionsData ? Math.ceil(transactionsData.total / TRANSACTIONS_PER_PAGE) : 0;
+    const transactions = transactionsData?.transactions || [];
+
     if (isLoading) {
         return (
-            <div className="min-h-screen p-4 flex items-center justify-center">
-                <div className="animate-spin w-8 h-8 border-2 border-green-500 border-t-transparent rounded-full" />
+            <div className="min-h-screen p-4 flex items-center justify-center bg-void">
+                <div className="animate-spin w-8 h-8 border-2 border-accent-primary border-t-transparent rounded-full" />
             </div>
         );
     }
 
     if (error || !token) {
         return (
-            <div className="min-h-screen p-4">
-                <div className="bg-red-500/20 border border-red-500/50 rounded-xl p-4 text-red-400 text-center">
+            <div className="min-h-screen p-4 bg-void">
+                <div className="bg-error/20 border border-error/50 rounded-xl p-4 text-error text-center">
                     <p>Failed to load token details</p>
-                    <Link href="/dashboard" className="text-green-400 mt-4 block">
+                    <Link href="/dashboard" className="text-accent-primary mt-4 block">
                         Back to Dashboard
                     </Link>
                 </div>
@@ -214,13 +270,13 @@ export default function TokenDetailPage() {
     }
 
     return (
-        <div className="min-h-screen p-4 pb-24">
+        <div className="min-h-screen bg-void p-4 pb-24">
             {/* Header */}
             <div className="flex items-center gap-3 mb-6">
                 <Link
                     href="/dashboard"
                     onClick={() => hapticFeedback('light')}
-                    className="w-10 h-10 bg-gray-800 rounded-full flex items-center justify-center"
+                    className="w-10 h-10 bg-bg-card border border-border-subtle rounded-full flex items-center justify-center text-text-secondary hover:text-text-primary hover:border-border-accent transition-colors"
                 >
                     ←
                 </Link>
@@ -229,21 +285,21 @@ export default function TokenDetailPage() {
                         <img
                             src={token.token_image}
                             alt={token.token_symbol}
-                            className="w-12 h-12 rounded-full object-cover"
+                            className="w-12 h-12 rounded-full object-cover border-2 border-border-accent"
                         />
                     ) : (
-                        <div className="w-12 h-12 bg-gray-700 rounded-full flex items-center justify-center text-xl font-bold">
+                        <div className="w-12 h-12 bg-bg-card border-2 border-border-accent rounded-full flex items-center justify-center text-xl font-bold text-accent-primary">
                             {token.token_symbol[0]}
                         </div>
                     )}
                     <div>
-                        <h1 className="text-xl font-bold">{token.token_name}</h1>
-                        <p className="text-sm text-gray-400">${token.token_symbol}</p>
+                        <h1 className="text-xl font-bold text-text-primary">{token.token_name}</h1>
+                        <p className="text-sm text-text-muted">${token.token_symbol}</p>
                     </div>
                 </div>
                 <button
                     onClick={() => setShowSettings(!showSettings)}
-                    className="w-10 h-10 bg-gray-800 rounded-full flex items-center justify-center"
+                    className="w-10 h-10 bg-bg-card border border-border-subtle rounded-full flex items-center justify-center hover:border-border-accent transition-colors"
                 >
                     ⚙️
                 </button>
@@ -253,18 +309,19 @@ export default function TokenDetailPage() {
             <motion.div
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
-                className={`rounded-xl p-4 mb-6 ${
+                className={`rounded-xl p-4 mb-6 border ${
                     token.config.flywheel_active
-                        ? 'bg-green-500/20 border border-green-500/50'
-                        : 'bg-gray-800/50'
+                        ? 'bg-success/10 border-success/30'
+                        : 'bg-bg-card border-border-subtle'
                 }`}
             >
                 <div className="flex items-center justify-between">
                     <div>
-                        <p className="font-medium">
-                            {token.config.flywheel_active ? '● Flywheel Active' : '○ Flywheel Paused'}
+                        <p className={`font-medium flex items-center gap-2 ${token.config.flywheel_active ? 'text-success' : 'text-text-secondary'}`}>
+                            <span className={`status-dot ${token.config.flywheel_active ? 'active' : ''}`} />
+                            {token.config.flywheel_active ? 'Flywheel Active' : 'Flywheel Paused'}
                         </p>
-                        <p className="text-sm text-gray-400">
+                        <p className="text-sm text-text-muted mt-1">
                             {token.state?.cycle_phase === 'buy'
                                 ? `Buy phase (${token.state.buy_count || 0}/5)`
                                 : `Sell phase (${token.state?.sell_count || 0}/5)`
@@ -274,10 +331,10 @@ export default function TokenDetailPage() {
                     <button
                         onClick={handleToggleFlywheel}
                         disabled={toggleFlywheelMutation.isPending}
-                        className={`px-4 py-2 rounded-lg font-medium transition-colors ${
+                        className={`px-4 py-2 rounded-lg font-medium transition-all btn-press ${
                             token.config.flywheel_active
-                                ? 'bg-red-600 hover:bg-red-500'
-                                : 'bg-green-600 hover:bg-green-500'
+                                ? 'bg-error hover:bg-error/80 text-white'
+                                : 'bg-accent-primary hover:bg-accent-secondary text-bg-void'
                         }`}
                     >
                         {toggleFlywheelMutation.isPending
@@ -297,17 +354,17 @@ export default function TokenDetailPage() {
                 transition={{ delay: 0.1 }}
                 className="grid grid-cols-2 gap-3 mb-6"
             >
-                <div className="bg-gray-800/50 rounded-xl p-3 text-center">
-                    <p className="text-lg font-bold text-green-400">
+                <div className="bg-bg-card border border-border-subtle rounded-xl p-3 text-center">
+                    <p className="text-lg font-bold text-accent-primary font-mono">
                         {devBuyBalance?.devTokenBalance?.toLocaleString() || '0'}
                     </p>
-                    <p className="text-xs text-gray-400">Dev Supply</p>
+                    <p className="text-xs text-text-muted">Dev Supply</p>
                 </div>
-                <div className="bg-gray-800/50 rounded-xl p-3 text-center">
-                    <p className="text-lg font-bold text-green-400">
+                <div className="bg-bg-card border border-border-subtle rounded-xl p-3 text-center">
+                    <p className="text-lg font-bold text-accent-primary font-mono">
                         {devBuyBalance?.opsSolBalance?.toFixed(3) || '0.000'}
                     </p>
-                    <p className="text-xs text-gray-400">Ops SOL</p>
+                    <p className="text-xs text-text-muted">Ops SOL</p>
                 </div>
             </motion.div>
 
@@ -317,87 +374,93 @@ export default function TokenDetailPage() {
                     initial={{ opacity: 0, y: 10 }}
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ delay: 0.15 }}
-                    className="bg-yellow-900/30 border border-yellow-700/50 rounded-xl p-4 mb-6"
+                    className="bg-warning/10 border border-warning/30 rounded-xl p-4 mb-6"
                 >
                     <div className="flex items-center justify-between mb-3">
                         <div>
-                            <p className="font-medium text-yellow-400">Dev Buy Tokens</p>
-                            <p className="text-sm text-yellow-400/70">
+                            <p className="font-medium text-warning">Dev Buy Tokens</p>
+                            <p className="text-sm text-warning/70">
                                 {devBuyBalance.devTokenBalance.toLocaleString()} {devBuyBalance.tokenSymbol} in dev wallet
                             </p>
                         </div>
                         <button
                             onClick={() => setShowDevBuyActions(!showDevBuyActions)}
-                            className="text-yellow-400 text-sm"
+                            className="text-warning text-sm hover:text-warning/80 transition-colors"
                         >
                             {showDevBuyActions ? 'Hide' : 'Manage'}
                         </button>
                     </div>
 
-                    {showDevBuyActions && (
-                        <div className="space-y-3">
-                            <p className="text-xs text-gray-400">
-                                What would you like to do with these tokens?
-                            </p>
+                    <AnimatePresence>
+                        {showDevBuyActions && (
+                            <motion.div
+                                initial={{ opacity: 0, height: 0 }}
+                                animate={{ opacity: 1, height: 'auto' }}
+                                exit={{ opacity: 0, height: 0 }}
+                                className="space-y-3"
+                            >
+                                <p className="text-xs text-text-muted">
+                                    What would you like to do with these tokens?
+                                </p>
 
-                            {/* Confirmation dialog */}
-                            {devBuyAction ? (
-                                <div className="bg-gray-800/50 rounded-lg p-3 space-y-3">
-                                    <p className="text-sm text-center">
-                                        {devBuyAction === 'burn' && '🔥 Burn all tokens permanently?'}
-                                        {devBuyAction === 'sell' && '💰 Sell all tokens for SOL?'}
-                                        {devBuyAction === 'transfer' && '📤 Transfer all tokens to ops wallet?'}
-                                    </p>
-                                    <div className="grid grid-cols-2 gap-2">
+                                {devBuyAction ? (
+                                    <div className="bg-bg-card border border-border-subtle rounded-lg p-3 space-y-3">
+                                        <p className="text-sm text-center text-text-primary">
+                                            {devBuyAction === 'burn' && '🔥 Burn all tokens permanently?'}
+                                            {devBuyAction === 'sell' && '💰 Sell all tokens for SOL?'}
+                                            {devBuyAction === 'transfer' && '📤 Transfer all tokens to ops wallet?'}
+                                        </p>
+                                        <div className="grid grid-cols-2 gap-2">
+                                            <button
+                                                onClick={() => setDevBuyAction(null)}
+                                                disabled={devBuyActionMutation.isPending}
+                                                className="bg-bg-secondary hover:bg-bg-card-hover border border-border-subtle rounded-lg py-2 text-sm text-text-secondary transition-colors"
+                                            >
+                                                Cancel
+                                            </button>
+                                            <button
+                                                onClick={() => devBuyActionMutation.mutate(devBuyAction)}
+                                                disabled={devBuyActionMutation.isPending}
+                                                className={`rounded-lg py-2 text-sm font-medium transition-colors ${
+                                                    devBuyAction === 'burn'
+                                                        ? 'bg-error hover:bg-error/80 text-white'
+                                                        : devBuyAction === 'sell'
+                                                        ? 'bg-success hover:bg-success/80 text-white'
+                                                        : 'bg-accent-cyan hover:bg-accent-cyan/80 text-bg-void'
+                                                }`}
+                                            >
+                                                {devBuyActionMutation.isPending ? '...' : 'Confirm'}
+                                            </button>
+                                        </div>
+                                    </div>
+                                ) : (
+                                    <div className="grid grid-cols-3 gap-2">
                                         <button
-                                            onClick={() => setDevBuyAction(null)}
-                                            disabled={devBuyActionMutation.isPending}
-                                            className="bg-gray-700 hover:bg-gray-600 rounded-lg py-2 text-sm transition-colors"
+                                            onClick={() => setDevBuyAction('burn')}
+                                            className="bg-error/10 hover:bg-error/20 border border-error/30 rounded-lg p-3 text-center transition-colors btn-press"
                                         >
-                                            Cancel
+                                            <div className="text-lg mb-1">🔥</div>
+                                            <div className="text-xs font-medium text-error">Burn</div>
                                         </button>
                                         <button
-                                            onClick={() => devBuyActionMutation.mutate(devBuyAction)}
-                                            disabled={devBuyActionMutation.isPending}
-                                            className={`rounded-lg py-2 text-sm font-medium transition-colors ${
-                                                devBuyAction === 'burn'
-                                                    ? 'bg-red-600 hover:bg-red-500'
-                                                    : devBuyAction === 'sell'
-                                                    ? 'bg-green-600 hover:bg-green-500'
-                                                    : 'bg-blue-600 hover:bg-blue-500'
-                                            }`}
+                                            onClick={() => setDevBuyAction('sell')}
+                                            className="bg-success/10 hover:bg-success/20 border border-success/30 rounded-lg p-3 text-center transition-colors btn-press"
                                         >
-                                            {devBuyActionMutation.isPending ? '...' : 'Confirm'}
+                                            <div className="text-lg mb-1">💰</div>
+                                            <div className="text-xs font-medium text-success">Sell</div>
+                                        </button>
+                                        <button
+                                            onClick={() => setDevBuyAction('transfer')}
+                                            className="bg-accent-cyan/10 hover:bg-accent-cyan/20 border border-accent-cyan/30 rounded-lg p-3 text-center transition-colors btn-press"
+                                        >
+                                            <div className="text-lg mb-1">📤</div>
+                                            <div className="text-xs font-medium text-accent-cyan">Transfer</div>
                                         </button>
                                     </div>
-                                </div>
-                            ) : (
-                                <div className="grid grid-cols-3 gap-2">
-                                    <button
-                                        onClick={() => setDevBuyAction('burn')}
-                                        className="bg-red-600/20 hover:bg-red-600/30 border border-red-600/50 rounded-lg p-3 text-center transition-colors"
-                                    >
-                                        <div className="text-lg mb-1">🔥</div>
-                                        <div className="text-xs font-medium text-red-400">Burn</div>
-                                    </button>
-                                    <button
-                                        onClick={() => setDevBuyAction('sell')}
-                                        className="bg-green-600/20 hover:bg-green-600/30 border border-green-600/50 rounded-lg p-3 text-center transition-colors"
-                                    >
-                                        <div className="text-lg mb-1">💰</div>
-                                        <div className="text-xs font-medium text-green-400">Sell</div>
-                                    </button>
-                                    <button
-                                        onClick={() => setDevBuyAction('transfer')}
-                                        className="bg-blue-600/20 hover:bg-blue-600/30 border border-blue-600/50 rounded-lg p-3 text-center transition-colors"
-                                    >
-                                        <div className="text-lg mb-1">📤</div>
-                                        <div className="text-xs font-medium text-blue-400">Transfer</div>
-                                    </button>
-                                </div>
-                            )}
-                        </div>
-                    )}
+                                )}
+                            </motion.div>
+                        )}
+                    </AnimatePresence>
                 </motion.div>
             )}
 
@@ -407,81 +470,88 @@ export default function TokenDetailPage() {
                     initial={{ opacity: 0, y: 10 }}
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ delay: 0.15 }}
-                    className="bg-blue-900/30 border border-blue-700/50 rounded-xl p-4 mb-6"
+                    className="bg-accent-cyan/10 border border-accent-cyan/30 rounded-xl p-4 mb-6"
                 >
                     <div className="flex items-center justify-between mb-3">
                         <div>
-                            <p className="font-medium text-blue-400">MM-Only Mode</p>
-                            <p className="text-sm text-blue-400/70">
+                            <p className="font-medium text-accent-cyan">MM-Only Mode</p>
+                            <p className="text-sm text-accent-cyan/70">
                                 Withdraw to stop MM and get your SOL back
                             </p>
                         </div>
                         <button
                             onClick={() => setShowWithdraw(!showWithdraw)}
-                            className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+                            className="bg-accent-cyan hover:bg-accent-cyan/80 text-bg-void px-4 py-2 rounded-lg text-sm font-medium transition-colors btn-press"
                         >
                             Withdraw
                         </button>
                     </div>
 
-                    {showWithdraw && (
-                        <div className="space-y-3 mt-4 pt-4 border-t border-blue-700/50">
-                            <p className="text-xs text-gray-400">
-                                This will stop the flywheel, sell all tokens, and transfer SOL to your address.
-                            </p>
-
-                            <div>
-                                <label className="block text-xs text-gray-400 mb-1">Destination Address</label>
-                                <input
-                                    type="text"
-                                    value={withdrawAddress}
-                                    onChange={(e) => setWithdrawAddress(e.target.value.trim())}
-                                    placeholder="Enter Solana address..."
-                                    className={`w-full bg-gray-800 rounded-lg p-3 text-white font-mono text-sm placeholder-gray-500 focus:outline-none focus:ring-2 ${
-                                        withdrawAddress.length > 0 && (withdrawAddress.length < 32 || withdrawAddress.length > 44)
-                                            ? 'focus:ring-red-500 border border-red-500/50'
-                                            : 'focus:ring-blue-500'
-                                    }`}
-                                />
-                                {withdrawAddress.length > 0 && (withdrawAddress.length < 32 || withdrawAddress.length > 44) && (
-                                    <p className="text-xs text-red-400 mt-1">Invalid address format (32-44 characters)</p>
-                                )}
-                            </div>
-
-                            <div className="grid grid-cols-2 gap-2">
-                                <button
-                                    onClick={() => {
-                                        setShowWithdraw(false);
-                                        setWithdrawAddress('');
-                                    }}
-                                    disabled={withdrawMutation.isPending}
-                                    className="bg-gray-700 hover:bg-gray-600 rounded-lg py-3 text-sm transition-colors"
-                                >
-                                    Cancel
-                                </button>
-                                <button
-                                    onClick={() => withdrawMutation.mutate(withdrawAddress)}
-                                    disabled={withdrawMutation.isPending || withdrawAddress.length < 32 || withdrawAddress.length > 44}
-                                    className="bg-blue-600 hover:bg-blue-500 disabled:bg-gray-700 disabled:text-gray-500 rounded-lg py-3 text-sm font-medium transition-colors"
-                                >
-                                    {withdrawMutation.isPending ? (
-                                        <span className="flex items-center justify-center gap-2">
-                                            <span className="animate-spin w-4 h-4 border-2 border-white border-t-transparent rounded-full" />
-                                            Withdrawing...
-                                        </span>
-                                    ) : (
-                                        'Confirm Withdraw'
-                                    )}
-                                </button>
-                            </div>
-
-                            {withdrawMutation.isError && (
-                                <p className="text-xs text-red-400">
-                                    {(withdrawMutation.error as any)?.response?.data?.error || 'Withdraw failed. Please try again.'}
+                    <AnimatePresence>
+                        {showWithdraw && (
+                            <motion.div
+                                initial={{ opacity: 0, height: 0 }}
+                                animate={{ opacity: 1, height: 'auto' }}
+                                exit={{ opacity: 0, height: 0 }}
+                                className="space-y-3 mt-4 pt-4 border-t border-accent-cyan/30"
+                            >
+                                <p className="text-xs text-text-muted">
+                                    This will stop the flywheel, sell all tokens, and transfer SOL to your address.
                                 </p>
-                            )}
-                        </div>
-                    )}
+
+                                <div>
+                                    <label className="block text-xs text-text-muted mb-1">Destination Address</label>
+                                    <input
+                                        type="text"
+                                        value={withdrawAddress}
+                                        onChange={(e) => setWithdrawAddress(e.target.value.trim())}
+                                        placeholder="Enter Solana address..."
+                                        className={`w-full bg-bg-secondary border rounded-lg p-3 text-text-primary font-mono text-sm placeholder-text-muted focus:outline-none focus:ring-2 ${
+                                            withdrawAddress.length > 0 && (withdrawAddress.length < 32 || withdrawAddress.length > 44)
+                                                ? 'focus:ring-error border-error/50'
+                                                : 'focus:ring-accent-primary border-border-subtle'
+                                        }`}
+                                    />
+                                    {withdrawAddress.length > 0 && (withdrawAddress.length < 32 || withdrawAddress.length > 44) && (
+                                        <p className="text-xs text-error mt-1">Invalid address format (32-44 characters)</p>
+                                    )}
+                                </div>
+
+                                <div className="grid grid-cols-2 gap-2">
+                                    <button
+                                        onClick={() => {
+                                            setShowWithdraw(false);
+                                            setWithdrawAddress('');
+                                        }}
+                                        disabled={withdrawMutation.isPending}
+                                        className="bg-bg-secondary hover:bg-bg-card-hover border border-border-subtle rounded-lg py-3 text-sm text-text-secondary transition-colors"
+                                    >
+                                        Cancel
+                                    </button>
+                                    <button
+                                        onClick={() => withdrawMutation.mutate(withdrawAddress)}
+                                        disabled={withdrawMutation.isPending || withdrawAddress.length < 32 || withdrawAddress.length > 44}
+                                        className="bg-accent-cyan hover:bg-accent-cyan/80 disabled:bg-bg-secondary disabled:text-text-muted rounded-lg py-3 text-sm font-medium text-bg-void transition-colors"
+                                    >
+                                        {withdrawMutation.isPending ? (
+                                            <span className="flex items-center justify-center gap-2">
+                                                <span className="animate-spin w-4 h-4 border-2 border-bg-void border-t-transparent rounded-full" />
+                                                Withdrawing...
+                                            </span>
+                                        ) : (
+                                            'Confirm Withdraw'
+                                        )}
+                                    </button>
+                                </div>
+
+                                {withdrawMutation.isError && (
+                                    <p className="text-xs text-error">
+                                        {(withdrawMutation.error as any)?.response?.data?.error || 'Withdraw failed. Please try again.'}
+                                    </p>
+                                )}
+                            </motion.div>
+                        )}
+                    </AnimatePresence>
                 </motion.div>
             )}
 
@@ -496,10 +566,10 @@ export default function TokenDetailPage() {
                     href={`https://bags.fm/token/${token.token_mint_address}`}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="block bg-gray-800 hover:bg-gray-700 rounded-xl p-4 text-center transition-colors"
+                    className="block bg-bg-card border border-border-subtle hover:border-border-accent rounded-xl p-4 text-center transition-all hover:shadow-wood-glow"
                 >
                     <div className="text-xl mb-1">🔗</div>
-                    <div className="text-sm font-medium">View on Bags.fm</div>
+                    <div className="text-sm font-medium text-text-primary">View on Bags.fm</div>
                 </a>
             </motion.div>
 
@@ -508,118 +578,171 @@ export default function TokenDetailPage() {
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: 0.3 }}
-                className="bg-gray-800/50 rounded-xl p-4 mb-6 space-y-3"
+                className="bg-bg-card border border-border-subtle rounded-xl p-4 mb-6 space-y-3"
             >
-                <h3 className="font-medium text-gray-400">Wallet Addresses</h3>
+                <h3 className="font-medium text-text-secondary text-sm">Wallet Addresses</h3>
                 <div
                     onClick={() => copyToClipboard(token.dev_wallet.wallet_address)}
-                    className="flex items-center justify-between cursor-pointer hover:bg-gray-700/50 rounded p-2 -m-2"
+                    className="flex items-center justify-between cursor-pointer hover:bg-bg-card-hover rounded p-2 -m-2 transition-colors"
                 >
-                    <span className="text-sm text-gray-400">Dev</span>
-                    <span className="font-mono text-xs text-green-400 truncate max-w-[200px]">
+                    <span className="text-sm text-text-muted">Dev</span>
+                    <span className="font-mono text-xs text-accent-primary truncate max-w-[200px]">
                         {token.dev_wallet.wallet_address}
                     </span>
                 </div>
                 <div
                     onClick={() => copyToClipboard(token.ops_wallet.wallet_address)}
-                    className="flex items-center justify-between cursor-pointer hover:bg-gray-700/50 rounded p-2 -m-2"
+                    className="flex items-center justify-between cursor-pointer hover:bg-bg-card-hover rounded p-2 -m-2 transition-colors"
                 >
-                    <span className="text-sm text-gray-400">Ops</span>
-                    <span className="font-mono text-xs text-green-400 truncate max-w-[200px]">
+                    <span className="text-sm text-text-muted">Ops</span>
+                    <span className="font-mono text-xs text-accent-primary truncate max-w-[200px]">
                         {token.ops_wallet.wallet_address}
                     </span>
                 </div>
                 <div
                     onClick={() => copyToClipboard(token.token_mint_address)}
-                    className="flex items-center justify-between cursor-pointer hover:bg-gray-700/50 rounded p-2 -m-2"
+                    className="flex items-center justify-between cursor-pointer hover:bg-bg-card-hover rounded p-2 -m-2 transition-colors"
                 >
-                    <span className="text-sm text-gray-400">Mint</span>
-                    <span className="font-mono text-xs text-green-400 truncate max-w-[200px]">
+                    <span className="text-sm text-text-muted">Mint</span>
+                    <span className="font-mono text-xs text-accent-primary truncate max-w-[200px]">
                         {token.token_mint_address}
                     </span>
                 </div>
             </motion.div>
 
             {/* Settings Panel (expandable) */}
-            {showSettings && (
-                <motion.div
-                    initial={{ opacity: 0, height: 0 }}
-                    animate={{ opacity: 1, height: 'auto' }}
-                    exit={{ opacity: 0, height: 0 }}
-                    className="bg-gray-800/50 rounded-xl p-4 mb-6 space-y-4"
-                >
-                    <h3 className="font-medium">Settings</h3>
-
-                    <div className="grid grid-cols-2 gap-4 text-sm">
-                        <div>
-                            <p className="text-gray-400">Auto-claim</p>
-                            <p className={token.config.auto_claim_enabled ? 'text-green-400' : 'text-gray-500'}>
-                                {token.config.auto_claim_enabled ? 'Enabled' : 'Disabled'}
-                            </p>
-                        </div>
-                        <div>
-                            <p className="text-gray-400">Algorithm</p>
-                            <p className="capitalize">{token.config.algorithm_mode}</p>
-                        </div>
-                    </div>
-
-                    <Link
-                        href={`/token/${tokenId}/settings`}
-                        onClick={() => hapticFeedback('light')}
-                        className="block w-full bg-gray-700 hover:bg-gray-600 rounded-xl py-3 text-center font-medium transition-colors"
+            <AnimatePresence>
+                {showSettings && (
+                    <motion.div
+                        initial={{ opacity: 0, height: 0 }}
+                        animate={{ opacity: 1, height: 'auto' }}
+                        exit={{ opacity: 0, height: 0 }}
+                        className="bg-bg-card border border-border-subtle rounded-xl p-4 mb-6 space-y-4"
                     >
-                        Edit Settings
-                    </Link>
-                </motion.div>
-            )}
+                        <h3 className="font-medium text-text-primary">Settings</h3>
 
-            {/* Recent Transactions */}
+                        <div className="grid grid-cols-2 gap-4 text-sm">
+                            <div>
+                                <p className="text-text-muted">Auto-claim</p>
+                                <p className={token.config.auto_claim_enabled ? 'text-success' : 'text-text-muted'}>
+                                    {token.config.auto_claim_enabled ? 'Enabled' : 'Disabled'}
+                                </p>
+                            </div>
+                            <div>
+                                <p className="text-text-muted">Algorithm</p>
+                                <p className="capitalize text-text-primary">{token.config.algorithm_mode}</p>
+                            </div>
+                        </div>
+
+                        <Link
+                            href={`/token/${tokenId}/settings`}
+                            onClick={() => hapticFeedback('light')}
+                            className="block w-full bg-bg-secondary hover:bg-bg-card-hover border border-border-subtle rounded-xl py-3 text-center font-medium text-text-primary transition-colors"
+                        >
+                            Edit Settings
+                        </Link>
+                    </motion.div>
+                )}
+            </AnimatePresence>
+
+            {/* Transaction History */}
             <motion.div
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: 0.4 }}
             >
-                <h3 className="font-medium mb-3">Recent Activity</h3>
-                {!transactions || transactions.length === 0 ? (
-                    <div className="bg-gray-800/50 rounded-xl p-6 text-center text-gray-400">
-                        No transactions yet
+                <div className="flex items-center justify-between mb-3">
+                    <h3 className="font-medium text-text-primary">Trade History</h3>
+                    {transactionsData && transactionsData.total > 0 && (
+                        <span className="text-xs text-text-muted bg-bg-card px-2 py-1 rounded">
+                            {transactionsData.total} total
+                        </span>
+                    )}
+                </div>
+
+                {isLoadingTransactions ? (
+                    <div className="bg-bg-card border border-border-subtle rounded-xl p-8 text-center">
+                        <div className="animate-spin w-6 h-6 border-2 border-accent-primary border-t-transparent rounded-full mx-auto" />
+                    </div>
+                ) : !transactions || transactions.length === 0 ? (
+                    <div className="bg-bg-card border border-border-subtle rounded-xl p-6 text-center text-text-muted">
+                        <div className="text-2xl mb-2">📊</div>
+                        <p>No trades yet</p>
+                        <p className="text-xs mt-1">Trades will appear here once the flywheel starts</p>
                     </div>
                 ) : (
-                    <div className="space-y-2">
-                        {transactions.slice(0, 5).map((tx) => (
-                            <div
-                                key={tx.id}
-                                className="bg-gray-800/50 rounded-xl p-3 flex items-center justify-between"
-                            >
-                                <div className="flex items-center gap-3">
-                                    <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm ${
-                                        tx.type === 'buy' ? 'bg-green-500/20 text-green-400' :
-                                        tx.type === 'sell' ? 'bg-red-500/20 text-red-400' :
-                                        'bg-blue-500/20 text-blue-400'
-                                    }`}>
-                                        {tx.type === 'buy' ? '↓' : tx.type === 'sell' ? '↑' : '→'}
+                    <>
+                        <div className="space-y-2">
+                            {transactions.map((tx, index) => (
+                                <motion.div
+                                    key={tx.id}
+                                    initial={{ opacity: 0, x: -10 }}
+                                    animate={{ opacity: 1, x: 0 }}
+                                    transition={{ delay: index * 0.03 }}
+                                    className="bg-bg-card border border-border-subtle rounded-xl p-3 hover:border-border-accent transition-colors"
+                                >
+                                    <div className="flex items-center justify-between">
+                                        <div className="flex items-center gap-3">
+                                            <div className={`w-9 h-9 rounded-full flex items-center justify-center text-sm font-bold border ${getTransactionColor(tx.type)}`}>
+                                                {getTransactionIcon(tx.type)}
+                                            </div>
+                                            <div>
+                                                <p className="font-medium capitalize text-text-primary text-sm">{tx.type}</p>
+                                                <p className="text-xs text-text-muted">
+                                                    {formatTimeAgo(tx.created_at)}
+                                                </p>
+                                            </div>
+                                        </div>
+                                        <div className="text-right">
+                                            <p className="font-mono text-sm text-text-primary">
+                                                {typeof tx.amount === 'number' ? tx.amount.toFixed(4) : tx.amount} SOL
+                                            </p>
+                                            {tx.signature && (
+                                                <a
+                                                    href={`https://solscan.io/tx/${tx.signature}`}
+                                                    target="_blank"
+                                                    rel="noopener noreferrer"
+                                                    onClick={(e) => e.stopPropagation()}
+                                                    className="text-xs text-accent-primary hover:text-accent-secondary transition-colors"
+                                                >
+                                                    View tx →
+                                                </a>
+                                            )}
+                                        </div>
                                     </div>
-                                    <div>
-                                        <p className="font-medium capitalize">{tx.type}</p>
-                                        <p className="text-xs text-gray-400">
-                                            {new Date(tx.created_at).toLocaleString()}
-                                        </p>
-                                    </div>
-                                </div>
-                                <div className="text-right">
-                                    <p className="font-mono">{tx.amount.toFixed(4)}</p>
-                                    <a
-                                        href={`https://solscan.io/tx/${tx.signature}`}
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        className="text-xs text-green-400"
-                                    >
-                                        View →
-                                    </a>
-                                </div>
+                                </motion.div>
+                            ))}
+                        </div>
+
+                        {/* Pagination */}
+                        {totalPages > 1 && (
+                            <div className="flex items-center justify-between mt-4 pt-4 border-t border-border-subtle">
+                                <button
+                                    onClick={() => {
+                                        setTransactionPage(p => Math.max(0, p - 1));
+                                        hapticFeedback('light');
+                                    }}
+                                    disabled={transactionPage === 0}
+                                    className="px-3 py-1.5 text-sm bg-bg-card border border-border-subtle rounded-lg disabled:opacity-50 disabled:cursor-not-allowed hover:border-border-accent transition-colors text-text-secondary"
+                                >
+                                    ← Prev
+                                </button>
+                                <span className="text-xs text-text-muted">
+                                    Page {transactionPage + 1} of {totalPages}
+                                </span>
+                                <button
+                                    onClick={() => {
+                                        setTransactionPage(p => Math.min(totalPages - 1, p + 1));
+                                        hapticFeedback('light');
+                                    }}
+                                    disabled={transactionPage >= totalPages - 1}
+                                    className="px-3 py-1.5 text-sm bg-bg-card border border-border-subtle rounded-lg disabled:opacity-50 disabled:cursor-not-allowed hover:border-border-accent transition-colors text-text-secondary"
+                                >
+                                    Next →
+                                </button>
                             </div>
-                        ))}
-                    </div>
+                        )}
+                    </>
                 )}
             </motion.div>
         </div>

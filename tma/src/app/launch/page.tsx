@@ -213,17 +213,17 @@ export default function LaunchPage() {
     };
 
     return (
-        <div className="min-h-screen p-4">
+        <div className="min-h-screen bg-void p-4">
             {/* Header */}
             <div className="flex items-center gap-3 mb-6">
                 <button
                     onClick={handleBack}
-                    className="text-2xl hover:text-gray-300 transition-colors"
+                    className="text-2xl text-text-secondary hover:text-text-primary transition-colors"
                     disabled={step === 'depositing' || step === 'launched'}
                 >
                     ←
                 </button>
-                <h1 className="text-xl font-bold">{stepTitle[step]}</h1>
+                <h1 className="text-xl font-bold text-text-primary">{stepTitle[step]}</h1>
             </div>
 
             {/* Progress Indicator */}
@@ -234,8 +234,8 @@ export default function LaunchPage() {
                             key={s}
                             className={`h-1 flex-1 rounded-full transition-colors ${
                                 ['details', 'socials', 'review', 'depositing'].indexOf(step) >= i
-                                    ? 'bg-green-500'
-                                    : 'bg-gray-700'
+                                    ? 'bg-accent-primary'
+                                    : 'bg-bg-card'
                             }`}
                         />
                     ))}
@@ -253,41 +253,41 @@ export default function LaunchPage() {
                         className="space-y-4"
                     >
                         <div>
-                            <label className="block text-sm text-gray-400 mb-2">Token Name</label>
+                            <label className="block text-sm text-text-muted mb-2">Token Name</label>
                             <input
                                 type="text"
                                 value={data.name}
                                 onChange={e => setData({ ...data, name: e.target.value })}
                                 placeholder="My Awesome Token"
-                                className="w-full bg-gray-800 rounded-xl p-4 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-green-500"
+                                className="w-full bg-bg-card border border-border-subtle rounded-xl p-4 text-text-primary placeholder-text-muted focus:outline-none focus:ring-2 focus:ring-accent-primary focus:border-border-accent"
                             />
                         </div>
 
                         <div>
-                            <label className="block text-sm text-gray-400 mb-2">Symbol</label>
+                            <label className="block text-sm text-text-muted mb-2">Symbol</label>
                             <input
                                 type="text"
                                 value={data.symbol}
                                 onChange={e => setData({ ...data, symbol: e.target.value.toUpperCase() })}
                                 placeholder="AWESOME"
                                 maxLength={8}
-                                className="w-full bg-gray-800 rounded-xl p-4 text-white uppercase placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-green-500"
+                                className="w-full bg-bg-card border border-border-subtle rounded-xl p-4 text-text-primary uppercase placeholder-text-muted focus:outline-none focus:ring-2 focus:ring-accent-primary focus:border-border-accent"
                             />
                         </div>
 
                         <div>
-                            <label className="block text-sm text-gray-400 mb-2">Description</label>
+                            <label className="block text-sm text-text-muted mb-2">Description</label>
                             <textarea
                                 value={data.description}
                                 onChange={e => setData({ ...data, description: e.target.value })}
                                 placeholder="Tell the world about your token..."
                                 rows={3}
-                                className="w-full bg-gray-800 rounded-xl p-4 text-white resize-none placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-green-500"
+                                className="w-full bg-bg-card border border-border-subtle rounded-xl p-4 text-text-primary resize-none placeholder-text-muted focus:outline-none focus:ring-2 focus:ring-accent-primary focus:border-border-accent"
                             />
                         </div>
 
                         <div>
-                            <label className="block text-sm text-gray-400 mb-2">Token Image *</label>
+                            <label className="block text-sm text-text-muted mb-2">Token Image *</label>
 
                             {/* Image preview */}
                             {data.imageUrl && (
@@ -296,7 +296,7 @@ export default function LaunchPage() {
                                         <img
                                             src={data.imageUrl}
                                             alt="Token preview"
-                                            className="w-24 h-24 rounded-xl object-cover bg-gray-700"
+                                            className="w-24 h-24 rounded-xl object-cover bg-bg-card border-2 border-border-accent"
                                             onError={(e) => {
                                                 (e.target as HTMLImageElement).style.display = 'none';
                                                 setData(prev => ({ ...prev, imageUrl: '' }));
@@ -305,7 +305,7 @@ export default function LaunchPage() {
                                         />
                                         <button
                                             onClick={() => setData({ ...data, imageUrl: '' })}
-                                            className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full w-6 h-6 flex items-center justify-center text-sm"
+                                            className="absolute -top-2 -right-2 bg-error text-white rounded-full w-6 h-6 flex items-center justify-center text-sm"
                                         >
                                             ×
                                         </button>
@@ -315,7 +315,7 @@ export default function LaunchPage() {
 
                             {/* Upload button */}
                             {!data.imageUrl && (
-                                <label className={`block w-full bg-gray-800 rounded-xl p-4 text-center cursor-pointer hover:bg-gray-700 transition-colors ${isUploading ? 'opacity-50 pointer-events-none' : ''}`}>
+                                <label className={`block w-full bg-bg-card border border-border-subtle rounded-xl p-4 text-center cursor-pointer hover:bg-bg-card-hover hover:border-border-accent transition-colors ${isUploading ? 'opacity-50 pointer-events-none' : ''}`}>
                                     <input
                                         type="file"
                                         accept="image/*"
@@ -327,12 +327,12 @@ export default function LaunchPage() {
                                         disabled={isUploading}
                                     />
                                     {isUploading ? (
-                                        <span className="flex items-center justify-center gap-2 text-gray-400">
-                                            <span className="animate-spin w-4 h-4 border-2 border-green-500 border-t-transparent rounded-full" />
+                                        <span className="flex items-center justify-center gap-2 text-text-muted">
+                                            <span className="animate-spin w-4 h-4 border-2 border-accent-primary border-t-transparent rounded-full" />
                                             Uploading...
                                         </span>
                                     ) : (
-                                        <span className="text-gray-400">
+                                        <span className="text-text-muted">
                                             📤 Tap to upload image
                                         </span>
                                     )}
@@ -342,9 +342,9 @@ export default function LaunchPage() {
                             {/* Or divider */}
                             {!data.imageUrl && (
                                 <div className="flex items-center gap-3 my-3">
-                                    <div className="flex-1 h-px bg-gray-700" />
-                                    <span className="text-xs text-gray-500">OR</span>
-                                    <div className="flex-1 h-px bg-gray-700" />
+                                    <div className="flex-1 h-px bg-border-subtle" />
+                                    <span className="text-xs text-text-muted">OR</span>
+                                    <div className="flex-1 h-px bg-border-subtle" />
                                 </div>
                             )}
 
@@ -361,17 +361,17 @@ export default function LaunchPage() {
                                         }
                                     }}
                                     placeholder="Paste image URL here (https://...)"
-                                    className="w-full bg-gray-800 rounded-xl p-4 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-green-500"
+                                    className="w-full bg-bg-card border border-border-subtle rounded-xl p-4 text-text-primary placeholder-text-muted focus:outline-none focus:ring-2 focus:ring-accent-primary focus:border-border-accent"
                                 />
                             )}
 
-                            <p className="text-xs text-gray-500 mt-2">
+                            <p className="text-xs text-text-muted mt-2">
                                 Recommended: 400x400 square image (PNG or JPG)
                             </p>
                         </div>
 
                         <div>
-                            <label className="block text-sm text-gray-400 mb-2">Dev Buy Amount (Optional)</label>
+                            <label className="block text-sm text-text-muted mb-2">Dev Buy Amount (Optional)</label>
                             <div className="relative">
                                 <input
                                     type="number"
@@ -384,18 +384,18 @@ export default function LaunchPage() {
                                     step="0.1"
                                     min="0"
                                     max="10"
-                                    className="w-full bg-gray-800 rounded-xl p-4 pr-16 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-green-500"
+                                    className="w-full bg-bg-card border border-border-subtle rounded-xl p-4 pr-16 text-text-primary placeholder-text-muted focus:outline-none focus:ring-2 focus:ring-accent-primary focus:border-border-accent"
                                 />
-                                <span className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400">SOL</span>
+                                <span className="absolute right-4 top-1/2 -translate-y-1/2 text-text-muted">SOL</span>
                             </div>
-                            <p className="text-xs text-gray-500 mt-2">
+                            <p className="text-xs text-text-muted mt-2">
                                 Amount of SOL to use for initial buy at launch (0-10 SOL)
                             </p>
                         </div>
 
                         {/* MM Strategy Selection */}
-                        <div className="bg-gray-800/50 rounded-xl p-4">
-                            <label className="block text-sm text-gray-400 mb-3">Market Making Strategy</label>
+                        <div className="bg-bg-card border border-border-subtle rounded-xl p-4">
+                            <label className="block text-sm text-text-muted mb-3">Market Making Strategy</label>
                             <div className="grid grid-cols-3 gap-2 mb-4">
                                 {[
                                     { value: 'simple', label: 'Simple', desc: '5 buys, 5 sells', disabled: false },
@@ -409,10 +409,10 @@ export default function LaunchPage() {
                                         onClick={() => !opt.disabled && setData({ ...data, mmAlgorithm: opt.value as TokenData['mmAlgorithm'] })}
                                         className={`p-3 rounded-lg text-center transition-colors ${
                                             opt.disabled
-                                                ? 'bg-gray-800 text-gray-500 cursor-not-allowed'
+                                                ? 'bg-bg-secondary text-text-muted cursor-not-allowed'
                                                 : data.mmAlgorithm === opt.value
-                                                    ? 'bg-green-600 text-white'
-                                                    : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                                                    ? 'bg-accent-primary text-bg-void'
+                                                    : 'bg-bg-secondary text-text-secondary hover:bg-bg-card-hover border border-border-subtle'
                                         }`}
                                     >
                                         <div className="text-sm font-medium">{opt.label}</div>
@@ -422,21 +422,21 @@ export default function LaunchPage() {
                             </div>
                         </div>
 
-                        <div className="bg-gray-800/50 rounded-xl p-4 text-sm space-y-2">
-                            <p className="text-gray-400">
-                                <span className="text-gray-500">Minimum:</span>{' '}
-                                <span className="text-green-400 font-medium">{(0.1 + (data.devBuy || 0)).toFixed(2)} SOL</span>
-                                <span className="text-gray-500 ml-1">(0.1 base{data.devBuy ? ` + ${data.devBuy.toFixed(2)} dev buy` : ''})</span>
+                        <div className="bg-bg-card border border-border-subtle rounded-xl p-4 text-sm space-y-2">
+                            <p className="text-text-secondary">
+                                <span className="text-text-muted">Minimum:</span>{' '}
+                                <span className="text-accent-primary font-medium">{(0.1 + (data.devBuy || 0)).toFixed(2)} SOL</span>
+                                <span className="text-text-muted ml-1">(0.1 base{data.devBuy ? ` + ${data.devBuy.toFixed(2)} dev buy` : ''})</span>
                             </p>
-                            <p className="text-gray-500 text-xs">
-                                💡 Tip: We recommend <span className="text-green-400">{(0.5 + (data.devBuy || 0)).toFixed(2)} SOL</span> total for effective market making
+                            <p className="text-text-muted text-xs">
+                                💡 Tip: We recommend <span className="text-accent-primary">{(0.5 + (data.devBuy || 0)).toFixed(2)} SOL</span> total for effective market making
                             </p>
                         </div>
 
                         <button
                             onClick={handleContinueToSocials}
                             disabled={!canContinueDetails}
-                            className="w-full bg-green-600 hover:bg-green-500 disabled:bg-gray-700 disabled:text-gray-500 text-white py-4 rounded-xl font-medium transition-colors"
+                            className="w-full bg-accent-primary hover:bg-accent-secondary disabled:bg-bg-card disabled:text-text-muted text-bg-void py-4 rounded-xl font-medium transition-colors btn-press"
                         >
                             Continue
                         </button>
@@ -452,53 +452,53 @@ export default function LaunchPage() {
                         exit={{ opacity: 0, x: -20 }}
                         className="space-y-4"
                     >
-                        <p className="text-sm text-gray-400 mb-4">
+                        <p className="text-sm text-text-muted mb-4">
                             Optional: Add social links to help build your community
                         </p>
 
                         <div>
-                            <label className="block text-sm text-gray-400 mb-2">Twitter / X</label>
+                            <label className="block text-sm text-text-muted mb-2">Twitter / X</label>
                             <input
                                 type="text"
                                 value={data.twitter || ''}
                                 onChange={e => setData({ ...data, twitter: e.target.value })}
                                 placeholder="https://x.com/yourtoken"
-                                className="w-full bg-gray-800 rounded-xl p-4 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-green-500"
+                                className="w-full bg-bg-card border border-border-subtle rounded-xl p-4 text-text-primary placeholder-text-muted focus:outline-none focus:ring-2 focus:ring-accent-primary focus:border-border-accent"
                             />
                         </div>
 
                         <div>
-                            <label className="block text-sm text-gray-400 mb-2">Telegram</label>
+                            <label className="block text-sm text-text-muted mb-2">Telegram</label>
                             <input
                                 type="text"
                                 value={data.telegram || ''}
                                 onChange={e => setData({ ...data, telegram: e.target.value })}
                                 placeholder="https://t.me/yourtoken"
-                                className="w-full bg-gray-800 rounded-xl p-4 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-green-500"
+                                className="w-full bg-bg-card border border-border-subtle rounded-xl p-4 text-text-primary placeholder-text-muted focus:outline-none focus:ring-2 focus:ring-accent-primary focus:border-border-accent"
                             />
                         </div>
 
                         <div>
-                            <label className="block text-sm text-gray-400 mb-2">Website</label>
+                            <label className="block text-sm text-text-muted mb-2">Website</label>
                             <input
                                 type="text"
                                 value={data.website || ''}
                                 onChange={e => setData({ ...data, website: e.target.value })}
                                 placeholder="https://yourtoken.com"
-                                className="w-full bg-gray-800 rounded-xl p-4 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-green-500"
+                                className="w-full bg-bg-card border border-border-subtle rounded-xl p-4 text-text-primary placeholder-text-muted focus:outline-none focus:ring-2 focus:ring-accent-primary focus:border-border-accent"
                             />
                         </div>
 
                         <div className="flex gap-3">
                             <button
                                 onClick={handleContinueToReview}
-                                className="flex-1 bg-gray-700 hover:bg-gray-600 text-white py-4 rounded-xl font-medium transition-colors"
+                                className="flex-1 bg-bg-card border border-border-subtle hover:bg-bg-card-hover text-text-primary py-4 rounded-xl font-medium transition-colors btn-press"
                             >
                                 Skip
                             </button>
                             <button
                                 onClick={handleContinueToReview}
-                                className="flex-1 bg-green-600 hover:bg-green-500 text-white py-4 rounded-xl font-medium transition-colors"
+                                className="flex-1 bg-accent-primary hover:bg-accent-secondary text-bg-void py-4 rounded-xl font-medium transition-colors btn-press"
                             >
                                 Continue
                             </button>
@@ -515,40 +515,40 @@ export default function LaunchPage() {
                         exit={{ opacity: 0, x: -20 }}
                         className="space-y-4"
                     >
-                        <div className="bg-gray-800/50 rounded-xl p-4 space-y-4">
+                        <div className="bg-bg-card border border-border-subtle rounded-xl p-4 space-y-4">
                             {data.imageUrl && (
                                 <div className="flex justify-center mb-2">
                                     <img
                                         src={data.imageUrl}
                                         alt={data.name}
-                                        className="w-20 h-20 rounded-xl object-cover"
+                                        className="w-20 h-20 rounded-xl object-cover border-2 border-border-accent"
                                     />
                                 </div>
                             )}
                             <div>
-                                <p className="text-xs text-gray-500 mb-1">Token Name</p>
-                                <p className="font-medium">{data.name}</p>
+                                <p className="text-xs text-text-muted mb-1">Token Name</p>
+                                <p className="font-medium text-text-primary">{data.name}</p>
                             </div>
                             <div>
-                                <p className="text-xs text-gray-500 mb-1">Symbol</p>
-                                <p className="font-medium">{data.symbol}</p>
+                                <p className="text-xs text-text-muted mb-1">Symbol</p>
+                                <p className="font-medium text-text-primary">{data.symbol}</p>
                             </div>
                             <div>
-                                <p className="text-xs text-gray-500 mb-1">Description</p>
-                                <p className="text-sm text-gray-300">{data.description}</p>
+                                <p className="text-xs text-text-muted mb-1">Description</p>
+                                <p className="text-sm text-text-secondary">{data.description}</p>
                             </div>
                             {(data.twitter || data.telegram || data.website) && (
                                 <div>
-                                    <p className="text-xs text-gray-500 mb-1">Social Links</p>
+                                    <p className="text-xs text-text-muted mb-1">Social Links</p>
                                     <div className="space-y-1">
                                         {data.twitter && (
-                                            <p className="text-sm text-green-400 truncate">{data.twitter}</p>
+                                            <p className="text-sm text-accent-primary truncate">{data.twitter}</p>
                                         )}
                                         {data.telegram && (
-                                            <p className="text-sm text-green-400 truncate">{data.telegram}</p>
+                                            <p className="text-sm text-accent-primary truncate">{data.telegram}</p>
                                         )}
                                         {data.website && (
-                                            <p className="text-sm text-green-400 truncate">{data.website}</p>
+                                            <p className="text-sm text-accent-primary truncate">{data.website}</p>
                                         )}
                                     </div>
                                 </div>
@@ -557,34 +557,34 @@ export default function LaunchPage() {
 
                         {data.devBuy && data.devBuy > 0 && (
                             <div>
-                                <p className="text-xs text-gray-500 mb-1">Dev Buy Amount</p>
-                                <p className="text-sm text-green-400">{data.devBuy} SOL</p>
+                                <p className="text-xs text-text-muted mb-1">Dev Buy Amount</p>
+                                <p className="text-sm text-accent-primary">{data.devBuy} SOL</p>
                             </div>
                         )}
 
-                        <div className="bg-yellow-900/30 border border-yellow-700/50 rounded-xl p-4 space-y-2">
-                            <p className="text-sm text-yellow-400">
+                        <div className="bg-warning/20 border border-warning/30 rounded-xl p-4 space-y-2">
+                            <p className="text-sm text-warning">
                                 Deposit at least <span className="font-bold">{(0.1 + (data.devBuy || 0)).toFixed(2)} SOL</span> to your dev wallet to launch.
                             </p>
-                            <p className="text-xs text-yellow-400/70">
+                            <p className="text-xs text-warning/70">
                                 💡 We recommend <span className="font-medium">{(0.5 + (data.devBuy || 0)).toFixed(2)} SOL</span> total for effective market making.
                             </p>
                         </div>
 
                         {error && (
-                            <div className="bg-red-900/30 border border-red-700/50 rounded-xl p-4">
-                                <p className="text-sm text-red-400">{error}</p>
+                            <div className="bg-error/20 border border-error/50 rounded-xl p-4">
+                                <p className="text-sm text-error">{error}</p>
                             </div>
                         )}
 
                         <button
                             onClick={handleCreatePendingLaunch}
                             disabled={isSubmitting}
-                            className="w-full bg-green-600 hover:bg-green-500 disabled:bg-gray-700 disabled:text-gray-500 text-white py-4 rounded-xl font-medium transition-colors"
+                            className="w-full bg-accent-primary hover:bg-accent-secondary disabled:bg-bg-card disabled:text-text-muted text-bg-void py-4 rounded-xl font-medium transition-colors btn-press"
                         >
                             {isSubmitting ? (
                                 <span className="flex items-center justify-center gap-2">
-                                    <span className="animate-spin w-5 h-5 border-2 border-white border-t-transparent rounded-full" />
+                                    <span className="animate-spin w-5 h-5 border-2 border-bg-void border-t-transparent rounded-full" />
                                     Creating...
                                 </span>
                             ) : (
@@ -606,82 +606,82 @@ export default function LaunchPage() {
                         {launchStatus === 'launching' ? (
                             <>
                                 <div className="text-5xl mb-4">🚀</div>
-                                <h2 className="text-xl font-bold mb-2 text-green-400">Launching...</h2>
-                                <p className="text-gray-400 mb-6">
-                                    <span className="text-green-400 font-bold">{depositBalance.toFixed(4)} SOL</span> received - launching your token...
+                                <h2 className="text-xl font-bold mb-2 text-accent-primary">Launching...</h2>
+                                <p className="text-text-muted mb-6">
+                                    <span className="text-accent-primary font-bold">{depositBalance.toFixed(4)} SOL</span> received - launching your token...
                                 </p>
                             </>
                         ) : launchStatus === 'retry_pending' ? (
                             <>
                                 <div className="text-5xl mb-4">🔄</div>
-                                <h2 className="text-xl font-bold mb-2 text-yellow-400">Retrying...</h2>
-                                <p className="text-gray-400 mb-4">
+                                <h2 className="text-xl font-bold mb-2 text-warning">Retrying...</h2>
+                                <p className="text-text-muted mb-4">
                                     Launch attempt failed. Retrying automatically in a few seconds...
                                 </p>
-                                {error && <p className="text-yellow-400/70 text-xs mb-4">{error}</p>}
+                                {error && <p className="text-warning/70 text-xs mb-4">{error}</p>}
                             </>
                         ) : launchStatus === 'failed' || launchStatus === 'expired' || launchStatus === 'refunded' ? (
                             <>
                                 <div className="text-5xl mb-4">❌</div>
-                                <h2 className="text-xl font-bold mb-2 text-red-400">Launch {launchStatus}</h2>
-                                {error && <p className="text-gray-400 mb-6">{error}</p>}
+                                <h2 className="text-xl font-bold mb-2 text-error">Launch {launchStatus}</h2>
+                                {error && <p className="text-text-muted mb-6">{error}</p>}
                             </>
                         ) : (
                             <>
                                 <div className="text-5xl mb-4">💰</div>
-                                <h2 className="text-xl font-bold mb-2">Deposit to Launch</h2>
-                                <p className="text-gray-400 mb-4">
-                                    Send at least <span className="text-green-400 font-bold">{pendingLaunch.required_amount?.toFixed(2) || '0.10'} SOL</span> to your dev wallet
+                                <h2 className="text-xl font-bold mb-2 text-text-primary">Deposit to Launch</h2>
+                                <p className="text-text-muted mb-4">
+                                    Send at least <span className="text-accent-primary font-bold">{pendingLaunch.required_amount?.toFixed(2) || '0.10'} SOL</span> to your dev wallet
                                 </p>
-                                <p className="text-gray-500 text-xs mb-4">
-                                    💡 We recommend <span className="text-green-400">{((pendingLaunch.required_amount || 0.1) + 0.4).toFixed(2)} SOL</span> total for effective MM
+                                <p className="text-text-muted text-xs mb-4">
+                                    💡 We recommend <span className="text-accent-primary">{((pendingLaunch.required_amount || 0.1) + 0.4).toFixed(2)} SOL</span> total for effective MM
                                 </p>
                             </>
                         )}
 
-                        <div className="bg-gray-800 rounded-xl p-4 mb-4">
-                            <p className="text-sm text-gray-400 mb-2">Dev Wallet Address</p>
-                            <p className="font-mono text-green-400 text-sm break-all">
+                        <div className="bg-bg-card border border-border-subtle rounded-xl p-4 mb-4">
+                            <p className="text-sm text-text-muted mb-2">Dev Wallet Address</p>
+                            <p className="font-mono text-accent-primary text-sm break-all">
                                 {devWallet?.address || pendingLaunch.deposit_address}
                             </p>
                         </div>
 
                         {/* Balance indicator */}
                         {depositBalance > 0 && (
-                            <div className="bg-green-900/30 border border-green-700/50 rounded-xl p-4 mb-4">
-                                <p className="text-sm text-green-400">
+                            <div className="bg-success/20 border border-success/30 rounded-xl p-4 mb-4">
+                                <p className="text-sm text-success">
                                     Current Balance: <span className="font-bold">{depositBalance.toFixed(4)} SOL</span>
                                 </p>
                             </div>
                         )}
 
                         {/* Status indicator */}
-                        <div className="bg-gray-800/50 rounded-xl p-4 mb-6">
+                        <div className="bg-bg-card border border-border-subtle rounded-xl p-4 mb-6">
                             <div className="flex items-center justify-center gap-2">
                                 {launchStatus === 'launching' ? (
                                     <>
-                                        <div className="animate-spin w-4 h-4 border-2 border-green-500 border-t-transparent rounded-full" />
-                                        <span className="text-sm text-green-400">Launching on Bags.fm...</span>
+                                        <div className="animate-spin w-4 h-4 border-2 border-accent-primary border-t-transparent rounded-full" />
+                                        <span className="text-sm text-accent-primary">Launching on Bags.fm...</span>
                                     </>
                                 ) : launchStatus === 'retry_pending' ? (
                                     <>
-                                        <div className="animate-spin w-4 h-4 border-2 border-yellow-500 border-t-transparent rounded-full" />
-                                        <span className="text-sm text-yellow-400">Retrying in a few seconds...</span>
+                                        <div className="animate-spin w-4 h-4 border-2 border-warning border-t-transparent rounded-full" />
+                                        <span className="text-sm text-warning">Retrying in a few seconds...</span>
                                     </>
                                 ) : launchStatus === 'failed' || launchStatus === 'expired' || launchStatus === 'refunded' ? (
-                                    <span className="text-sm text-red-400">
+                                    <span className="text-sm text-error">
                                         {launchStatus === 'refunded' ? 'SOL has been refunded to your wallet' : 'Please try again'}
                                     </span>
                                 ) : (
                                     <>
-                                        <div className="animate-spin w-4 h-4 border-2 border-green-500 border-t-transparent rounded-full" />
-                                        <span className="text-sm text-gray-400">Waiting for deposit...</span>
+                                        <div className="animate-spin w-4 h-4 border-2 border-accent-primary border-t-transparent rounded-full" />
+                                        <span className="text-sm text-text-muted">Waiting for deposit...</span>
                                     </>
                                 )}
                             </div>
                         </div>
 
-                        <p className="text-sm text-gray-500 mb-6">
+                        <p className="text-sm text-text-muted mb-6">
                             {launchStatus === 'launching'
                                 ? 'This may take a few moments. Do not close this page.'
                                 : launchStatus === 'retry_pending'
@@ -693,7 +693,7 @@ export default function LaunchPage() {
 
                         <button
                             onClick={handleGoToDashboard}
-                            className="w-full bg-gray-700 hover:bg-gray-600 text-white py-4 rounded-xl font-medium transition-colors"
+                            className="w-full bg-bg-card border border-border-subtle hover:bg-bg-card-hover text-text-primary py-4 rounded-xl font-medium transition-colors btn-press"
                         >
                             Go to Dashboard
                         </button>
@@ -716,14 +716,14 @@ export default function LaunchPage() {
                         >
                             🎉
                         </motion.div>
-                        <h2 className="text-2xl font-bold mb-2 text-green-400">Token Launched!</h2>
-                        <p className="text-gray-400 mb-8">
+                        <h2 className="text-2xl font-bold mb-2 text-accent-primary">Token Launched!</h2>
+                        <p className="text-text-muted mb-8">
                             Your token is now live on Bags.fm
                         </p>
 
                         <button
                             onClick={handleGoToDashboard}
-                            className="w-full bg-green-600 hover:bg-green-500 text-white py-4 rounded-xl font-medium transition-colors"
+                            className="w-full bg-accent-primary hover:bg-accent-secondary text-bg-void py-4 rounded-xl font-medium transition-colors btn-press"
                         >
                             View in Dashboard
                         </button>

@@ -5,8 +5,7 @@ export const dynamic = 'force-dynamic'
 
 import { useState, useEffect, useCallback } from 'react'
 import Image from 'next/image'
-import Header from './components/Header'
-import FlywheelAnimation from './components/FlywheelAnimation'
+import WoodenWheel from './components/WoodenWheel'
 import WalletCard from './components/WalletCard'
 import TransactionFeed from './components/TransactionFeed'
 import FeeStats from './components/FeeStats'
@@ -261,28 +260,39 @@ export default function Dashboard() {
 
   return (
     <div className="min-h-screen bg-void">
-      {/* Header */}
-      <Header isActive={isActive} />
-
       {/* Main Content */}
       <main className="max-w-7xl mx-auto px-4 py-8">
         {/* Loading state */}
         {isLoading && (
           <div className="flex items-center justify-center py-12">
-            <div className="animate-pulse text-accent-primary font-mono">
-              Loading flywheel data...
+            <div className="flex flex-col items-center gap-4">
+              <div className="w-16 h-16 wheel-spin">
+                <svg viewBox="0 0 100 100" className="w-full h-full text-wood-light">
+                  <circle
+                    cx="50"
+                    cy="50"
+                    r="45"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="3"
+                    strokeDasharray="70 30"
+                  />
+                </svg>
+              </div>
+              <span className="text-wood-accent font-mono text-sm">
+                Loading flywheel data...
+              </span>
             </div>
           </div>
         )}
 
-        {/* Hero: Flywheel Animation */}
-        <section className="mb-8">
-          <FlywheelAnimation
+        {/* Hero: Wooden Wheel - Centered */}
+        <section className="mb-12">
+          <WoodenWheel
             devBalance={walletData.devWallet.solBalance}
             opsBalance={walletData.opsWallet.solBalance}
             tokenBalance={walletData.opsWallet.tokenBalance}
             tokenSymbol={tokenSymbol}
-            isActive={isActive}
           />
         </section>
 
