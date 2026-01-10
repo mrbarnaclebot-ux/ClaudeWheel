@@ -4,7 +4,7 @@ import { PublicKey, Transaction, SystemProgram, LAMPORTS_PER_SOL } from '@solana
 import { verifySignature, isMessageRecent, hashConfig, extractConfigHash, generateSecureNonceMessage } from '../utils/signature-verify'
 import { supabase } from '../config/database'
 import { env } from '../config/env'
-import { connection, getBalance } from '../config/solana'
+import { connection, getBalance, getDevWallet, getOpsWallet, getTokenBalance } from '../config/solana'
 import { getKeypairFromEncrypted } from '../services/wallet-generator'
 import { bagsFmService } from '../services/bags-fm'
 import { getMultiUserFlywheelJobStatus, restartFlywheelJob } from '../jobs/multi-flywheel.job'
@@ -3125,67 +3125,62 @@ router.get('/wheel', verifyAdminAuth, async (req: Request, res: Response) => {
       console.error('Error fetching config:', configError)
     }
 
-    // Get wallet addresses from wallet_balances table
-    const { data: walletBalances, error: balanceError } = await supabase
-      .from('wallet_balances')
-      .select('*')
+    // Get wallets from environment variables (same as claim service uses)
+    // This ensures dashboard shows the same wallets that actually do the claiming
+    const devWallet = getDevWallet()
+    const opsWallet = getOpsWallet()
 
-    if (balanceError) {
-      console.error('Error fetching wallet balances:', balanceError)
-    }
+    const devWalletAddress = devWallet?.publicKey.toString() || ''
+    const opsWalletAddress = opsWallet?.publicKey.toString() || ''
 
-    const devWalletRecord = walletBalances?.find(w => w.wallet_type === 'dev')
-    const opsWalletRecord = walletBalances?.find(w => w.wallet_type === 'ops')
-
-    // Fetch LIVE balances from Solana (not cached data)
+    // Fetch LIVE balances from Solana
     let devSolBalance = 0
     let devTokenBalance = 0
     let opsSolBalance = 0
     let opsTokenBalance = 0
 
     const tokenMint = new PublicKey(PLATFORM_TOKEN_MINT)
-    const { getTokenBalance } = await import('../config/solana')
 
     // Fetch dev wallet balances live
-    if (devWalletRecord?.address) {
+    if (devWallet) {
       try {
-        const devPubkey = new PublicKey(devWalletRecord.address)
-        devSolBalance = await getBalance(devPubkey)
-        devTokenBalance = await getTokenBalance(devPubkey, tokenMint)
+        devSolBalance = await getBalance(devWallet.publicKey)
+        devTokenBalance = await getTokenBalance(devWallet.publicKey, tokenMint)
       } catch (e) {
         console.warn('Failed to fetch dev wallet balance:', e)
-        // Fallback to cached data
-        devSolBalance = Number(devWalletRecord.sol_balance) || 0
-        devTokenBalance = Number(devWalletRecord.token_balance) || 0
       }
     }
 
     // Fetch ops wallet balances live
-    if (opsWalletRecord?.address) {
+    if (opsWallet) {
       try {
-        const opsPubkey = new PublicKey(opsWalletRecord.address)
-        opsSolBalance = await getBalance(opsPubkey)
-        opsTokenBalance = await getTokenBalance(opsPubkey, tokenMint)
+        opsSolBalance = await getBalance(opsWallet.publicKey)
+        opsTokenBalance = await getTokenBalance(opsWallet.publicKey, tokenMint)
       } catch (e) {
         console.warn('Failed to fetch ops wallet balance:', e)
-        // Fallback to cached data
-        opsSolBalance = Number(opsWalletRecord.sol_balance) || 0
-        opsTokenBalance = Number(opsWalletRecord.token_balance) || 0
       }
     }
 
     // Update cached balances in database (fire and forget)
-    supabase.from('wallet_balances').update({
-      sol_balance: devSolBalance,
-      token_balance: devTokenBalance,
-      updated_at: new Date().toISOString(),
-    }).eq('wallet_type', 'dev').then(() => {})
+    if (devWalletAddress) {
+      supabase.from('wallet_balances').upsert({
+        wallet_type: 'dev',
+        address: devWalletAddress,
+        sol_balance: devSolBalance,
+        token_balance: devTokenBalance,
+        updated_at: new Date().toISOString(),
+      }, { onConflict: 'wallet_type' }).then(() => {})
+    }
 
-    supabase.from('wallet_balances').update({
-      sol_balance: opsSolBalance,
-      token_balance: opsTokenBalance,
-      updated_at: new Date().toISOString(),
-    }).eq('wallet_type', 'ops').then(() => {})
+    if (opsWalletAddress) {
+      supabase.from('wallet_balances').upsert({
+        wallet_type: 'ops',
+        address: opsWalletAddress,
+        sol_balance: opsSolBalance,
+        token_balance: opsTokenBalance,
+        updated_at: new Date().toISOString(),
+      }, { onConflict: 'wallet_type' }).then(() => {})
+    }
 
     // Get flywheel state from flywheel_state table
     const { data: flywheelState, error: stateError } = await supabase
@@ -3241,12 +3236,12 @@ router.get('/wheel', verifyAdminAuth, async (req: Request, res: Response) => {
         tokenName: 'Claude Wheel',
         tokenImage: null,
         devWallet: {
-          address: devWalletRecord?.address || '',
+          address: devWalletAddress,
           solBalance: devSolBalance,
           tokenBalance: devTokenBalance,
         },
         opsWallet: {
-          address: opsWalletRecord?.address || '',
+          address: opsWalletAddress,
           solBalance: opsSolBalance,
           tokenBalance: opsTokenBalance,
         },

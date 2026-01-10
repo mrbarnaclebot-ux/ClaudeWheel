@@ -115,13 +115,17 @@ npm run lint         # Run Next.js linting
 
 ## Core Jobs & Automation
 
-| Job                    | Frequency    | Purpose                                                                           |
-| ---------------------- | ------------ | --------------------------------------------------------------------------------- |
-| Multi-Flywheel         | Every 1 min  | Market-making cycles for legacy user tokens (5 buy → 5 sell pattern)              |
-| Privy Flywheel         | Every 1 min  | Market-making cycles for Privy user tokens (delegated signing)                    |
-| Fast Claim             | Every 30 sec | Claims accumulated fees when threshold (0.15 SOL) is reached                      |
-| Balance Update         | Every 5 min  | Updates cached wallet balances (batched requests)                                 |
-| Deposit Monitor        | Every 30 sec | Watches for SOL deposits on pending token launches (both legacy and Privy)        |
+| Job                    | Frequency       | Purpose                                                                           |
+| ---------------------- | --------------- | --------------------------------------------------------------------------------- |
+| Multi-Flywheel         | Every 1 min     | Market-making cycles for legacy user tokens (5 buy → 5 sell pattern)              |
+| Privy Flywheel         | Every 1 min     | Market-making cycles for Privy user tokens (delegated signing)                    |
+| WHEEL Flywheel         | Every 1 min     | Market-making for platform WHEEL token (0% platform fee)                          |
+| Fast Claim             | Configurable*   | Claims accumulated fees when threshold (0.15 SOL) is reached                      |
+| WHEEL Claim            | Every 30 sec    | Claims WHEEL token fees (0.05 SOL threshold, 0% platform fee)                     |
+| Balance Update         | Every 5 min     | Updates cached wallet balances (batched requests)                                 |
+| Deposit Monitor        | Every 30 sec    | Watches for SOL deposits on pending token launches (both legacy and Privy)        |
+
+*Fast Claim interval is configurable via admin dashboard (10-300 seconds, default 30s).
 
 Jobs can be enabled/disabled via environment variables and manually triggered for testing.
 
@@ -205,6 +209,9 @@ Key service: `backend/src/services/privy.service.ts`
 - `POST /api/admin/config` - Update configuration
 - `GET /api/admin/jobs` - Job status
 - `POST /api/admin/jobs/:job/trigger` - Manually trigger job
+- `GET /api/admin/settings` - Get platform settings (includes WHEEL trading config)
+- `POST /api/admin/settings` - Update platform settings
+- `GET /api/admin/wheel` - Get WHEEL token status (live wallet balances from Solana)
 
 ### Legacy User Token Endpoints
 
@@ -260,7 +267,7 @@ Key service: `backend/src/services/privy.service.ts`
 | `wallet_balances`        | Platform Dev/Ops wallet state                           |
 | `transactions`           | Fee collection & trading history                        |
 | `fee_stats`              | Aggregated fee metrics                                  |
-| `config`                 | Platform configuration                                  |
+| `config`                 | Platform configuration (includes WHEEL trading limits)  |
 | `users`                  | Wallet-based user accounts                              |
 | `user_tokens`            | User's registered tokens with encrypted dev wallet keys |
 | `user_token_config`      | Per-token market-making configuration                   |
@@ -321,6 +328,29 @@ Key service: `backend/src/services/privy.service.ts`
 | `PLATFORM_FEE_PERCENTAGE` | Platform fee (default: 10%)           |
 | `ENABLE_*_JOB`          | Flags to enable/disable individual jobs |
 
+## Admin Dashboard Settings
+
+The admin dashboard at `/admin` provides configuration for various platform settings.
+
+### Platform Settings (`/api/admin/settings`)
+
+| Setting                  | Type    | Description                                           |
+| ------------------------ | ------- | ----------------------------------------------------- |
+| `fastClaimIntervalSeconds` | number | Fast claim job interval (10-300 seconds)             |
+| `fastClaimEnabled`       | boolean | Enable/disable fast claim job                         |
+| `flywheelJobEnabled`     | boolean | Enable/disable flywheel job                           |
+| `wheelMinBuySol`         | number  | WHEEL token minimum buy amount (in SOL)               |
+| `wheelMaxBuySol`         | number  | WHEEL token maximum buy amount (in SOL)               |
+| `wheelMinSellSol`        | number  | WHEEL token minimum sell amount (in SOL)              |
+| `wheelMaxSellSol`        | number  | WHEEL token maximum sell amount (in SOL)              |
+
+### WHEEL Token Special Handling
+
+- WHEEL token (platform token) is excluded from platform fees (0% fee vs 10% for others)
+- WHEEL wallet balances are fetched LIVE from Solana on each request (not cached)
+- WHEEL has separate claim threshold (0.05 SOL) vs regular tokens (0.15 SOL)
+- Dev wallet maintains 0.1 SOL reserve, transfers excess to ops wallet after claims
+
 ## Key Files
 
 ### Core Services
@@ -359,6 +389,9 @@ Key service: `backend/src/services/privy.service.ts`
 | `backend/src/routes/admin.routes.ts`            | Admin API endpoints                    |
 | `backend/src/telegram/bot.ts`                   | Telegram bot (notification-only)       |
 | `frontend/app/admin/_stores/adminStore.ts`      | Admin UI state                         |
+| `frontend/app/admin/_lib/adminApi.ts`           | Admin API client with types            |
+| `frontend/app/admin/_components/views/SettingsView.tsx` | Admin settings configuration UI |
+| `frontend/app/components/PriceChart.tsx`        | DexScreener price chart component      |
 | `frontend/lib/api.ts`                           | API client utilities                   |
 
 ## Testing Conventions
