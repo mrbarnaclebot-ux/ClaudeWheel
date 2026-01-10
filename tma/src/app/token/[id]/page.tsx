@@ -156,32 +156,10 @@ export default function TokenDetailPage() {
         },
     });
 
-    // Manual claim
-    const claimMutation = useMutation({
-        mutationFn: async () => {
-            const accessToken = await getAccessToken();
-            const res = await api.post(`/api/privy/tokens/${tokenId}/claim`, {}, {
-                headers: { Authorization: `Bearer ${accessToken}` },
-            });
-            return res.data;
-        },
-        onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: ['token', tokenId] });
-            hapticFeedback('medium');
-        },
-        onError: () => {
-            hapticFeedback('heavy');
-        },
-    });
-
     const handleToggleFlywheel = () => {
         if (token) {
             toggleFlywheelMutation.mutate(!token.config.flywheel_active);
         }
-    };
-
-    const handleClaim = () => {
-        claimMutation.mutate();
     };
 
     const copyToClipboard = (text: string) => {
@@ -403,23 +381,13 @@ export default function TokenDetailPage() {
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: 0.2 }}
-                className="grid grid-cols-2 gap-3 mb-6"
+                className="mb-6"
             >
-                <button
-                    onClick={handleClaim}
-                    disabled={claimMutation.isPending}
-                    className="bg-gray-800 hover:bg-gray-700 rounded-xl p-4 text-center transition-colors disabled:opacity-50"
-                >
-                    <div className="text-xl mb-1">💸</div>
-                    <div className="text-sm font-medium">
-                        {claimMutation.isPending ? 'Claiming...' : 'Claim Now'}
-                    </div>
-                </button>
                 <a
                     href={`https://bags.fm/token/${token.token_mint_address}`}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="bg-gray-800 hover:bg-gray-700 rounded-xl p-4 text-center transition-colors"
+                    className="block bg-gray-800 hover:bg-gray-700 rounded-xl p-4 text-center transition-colors"
                 >
                     <div className="text-xl mb-1">🔗</div>
                     <div className="text-sm font-medium">View on Bags.fm</div>
