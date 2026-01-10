@@ -126,8 +126,8 @@ export default function LaunchPage() {
         // Poll immediately
         pollLaunchStatus();
 
-        // Then poll every 5 seconds
-        const interval = setInterval(pollLaunchStatus, 5000);
+        // Poll every 2 seconds for faster status updates
+        const interval = setInterval(pollLaunchStatus, 2000);
 
         return () => clearInterval(interval);
     }, [step, pendingLaunch?.id, pollLaunchStatus]);

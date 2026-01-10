@@ -3,7 +3,7 @@
 // Launches new tokens on Bags.fm using the official Bags SDK
 // ═══════════════════════════════════════════════════════════════════════════
 
-import { Keypair, PublicKey } from '@solana/web3.js'
+import { Keypair, PublicKey, Transaction, VersionedTransaction, Connection } from '@solana/web3.js'
 import bs58 from 'bs58'
 import { env } from '../config/env'
 import { getConnection } from '../config/solana'
@@ -13,6 +13,33 @@ import { privyService } from './privy.service'
 
 // Import Bags SDK
 import { BagsSDK, signAndSendTransaction } from '@bagsfm/bags-sdk'
+
+/**
+ * Refresh the blockhash on a transaction WITHOUT corrupting its structure.
+ * This directly modifies the recentBlockhash property, preserving:
+ * - Account ordering
+ * - Compiled instructions
+ * - Address lookup tables
+ * - All other transaction data
+ *
+ * IMPORTANT: Only call this on UNSIGNED transactions. Any existing signatures
+ * will become invalid after blockhash change.
+ */
+async function refreshBlockhash(
+  connection: Connection,
+  tx: Transaction | VersionedTransaction
+): Promise<void> {
+  const { blockhash } = await connection.getLatestBlockhash('confirmed')
+
+  if (tx instanceof Transaction) {
+    // Legacy Transaction - direct property assignment
+    tx.recentBlockhash = blockhash
+  } else {
+    // VersionedTransaction - message.recentBlockhash is a string property
+    // Direct assignment preserves all other message data
+    ;(tx.message as any).recentBlockhash = blockhash
+  }
+}
 
 export interface LaunchTokenParams {
   tokenName: string
@@ -261,8 +288,9 @@ class TokenLauncherService {
       if (configResult.transactions && configResult.transactions.length > 0) {
         loggers.token.debug({ transactionCount: configResult.transactions.length }, 'Signing config transactions with Privy')
         for (const tx of configResult.transactions) {
-          // Note: Don't refresh blockhash - it corrupts the transaction structure
-          // Bags SDK returns fresh transactions, so blockhash should be valid
+          // Refresh blockhash to prevent expiry during Privy API call
+          // This directly modifies the blockhash property without corrupting the transaction
+          await refreshBlockhash(connection, tx)
           const signature = await privyService.signAndSendSolanaTransaction(params.devWalletAddress, tx)
           if (!signature) {
             throw new Error('Privy signing failed for config transaction')
@@ -277,7 +305,8 @@ class TokenLauncherService {
         loggers.token.debug({ bundleCount: configResult.bundles.length }, 'Processing bundles with Privy')
         for (const bundle of configResult.bundles) {
           for (const tx of bundle) {
-            // Note: Don't refresh blockhash - it corrupts the transaction structure
+            // Refresh blockhash to prevent expiry during Privy API call
+            await refreshBlockhash(connection, tx)
             const signature = await privyService.signAndSendSolanaTransaction(params.devWalletAddress, tx)
             if (!signature) {
               throw new Error('Privy signing failed for bundle transaction')
@@ -304,8 +333,8 @@ class TokenLauncherService {
 
       // Step 4 & 5: Sign and broadcast using Privy
       loggers.token.info('Signing and broadcasting transaction with Privy')
-      // Note: Don't refresh blockhash - it corrupts the transaction structure
-      // Bags SDK returns fresh transactions, so blockhash should be valid
+      // Refresh blockhash to prevent expiry during Privy API call
+      await refreshBlockhash(connection, launchTransaction)
       const signature = await privyService.signAndSendSolanaTransaction(params.devWalletAddress, launchTransaction)
 
       if (!signature) {
