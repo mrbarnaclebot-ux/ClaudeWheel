@@ -7,6 +7,7 @@ import {
   Keypair,
   PublicKey,
   VersionedTransaction,
+  Transaction,
   Connection,
 } from '@solana/web3.js'
 import bs58 from 'bs58'
@@ -22,14 +23,14 @@ import { BagsSDK, signAndSendTransaction } from '@bagsfm/bags-sdk'
 /**
  * Sign and send a VersionedTransaction using Privy delegated signing.
  *
- * APPROACH: Based on Orica's battle-tested pattern for Privy + Solana:
- * 1. Get fresh blockhash
- * 2. Sign with Privy (sign only)
- * 3. Broadcast with sendRawTransaction (skipPreflight + high retries)
+ * Based on Orica's battle-tested pattern:
+ * 1. Use walletApi.rpc method with walletId (in privyService)
+ * 2. DON'T modify blockhash - Bags SDK provides fresh transactions
+ * 3. Broadcast with sendRawTransaction (skipPreflight + retries)
  * 4. Poll for status (don't use confirmTransaction which times out)
  *
- * Key insight from Orica: confirmTransaction with blockhash strategy times out
- * because Privy signing adds latency. Instead, poll status with simple timeout.
+ * Previous attempts to modify blockhash (in-place or via new MessageV0)
+ * either caused signature mismatch or corrupted transaction structure.
  */
 async function signAndSendWithPrivy(
   connection: Connection,
@@ -39,43 +40,35 @@ async function signAndSendWithPrivy(
 ): Promise<string> {
   loggers.token.debug({ description }, `Signing ${description} with Privy`)
 
-  // Get fresh blockhash - using 'finalized' for longer validity
-  const { blockhash } = await connection.getLatestBlockhash('finalized')
-
-  // Update blockhash in-place on the message
+  // Log blockhash for debugging (no modification - trust Bags SDK)
   const message = transaction.message as any
-  const oldBlockhash = message.recentBlockhash
-  message.recentBlockhash = blockhash
-
   loggers.token.debug({
     description,
-    oldBlockhash: oldBlockhash?.slice(0, 8) + '...',
-    newBlockhash: blockhash.slice(0, 8) + '...'
-  }, 'Updated blockhash')
+    blockhash: message.recentBlockhash?.slice(0, 8) + '...',
+  }, 'Using Bags SDK transaction (no blockhash modification)')
 
-  // Sign with Privy (sign only, we'll broadcast ourselves)
+  // Sign with Privy using RPC method (Orica pattern)
   const signedTx = await privyService.signSolanaTransaction(walletAddress, transaction)
 
   if (!signedTx) {
     throw new Error(`Privy signing returned null for ${description}`)
   }
 
-  // Verify we got a VersionedTransaction back
-  if (!(signedTx instanceof VersionedTransaction)) {
-    throw new Error(`Privy returned unexpected transaction type for ${description}`)
+  loggers.token.debug({ description }, `${description} signed by Privy, broadcasting`)
+
+  // Serialize - handle both Transaction and VersionedTransaction
+  let serialized: Buffer
+  if (signedTx instanceof VersionedTransaction) {
+    serialized = Buffer.from(signedTx.serialize())
+  } else if (signedTx instanceof Transaction) {
+    serialized = signedTx.serialize({ requireAllSignatures: false })
+  } else if ((signedTx as any).serialize) {
+    serialized = (signedTx as any).serialize({ requireAllSignatures: false })
+  } else {
+    throw new Error(`Unknown signed transaction type for ${description}`)
   }
 
-  loggers.token.debug({ description }, `${description} signed by Privy, broadcasting with sendRawTransaction`)
-
-  // Serialize the signed transaction to raw bytes
-  const serialized = signedTx.serialize()
-
-  // Broadcast using sendRawTransaction with skipPreflight and high retries
-  // This is the Orica pattern that works reliably for Privy-signed transactions
-  // skipPreflight=true is required because:
-  // 1. Bags SDK transactions use Address Lookup Tables which can cause simulation issues
-  // 2. The transaction was already validated by Privy during signing
-  // 3. Simulation adds latency that can cause blockhash expiry
+  // Broadcast with skipPreflight and high retries (Orica pattern)
   const signature = await connection.sendRawTransaction(serialized, {
     skipPreflight: true,
     maxRetries: 5,
@@ -83,9 +76,8 @@ async function signAndSendWithPrivy(
 
   loggers.token.info({ signature, description }, `${description} broadcast, polling for confirmation`)
 
-  // Poll for status instead of using confirmTransaction (which times out)
-  // This is the key insight from Orica - don't wait for blockhash-based confirmation
-  const maxPolls = 30 // 30 polls * 2 seconds = 60 seconds max
+  // Poll for status (don't use confirmTransaction which times out)
+  const maxPolls = 30 // 30 * 2s = 60s max
   for (let i = 0; i < maxPolls; i++) {
     await new Promise(resolve => setTimeout(resolve, 2000))
 
@@ -107,19 +99,15 @@ async function signAndSendWithPrivy(
         return signature
       }
 
-      loggers.token.debug({
-        signature,
-        confirmationStatus: status.value.confirmationStatus,
-        poll: i + 1
-      }, 'Transaction processing...')
+      loggers.token.debug({ signature, poll: i + 1 }, 'Transaction processing...')
     } else {
-      loggers.token.debug({ signature, poll: i + 1 }, 'Transaction not found yet, waiting...')
+      loggers.token.debug({ signature, poll: i + 1 }, 'Transaction not found yet...')
     }
   }
 
-  // Transaction not confirmed after timeout - this is a failure
-  loggers.token.error({ signature, description }, `${description} not confirmed after ${maxPolls * 2}s`)
-  throw new Error(`Transaction ${description} not confirmed after ${maxPolls * 2} seconds. Signature: ${signature}`)
+  // Transaction not confirmed after timeout
+  loggers.token.error({ signature, description }, `${description} not confirmed after 60s`)
+  throw new Error(`Transaction ${description} not confirmed after 60 seconds. Signature: ${signature}`)
 }
 
 export interface LaunchTokenParams {

@@ -7,7 +7,18 @@ import { loggers } from '../utils/logger'
 // SOLANA CONNECTION
 // ═══════════════════════════════════════════════════════════════════════════
 
-export const connection = new Connection(env.solanaRpcUrl, {
+// Use Helius RPC when available (much faster than public RPC)
+const getRpcUrl = (): string => {
+  if (env.heliusApiKey) {
+    return `https://mainnet.helius-rpc.com/?api-key=${env.heliusApiKey}`
+  }
+  return env.solanaRpcUrl
+}
+
+const rpcUrl = getRpcUrl()
+loggers.solana.info({ rpcUrl: rpcUrl.includes('helius') ? 'Helius (fast)' : 'Public (slow)' }, 'Using RPC')
+
+export const connection = new Connection(rpcUrl, {
   commitment: 'confirmed',
   wsEndpoint: env.solanaWsUrl,
 })
