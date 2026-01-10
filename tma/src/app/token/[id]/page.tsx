@@ -69,6 +69,8 @@ export default function TokenDetailPage() {
     const { hapticFeedback } = useTelegram();
 
     const [showSettings, setShowSettings] = useState(false);
+    const [showDevBuyActions, setShowDevBuyActions] = useState(false);
+    const [devBuyAction, setDevBuyAction] = useState<'burn' | 'sell' | 'transfer' | null>(null);
 
     // Fetch token details
     const { data: token, isLoading, error } = useQuery({
@@ -110,6 +112,44 @@ export default function TokenDetailPage() {
             queryClient.invalidateQueries({ queryKey: ['token', tokenId] });
             queryClient.invalidateQueries({ queryKey: ['tokens'] });
             hapticFeedback('medium');
+        },
+        onError: () => {
+            hapticFeedback('heavy');
+        },
+    });
+
+    // Fetch dev wallet token balance for dev buy actions
+    const { data: devBuyBalance } = useQuery({
+        queryKey: ['devbuy-balance', tokenId],
+        queryFn: async () => {
+            const accessToken = await getAccessToken();
+            const res = await api.get(`/api/privy/launches/devbuy-balance/${tokenId}`, {
+                headers: { Authorization: `Bearer ${accessToken}` },
+            });
+            return res.data.data as { tokenBalance: number; tokenSymbol: string };
+        },
+        enabled: !!tokenId,
+        refetchInterval: 30000, // Refresh every 30s
+    });
+
+    // Dev buy action mutation
+    const devBuyActionMutation = useMutation({
+        mutationFn: async (action: 'burn' | 'sell' | 'transfer') => {
+            const accessToken = await getAccessToken();
+            const res = await api.post('/api/privy/launches/devbuy-action', {
+                tokenId,
+                action,
+            }, {
+                headers: { Authorization: `Bearer ${accessToken}` },
+            });
+            return res.data;
+        },
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['token', tokenId] });
+            queryClient.invalidateQueries({ queryKey: ['devbuy-balance', tokenId] });
+            hapticFeedback('heavy');
+            setDevBuyAction(null);
+            setShowDevBuyActions(false);
         },
         onError: () => {
             hapticFeedback('heavy');
@@ -273,6 +313,96 @@ export default function TokenDetailPage() {
                     <p className="text-xs text-gray-400">Tokens</p>
                 </div>
             </motion.div>
+
+            {/* Dev Buy Actions (only show if tokens in dev wallet) */}
+            {devBuyBalance && devBuyBalance.tokenBalance > 0 && (
+                <motion.div
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: 0.15 }}
+                    className="bg-yellow-900/30 border border-yellow-700/50 rounded-xl p-4 mb-6"
+                >
+                    <div className="flex items-center justify-between mb-3">
+                        <div>
+                            <p className="font-medium text-yellow-400">Dev Buy Tokens</p>
+                            <p className="text-sm text-yellow-400/70">
+                                {devBuyBalance.tokenBalance.toLocaleString()} {devBuyBalance.tokenSymbol} in dev wallet
+                            </p>
+                        </div>
+                        <button
+                            onClick={() => setShowDevBuyActions(!showDevBuyActions)}
+                            className="text-yellow-400 text-sm"
+                        >
+                            {showDevBuyActions ? 'Hide' : 'Manage'}
+                        </button>
+                    </div>
+
+                    {showDevBuyActions && (
+                        <div className="space-y-3">
+                            <p className="text-xs text-gray-400">
+                                What would you like to do with these tokens?
+                            </p>
+
+                            {/* Confirmation dialog */}
+                            {devBuyAction ? (
+                                <div className="bg-gray-800/50 rounded-lg p-3 space-y-3">
+                                    <p className="text-sm text-center">
+                                        {devBuyAction === 'burn' && '🔥 Burn all tokens permanently?'}
+                                        {devBuyAction === 'sell' && '💰 Sell all tokens for SOL?'}
+                                        {devBuyAction === 'transfer' && '📤 Transfer all tokens to ops wallet?'}
+                                    </p>
+                                    <div className="grid grid-cols-2 gap-2">
+                                        <button
+                                            onClick={() => setDevBuyAction(null)}
+                                            disabled={devBuyActionMutation.isPending}
+                                            className="bg-gray-700 hover:bg-gray-600 rounded-lg py-2 text-sm transition-colors"
+                                        >
+                                            Cancel
+                                        </button>
+                                        <button
+                                            onClick={() => devBuyActionMutation.mutate(devBuyAction)}
+                                            disabled={devBuyActionMutation.isPending}
+                                            className={`rounded-lg py-2 text-sm font-medium transition-colors ${
+                                                devBuyAction === 'burn'
+                                                    ? 'bg-red-600 hover:bg-red-500'
+                                                    : devBuyAction === 'sell'
+                                                    ? 'bg-green-600 hover:bg-green-500'
+                                                    : 'bg-blue-600 hover:bg-blue-500'
+                                            }`}
+                                        >
+                                            {devBuyActionMutation.isPending ? '...' : 'Confirm'}
+                                        </button>
+                                    </div>
+                                </div>
+                            ) : (
+                                <div className="grid grid-cols-3 gap-2">
+                                    <button
+                                        onClick={() => setDevBuyAction('burn')}
+                                        className="bg-red-600/20 hover:bg-red-600/30 border border-red-600/50 rounded-lg p-3 text-center transition-colors"
+                                    >
+                                        <div className="text-lg mb-1">🔥</div>
+                                        <div className="text-xs font-medium text-red-400">Burn</div>
+                                    </button>
+                                    <button
+                                        onClick={() => setDevBuyAction('sell')}
+                                        className="bg-green-600/20 hover:bg-green-600/30 border border-green-600/50 rounded-lg p-3 text-center transition-colors"
+                                    >
+                                        <div className="text-lg mb-1">💰</div>
+                                        <div className="text-xs font-medium text-green-400">Sell</div>
+                                    </button>
+                                    <button
+                                        onClick={() => setDevBuyAction('transfer')}
+                                        className="bg-blue-600/20 hover:bg-blue-600/30 border border-blue-600/50 rounded-lg p-3 text-center transition-colors"
+                                    >
+                                        <div className="text-lg mb-1">📤</div>
+                                        <div className="text-xs font-medium text-blue-400">Transfer</div>
+                                    </button>
+                                </div>
+                            )}
+                        </div>
+                    )}
+                </motion.div>
+            )}
 
             {/* Quick Actions */}
             <motion.div
