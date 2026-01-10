@@ -11,7 +11,7 @@ import { getConnection, getOpsWallet, getSolPrice } from '../config/solana'
 import { env } from '../config/env'
 import { bagsFmService, ClaimablePosition } from './bags-fm'
 import { loggers } from '../utils/logger'
-import { sendSerializedTransactionWithRetry, sendAndConfirmTransactionWithRetry, sendTransactionWithPrivySigning, sendTransactionWithPrivySignAndSend } from '../utils/transaction'
+import { sendSerializedTransactionWithRetry, sendAndConfirmTransactionWithRetry, sendTransactionWithPrivySigning } from '../utils/transaction'
 import {
   UserToken,
   getTokensForAutoClaim,
@@ -856,16 +856,16 @@ class FastClaimService {
             attempt: attempt + 1,
           }, 'Fresh RAW claim transactions generated, executing with Privy signing')
 
-          // Execute claim transactions with Privy signAndSend
-          // Privy handles EVERYTHING: signing, serialization, broadcast
-          // This avoids any issues with our manual broadcast
+          // Execute claim transactions using the WORKING pattern from token-launcher.ts:
+          // Sign with Privy → We broadcast ourselves → Poll for confirmation
+          // This pattern WORKS for token launches, so use it for claims too
           for (const tx of claimTxs) {
-            const result = await sendTransactionWithPrivySignAndSend(
+            const result = await sendTransactionWithPrivySigning(
               connection,
-              tx, // Raw transaction object - Privy handles everything
+              tx, // Raw transaction object
               devWalletAddress,
               {
-                maxRetries: 1, // Don't retry internally - we get fresh txs
+                maxRetries: 1, // Don't retry internally - we get fresh txs each outer attempt
                 logContext: { service: 'privy-fast-claim', attempt: attempt + 1 },
               }
             )
