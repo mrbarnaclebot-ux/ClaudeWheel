@@ -1839,62 +1839,86 @@ class MultiUserMMService {
 
   /**
    * Execute swap with Privy delegated signing
+   * Handles blockhash expiry by getting fresh transaction and retrying
    */
   private async executeSwapWithPrivySigning(
     connection: Connection,
     walletAddress: string,
     quoteResponse: unknown,
-    route: 'bags' | 'jupiter'
+    route: 'bags' | 'jupiter',
+    maxRetries: number = 3
   ): Promise<string | null> {
-    const swapData = await this.generateSwapTx(route, walletAddress, quoteResponse)
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      // Get fresh swap transaction for each attempt
+      const swapData = await this.generateSwapTx(route, walletAddress, quoteResponse)
 
-    if (!swapData) {
-      loggers.flywheel.error({ route }, 'Failed to get swap transaction for Privy signing')
-      return null
-    }
-
-    // Deserialize the transaction
-    let transaction: VersionedTransaction
-    try {
-      if (route === 'jupiter') {
-        const txBuffer = Buffer.from(swapData.transaction, 'base64')
-        transaction = VersionedTransaction.deserialize(txBuffer)
-      } else {
-        const txBuffer = bs58.decode(swapData.transaction)
-        transaction = VersionedTransaction.deserialize(txBuffer)
-      }
-    } catch (error) {
-      loggers.flywheel.error({ route, error: String(error) }, 'Failed to deserialize transaction for Privy signing')
-      return null
-    }
-
-    // Use Privy to sign and send
-    const signature = await privyService.signAndSendSolanaTransaction(walletAddress, transaction)
-
-    if (!signature) {
-      loggers.flywheel.error({ route, walletAddress }, 'Privy signing failed')
-      return null
-    }
-
-    // Wait for confirmation
-    try {
-      const latestBlockhash = await connection.getLatestBlockhash('confirmed')
-      const confirmation = await connection.confirmTransaction({
-        signature,
-        blockhash: latestBlockhash.blockhash,
-        lastValidBlockHeight: latestBlockhash.lastValidBlockHeight,
-      }, 'confirmed')
-
-      if (confirmation.value.err) {
-        loggers.flywheel.error({ route, signature, error: confirmation.value.err }, 'Privy transaction failed')
+      if (!swapData) {
+        loggers.flywheel.error({ route, attempt }, 'Failed to get swap transaction for Privy signing')
         return null
       }
-    } catch (error) {
-      loggers.flywheel.warn({ route, signature, error: String(error) }, 'Could not confirm Privy transaction, continuing anyway')
+
+      // Deserialize the transaction
+      let transaction: VersionedTransaction
+      try {
+        if (route === 'jupiter') {
+          const txBuffer = Buffer.from(swapData.transaction, 'base64')
+          transaction = VersionedTransaction.deserialize(txBuffer)
+        } else {
+          const txBuffer = bs58.decode(swapData.transaction)
+          transaction = VersionedTransaction.deserialize(txBuffer)
+        }
+      } catch (error) {
+        loggers.flywheel.error({ route, error: String(error) }, 'Failed to deserialize transaction for Privy signing')
+        return null
+      }
+
+      // Use Privy to sign and send
+      try {
+        const signature = await privyService.signAndSendSolanaTransaction(walletAddress, transaction)
+
+        if (!signature) {
+          loggers.flywheel.error({ route, walletAddress, attempt }, 'Privy signing returned null')
+          continue
+        }
+
+        // Wait for confirmation
+        try {
+          const latestBlockhash = await connection.getLatestBlockhash('confirmed')
+          const confirmation = await connection.confirmTransaction({
+            signature,
+            blockhash: latestBlockhash.blockhash,
+            lastValidBlockHeight: latestBlockhash.lastValidBlockHeight,
+          }, 'confirmed')
+
+          if (confirmation.value.err) {
+            loggers.flywheel.error({ route, signature, error: confirmation.value.err }, 'Privy transaction failed on-chain')
+            return null
+          }
+        } catch (error) {
+          loggers.flywheel.warn({ route, signature, error: String(error) }, 'Could not confirm Privy transaction, continuing anyway')
+        }
+
+        loggers.flywheel.info({ route, signature, attempt: attempt + 1 }, 'Privy swap executed successfully')
+        return signature
+      } catch (error) {
+        const errorMsg = String(error)
+
+        // Check if it's a blockhash expiry error - retry with fresh transaction
+        if (errorMsg.includes('BLOCKHASH_EXPIRED') || errorMsg.includes('Blockhash not found') || errorMsg.includes('block height exceeded')) {
+          loggers.flywheel.warn({ route, attempt: attempt + 1, maxRetries }, 'Blockhash expired, retrying with fresh transaction')
+          // Small delay before retry
+          await new Promise(resolve => setTimeout(resolve, 500))
+          continue
+        }
+
+        // Non-retryable error
+        loggers.flywheel.error({ route, walletAddress, error: errorMsg, attempt }, 'Privy signing failed with non-retryable error')
+        return null
+      }
     }
 
-    loggers.flywheel.info({ route, signature }, 'Privy swap executed successfully')
-    return signature
+    loggers.flywheel.error({ route, walletAddress, maxRetries }, 'Privy swap failed after all retries')
+    return null
   }
 
   /**
