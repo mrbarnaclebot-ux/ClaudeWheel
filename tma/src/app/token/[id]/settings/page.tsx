@@ -13,11 +13,6 @@ interface TokenConfig {
     flywheel_active: boolean;
     auto_claim_enabled: boolean;
     algorithm_mode: 'simple' | 'smart' | 'rebalance';
-    min_buy_amount_sol: number;
-    max_buy_amount_sol: number;
-    max_sell_tokens: number;
-    slippage_bps: number;
-    trading_route: 'auto' | 'bags' | 'jupiter';
 }
 
 interface TokenDetails {
@@ -58,10 +53,6 @@ export default function TokenSettingsPage() {
                 flywheel_active: token.config.flywheel_active,
                 auto_claim_enabled: token.config.auto_claim_enabled,
                 algorithm_mode: token.config.algorithm_mode,
-                min_buy_amount_sol: token.config.min_buy_amount_sol,
-                max_buy_amount_sol: token.config.max_buy_amount_sol,
-                slippage_bps: token.config.slippage_bps,
-                trading_route: token.config.trading_route,
             });
         }
     }, [token]);
@@ -180,94 +171,11 @@ export default function TokenSettingsPage() {
                 </div>
             </motion.div>
 
-            {/* Trading Settings */}
-            <motion.div
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: 0.1 }}
-                className="bg-gray-800/50 rounded-xl p-4 mb-6"
-            >
-                <h3 className="font-medium text-gray-400 mb-4">Trading Settings</h3>
-
-                <div className="space-y-4">
-                    {/* Min Buy Amount */}
-                    <div>
-                        <label className="block text-sm font-medium mb-2">Min Buy Amount (SOL)</label>
-                        <input
-                            type="number"
-                            step="0.01"
-                            min="0.001"
-                            max={formData.max_buy_amount_sol}
-                            value={formData.min_buy_amount_sol || ''}
-                            onChange={(e) => updateField('min_buy_amount_sol', parseFloat(e.target.value))}
-                            className="w-full bg-gray-900 rounded-lg px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-green-500"
-                        />
-                    </div>
-
-                    {/* Max Buy Amount */}
-                    <div>
-                        <label className="block text-sm font-medium mb-2">Max Buy Amount (SOL)</label>
-                        <input
-                            type="number"
-                            step="0.01"
-                            min={formData.min_buy_amount_sol}
-                            max="10"
-                            value={formData.max_buy_amount_sol || ''}
-                            onChange={(e) => updateField('max_buy_amount_sol', parseFloat(e.target.value))}
-                            className="w-full bg-gray-900 rounded-lg px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-green-500"
-                        />
-                    </div>
-
-                    {/* Slippage */}
-                    <div>
-                        <label className="block text-sm font-medium mb-2">
-                            Slippage: {((formData.slippage_bps || 0) / 100).toFixed(1)}%
-                        </label>
-                        <input
-                            type="range"
-                            min="50"
-                            max="1000"
-                            step="50"
-                            value={formData.slippage_bps || 300}
-                            onChange={(e) => updateField('slippage_bps', parseInt(e.target.value))}
-                            className="w-full"
-                        />
-                        <div className="flex justify-between text-xs text-gray-400 mt-1">
-                            <span>0.5%</span>
-                            <span>10%</span>
-                        </div>
-                    </div>
-
-                    {/* Trading Route */}
-                    <div>
-                        <label className="block text-sm font-medium mb-2">Trading Route</label>
-                        <div className="grid grid-cols-3 gap-2">
-                            {(['auto', 'bags', 'jupiter'] as const).map((route) => (
-                                <button
-                                    key={route}
-                                    onClick={() => updateField('trading_route', route)}
-                                    className={`py-3 rounded-lg font-medium transition-colors capitalize ${
-                                        formData.trading_route === route
-                                            ? 'bg-green-600 text-white'
-                                            : 'bg-gray-700 text-gray-300'
-                                    }`}
-                                >
-                                    {route}
-                                </button>
-                            ))}
-                        </div>
-                        <p className="text-xs text-gray-400 mt-2">
-                            Auto: Uses Bags.fm before graduation, Jupiter after
-                        </p>
-                    </div>
-                </div>
-            </motion.div>
-
             {/* Algorithm Settings */}
             <motion.div
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: 0.2 }}
+                transition={{ delay: 0.1 }}
                 className="bg-gray-800/50 rounded-xl p-4 mb-6"
             >
                 <h3 className="font-medium text-gray-400 mb-4">Algorithm Mode</h3>
