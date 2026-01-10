@@ -202,8 +202,8 @@ class PrivyService {
   // ═══════════════════════════════════════════════════════════════════════════
 
   /**
-   * Sign a Solana transaction using delegated access (Orica pattern)
-   * Uses walletApi.rpc method which is more reliable than walletApi.solana.signTransaction
+   * Sign a Solana transaction using delegated access
+   * Uses walletApi.solana.signTransaction (same pattern as signAndSendTransaction)
    * IMPORTANT: Only works if user has delegated the wallet via frontend
    */
   async signSolanaTransaction(
@@ -216,92 +216,44 @@ class PrivyService {
     }
 
     try {
-      // Look up the Privy wallet ID from our database (Orica uses walletId, not address)
-      let walletId: string = walletAddress // fallback to address
+      // Look up the Privy wallet ID from our database
+      let walletId: string | undefined
       if (isPrismaConfigured()) {
         const wallet = await prisma.privyWallet.findUnique({
           where: { walletAddress },
           select: { privyWalletId: true },
         })
-        if (wallet?.privyWalletId) {
-          walletId = wallet.privyWalletId
-        }
+        walletId = wallet?.privyWalletId
       }
 
-      logger.debug({ walletAddress, walletId }, 'Signing transaction with Privy RPC method')
+      // Validate wallet ID format - Privy IDs look like UUIDs, not Solana addresses
+      const isValidPrivyWalletId = walletId &&
+        (walletId.includes('-') || walletId.length < 30) &&
+        walletId !== walletAddress
 
-      // Always serialize transaction to base64 before sending to Privy
-      // This ensures Privy gets exactly the bytes we expect them to sign
-      // Note: instanceof checks can fail across module boundaries, so we try serialize methods
-      let transactionToSend: string
-      try {
-        if (transaction instanceof VersionedTransaction) {
-          const serialized = transaction.serialize()
-          transactionToSend = Buffer.from(serialized).toString('base64')
-        } else if (transaction instanceof Transaction) {
-          const serialized = transaction.serialize({ requireAllSignatures: false, verifySignatures: false })
-          transactionToSend = Buffer.from(serialized).toString('base64')
-        } else if ((transaction as any).serialize) {
-          // Fallback: try calling serialize directly (handles class mismatch from different imports)
-          const serialized = (transaction as any).serialize()
-          transactionToSend = Buffer.from(serialized).toString('base64')
-        } else {
-          throw new Error('Transaction has no serialize method')
-        }
-        logger.debug({ base64Length: transactionToSend.length }, 'Serialized transaction to base64')
-      } catch (serializeError) {
-        logger.error({ error: String(serializeError) }, 'Failed to serialize transaction')
-        return null
+      logger.debug({ walletAddress, walletId, isValidPrivyWalletId }, 'Signing transaction with Privy SDK')
+
+      let signedTransaction: Transaction | VersionedTransaction
+      if (isValidPrivyWalletId && walletId) {
+        // Use walletId (preferred)
+        const result = await this.client.walletApi.solana.signTransaction({
+          walletId,
+          chainType: 'solana',
+          transaction,
+        })
+        signedTransaction = result.signedTransaction
+      } else {
+        // Fall back to address
+        const result = await this.client.walletApi.solana.signTransaction({
+          address: walletAddress,
+          chainType: 'solana',
+          transaction,
+        })
+        signedTransaction = result.signedTransaction
       }
 
-      // Use walletApi.rpc method like Orica does
-      const privyClient = this.client as any
-      const signResult = await privyClient.walletApi.rpc({
-        walletId: walletId,
-        caip2: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp', // mainnet
-        method: 'signTransaction',
-        params: {
-          transaction: transactionToSend,
-        },
-      })
-
-      logger.debug({ signResultType: typeof signResult, hasData: !!signResult?.data }, 'Privy sign result')
-
-      // Handle multiple response formats (Orica pattern)
-      const signedTx =
-        signResult?.signedTransaction ||
-        signResult?.data?.signedTransaction ||
-        signResult?.transaction ||
-        signResult?.data?.transaction ||
-        signResult
-
-      if (!signedTx) {
-        logger.error('No signed transaction in Privy response')
-        return null
-      }
-
-      // If it's already a Transaction/VersionedTransaction object, return it
-      if (signedTx instanceof Transaction || signedTx instanceof VersionedTransaction) {
-        return signedTx
-      }
-
-      // If it's base64 encoded, deserialize it
-      if (typeof signedTx === 'string') {
-        const buffer = Buffer.from(signedTx, 'base64')
-        try {
-          return VersionedTransaction.deserialize(buffer)
-        } catch {
-          return Transaction.from(buffer)
-        }
-      }
-
-      // If it has a serialize method, it's likely a transaction object
-      if (signedTx.serialize) {
-        return signedTx
-      }
-
-      logger.error({ signedTxType: typeof signedTx }, 'Unknown signed transaction format')
-      return null
+      logger.debug({ hasSignedTx: !!signedTransaction }, 'Privy sign result')
+      return signedTransaction
     } catch (error) {
       logger.error({ error: String(error), walletAddress }, 'Failed to sign Solana transaction')
       return null
