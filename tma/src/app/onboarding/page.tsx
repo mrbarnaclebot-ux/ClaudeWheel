@@ -44,12 +44,37 @@ export default function OnboardingPage() {
         );
     };
 
-    // If user already has 2 wallets, skip to delegation
+    // Track if we should auto-complete registration (both wallets already delegated)
+    const [shouldAutoComplete, setShouldAutoComplete] = useState(false);
+
+    // If user already has 2 wallets, check delegation status and skip appropriately
     useEffect(() => {
-        if (ready && authenticated && wallets.length >= 2 && step === 'welcome') {
+        if (!ready || !authenticated || wallets.length < 2 || step !== 'welcome') return;
+
+        const devDelegated = isWalletDelegated(wallets[0]?.address);
+        const opsDelegated = isWalletDelegated(wallets[1]?.address);
+
+        console.log('[Onboarding] Checking existing wallet status:', {
+            devAddress: wallets[0]?.address?.slice(0, 8),
+            opsAddress: wallets[1]?.address?.slice(0, 8),
+            devDelegated,
+            opsDelegated,
+        });
+
+        if (devDelegated && opsDelegated) {
+            // Both wallets already delegated, skip to registration
+            console.log('[Onboarding] Both wallets already delegated, completing registration...');
+            setStep('registering');
+            setShouldAutoComplete(true);
+        } else if (devDelegated) {
+            // Dev wallet delegated, skip to ops delegation
+            console.log('[Onboarding] Dev wallet already delegated, skipping to ops...');
+            setStep('delegate_ops');
+        } else {
+            // Need to delegate dev wallet
             setStep('delegate_dev');
         }
-    }, [ready, authenticated, wallets.length, step]);
+    }, [ready, authenticated, wallets.length, step, user?.linkedAccounts]);
 
     async function handleStart() {
         if (!ready || !authenticated) {
@@ -264,6 +289,14 @@ export default function OnboardingPage() {
             setStep('delegate_ops'); // Go back to retry
         }
     }
+
+    // Auto-complete registration if both wallets were already delegated
+    useEffect(() => {
+        if (shouldAutoComplete && step === 'registering') {
+            completeRegistration();
+            setShouldAutoComplete(false); // Prevent re-running
+        }
+    }, [shouldAutoComplete, step]);
 
     return (
         <div className="min-h-screen flex flex-col p-6">
