@@ -36,13 +36,16 @@ export class TwapVwapService {
   ): Promise<ExecutionDecision> {
     const priceData = await this.analyzer.fetchCurrentPrice();
 
-    // No price data - fall back to instant
+    // No price data - fall back to instant but cap at safe amount
     if (!priceData) {
+      // Cap fallback trades to 10% of intended amount to prevent large trades on API failure
+      const safeAmount = Math.min(intendedAmount * 0.1, availableBalance);
+      loggers.flywheel.warn({ intendedAmount, safeAmount }, 'No price data, using capped fallback amount');
       return {
         shouldExecuteNow: true,
         executionType: 'instant',
-        tradeAmount: Math.min(intendedAmount, availableBalance),
-        reason: 'No price data available, using instant execution',
+        tradeAmount: safeAmount,
+        reason: 'No price data available, using capped fallback (10% of intended)',
       };
     }
 
