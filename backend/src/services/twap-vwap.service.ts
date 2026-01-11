@@ -53,13 +53,18 @@ export class TwapVwapService {
       if (vwapContext.targetTradeSize > 0) {
         // Convert USD target to SOL (approximate)
         const solPrice = priceData.price > 0 ? 1 / priceData.price : 0;
-        const vwapAmountSol = Math.min(vwapContext.actualTradeSize * solPrice, availableBalance);
+        // IMPORTANT: Cap at intendedAmount to respect max_buy/sell settings
+        const vwapAmountSol = Math.min(
+          vwapContext.actualTradeSize * solPrice,
+          availableBalance,
+          intendedAmount // Never exceed the intended trade amount from config
+        );
 
         return {
           shouldExecuteNow: true,
           executionType: 'vwap',
           tradeAmount: vwapAmountSol > 0 ? vwapAmountSol : Math.min(intendedAmount, availableBalance),
-          reason: `VWAP: ${config.vwap_participation_rate}% of ${priceData.volume24h.toFixed(0)} USD volume`,
+          reason: `VWAP: ${config.vwap_participation_rate}% of ${priceData.volume24h.toFixed(0)} USD volume (capped at ${intendedAmount.toFixed(4)} SOL)`,
         };
       }
     }
