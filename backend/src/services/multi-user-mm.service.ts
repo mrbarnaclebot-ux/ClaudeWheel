@@ -1304,16 +1304,27 @@ class MultiUserMMService {
     if (state.cycle_phase === 'buy') {
       // Check SOL balance
       const solBalance = await getBalance(wallet.publicKey)
-      const minRequired = config.min_buy_amount_sol + 0.01
+      const minReserve = 0.01 // Reserve for tx fees
 
-      if (solBalance < minRequired) {
-        loggers.flywheel.info({ tokenSymbol: token.token_symbol, solBalance, minRequired }, 'Insufficient SOL for TWAP/VWAP buy')
+      // Calculate buy amount based on config
+      let intendedAmount: number
+      if (config.buy_percent && config.buy_percent > 0) {
+        // Percentage-based: use X% of available SOL balance
+        const availableForTrade = Math.max(0, solBalance - minReserve)
+        intendedAmount = availableForTrade * (config.buy_percent / 100)
+        loggers.flywheel.debug({ tokenSymbol: token.token_symbol, buyPercent: config.buy_percent, solBalance, intendedAmount }, 'Using percentage-based buy')
+      } else {
+        // Legacy: random between min and max
+        intendedAmount = this.randomBetween(config.min_buy_amount_sol, config.max_buy_amount_sol)
+      }
+
+      const minRequired = Math.min(intendedAmount, config.min_buy_amount_sol) + minReserve
+
+      if (solBalance < minRequired || intendedAmount < 0.001) {
+        loggers.flywheel.info({ tokenSymbol: token.token_symbol, solBalance, minRequired, intendedAmount }, 'Insufficient SOL for TWAP/VWAP buy')
         await this.updateFlywheelCheck(token.id, 'insufficient_sol')
         return null
       }
-
-      // Get intended buy amount (random within bounds)
-      const intendedAmount = this.randomBetween(config.min_buy_amount_sol, config.max_buy_amount_sol)
 
       // Get execution decision from TWAP/VWAP service
       const decision = await twapVwapService.getExecutionDecision(
@@ -1392,16 +1403,26 @@ class MultiUserMMService {
 
     } else {
       // SELL phase - similar logic with TWAP/VWAP execution
-      const sellAmount = state.sell_amount_per_tx
+      const tokenBalance = await getTokenBalance(wallet.publicKey, tokenMint)
 
-      if (sellAmount <= 0) {
-        loggers.flywheel.info({ tokenSymbol: token.token_symbol }, 'No tokens to sell in TWAP/VWAP, switching to buy')
+      // Calculate sell amount based on config
+      let sellAmount: number
+      if (config.sell_percent && config.sell_percent > 0) {
+        // Percentage-based: use X% of current token balance
+        sellAmount = tokenBalance * (config.sell_percent / 100)
+        loggers.flywheel.debug({ tokenSymbol: token.token_symbol, sellPercent: config.sell_percent, tokenBalance, sellAmount }, 'Using percentage-based sell')
+      } else {
+        // Legacy: use pre-calculated amount from buy phase
+        sellAmount = state.sell_amount_per_tx
+      }
+
+      if (sellAmount <= 0 || tokenBalance < 1) {
+        loggers.flywheel.info({ tokenSymbol: token.token_symbol, tokenBalance }, 'No tokens to sell in TWAP/VWAP, switching to buy')
         await this.updateFlywheelCheck(token.id, 'no_tokens')
         await updateFlywheelState(token.id, { cycle_phase: 'buy', sell_count: 0 })
         return null
       }
 
-      const tokenBalance = await getTokenBalance(wallet.publicKey, tokenMint)
       const actualSellAmount = Math.min(sellAmount, tokenBalance)
 
       if (actualSellAmount < 1) {

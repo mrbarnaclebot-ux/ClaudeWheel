@@ -55,6 +55,10 @@ export interface UserTokenConfig {
   vwap_participation_rate: number
   vwap_min_volume_usd: number
 
+  // Percentage-based trading (0 = use min/max SOL instead)
+  buy_percent: number   // % of SOL balance to use for buys
+  sell_percent: number  // % of token balance to use for sells
+
   // Dynamic Mode Configuration (for dynamic mode)
   dynamic_fee_enabled: boolean
   reserve_percent_normal: number
@@ -128,6 +132,10 @@ const DEFAULT_CONFIG: Omit<UserTokenConfig, 'id' | 'user_token_id' | 'updated_at
   vwap_enabled: true,
   vwap_participation_rate: 10,
   vwap_min_volume_usd: 1000,
+
+  // Percentage-based trading (0 = use min/max instead)
+  buy_percent: 0,
+  sell_percent: 0,
 
   // Dynamic mode defaults
   dynamic_fee_enabled: true,
