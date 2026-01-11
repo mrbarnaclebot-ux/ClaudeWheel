@@ -170,6 +170,166 @@ router.get('/logs', (req: Request, res: Response) => {
 // WHEEL TOKEN STATUS (Public - Live Solana Data)
 // ═══════════════════════════════════════════════════════════════════════════
 
+// GET /api/status/platform-stats - Get platform-wide token statistics
+router.get('/platform-stats', async (_req: Request, res: Response) => {
+  try {
+    // Initialize counters
+    let launchedCount = 0
+    let registeredCount = 0
+    let mmOnlyCount = 0
+    let totalActiveFlywheels = 0
+    let totalUsers = 0
+    let totalSolVolume = 0
+    let totalFeesCollected = 0
+
+    // Fetch from Supabase (legacy system)
+    if (supabase) {
+      try {
+        // Count launched tokens (from pending_token_launches with completed status)
+        const { count: launchedLegacy } = await supabase
+          .from('pending_token_launches')
+          .select('*', { count: 'exact', head: true })
+          .eq('status', 'completed')
+        launchedCount += launchedLegacy || 0
+
+        // Count all registered user tokens
+        const { count: registeredLegacy } = await supabase
+          .from('user_tokens')
+          .select('*', { count: 'exact', head: true })
+          .eq('is_active', true)
+        registeredCount += registeredLegacy || 0
+
+        // Count MM-only tokens (market_making enabled but auto_claim disabled)
+        const { data: mmOnlyLegacy } = await supabase
+          .from('user_token_config')
+          .select('id')
+          .eq('market_making_enabled', true)
+          .eq('auto_claim_enabled', false)
+        mmOnlyCount += mmOnlyLegacy?.length || 0
+
+        // Count active flywheels
+        const { count: activeFlywheels } = await supabase
+          .from('user_token_config')
+          .select('*', { count: 'exact', head: true })
+          .eq('flywheel_active', true)
+        totalActiveFlywheels += activeFlywheels || 0
+
+        // Count total users
+        const { count: usersLegacy } = await supabase
+          .from('users')
+          .select('*', { count: 'exact', head: true })
+        totalUsers += usersLegacy || 0
+
+        // Get fee stats
+        const { data: feeStats } = await supabase
+          .from('fee_stats')
+          .select('total_collected')
+          .eq('id', 'main')
+          .single()
+        totalFeesCollected += feeStats?.total_collected || 0
+
+        // Calculate total volume from transactions
+        const { data: txVolume } = await supabase
+          .from('transactions')
+          .select('amount')
+        if (txVolume) {
+          totalSolVolume += txVolume.reduce((sum, tx) => sum + (tx.amount || 0), 0)
+        }
+      } catch (e) {
+        loggers.server.warn('Failed to fetch legacy platform stats')
+      }
+    }
+
+    // Fetch from Prisma (Privy system) - import prisma client
+    try {
+      const { prisma } = await import('../config/prisma')
+
+      // Count launched tokens from Privy
+      const privyLaunched = await prisma.privyPendingLaunch.count({
+        where: { status: 'launched' }
+      })
+      launchedCount += privyLaunched
+
+      // Also count tokens with source = 'launched'
+      const privyLaunchedTokens = await prisma.privyUserToken.count({
+        where: { tokenSource: 'launched', isActive: true }
+      })
+      // Avoid double counting - only add if not already in pending launches
+      if (privyLaunchedTokens > privyLaunched) {
+        launchedCount += (privyLaunchedTokens - privyLaunched)
+      }
+
+      // Count registered tokens
+      const privyRegistered = await prisma.privyUserToken.count({
+        where: { tokenSource: 'registered', isActive: true }
+      })
+      registeredCount += privyRegistered
+
+      // Count MM-only tokens
+      const privyMmOnly = await prisma.privyUserToken.count({
+        where: { tokenSource: 'mm_only', isActive: true }
+      })
+      // Also count from PrivyMmPending
+      const privyMmPending = await prisma.privyMmPending.count({
+        where: { status: 'active' }
+      })
+      mmOnlyCount += privyMmOnly + privyMmPending
+
+      // Count Privy users
+      const privyUsers = await prisma.privyUser.count()
+      totalUsers += privyUsers
+
+      // Count active flywheels in Privy
+      const privyActiveFlywheels = await prisma.privyTokenConfig.count({
+        where: { flywheelActive: true }
+      })
+      totalActiveFlywheels += privyActiveFlywheels
+
+      // Get Privy claim history for volume
+      const privyClaims = await prisma.privyClaimHistory.aggregate({
+        _sum: { totalAmountSol: true }
+      })
+      totalFeesCollected += Number(privyClaims._sum.totalAmountSol || 0)
+
+      // Get transaction volume
+      const privyTxVolume = await prisma.privyTransaction.aggregate({
+        _sum: { amount: true }
+      })
+      totalSolVolume += Number(privyTxVolume._sum.amount || 0)
+    } catch (e) {
+      loggers.server.warn('Failed to fetch Privy platform stats')
+    }
+
+    res.json({
+      success: true,
+      data: {
+        tokens: {
+          launched: launchedCount,
+          registered: registeredCount,
+          mmOnly: mmOnlyCount,
+          total: launchedCount + registeredCount + mmOnlyCount,
+          activeFlywheels: totalActiveFlywheels,
+        },
+        users: {
+          total: totalUsers,
+        },
+        volume: {
+          totalSol: totalSolVolume,
+          totalFeesCollected: totalFeesCollected,
+        },
+      },
+      timestamp: new Date().toISOString(),
+    })
+  } catch (error: any) {
+    loggers.server.error({ error: error.message }, 'Failed to fetch platform stats')
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch platform statistics',
+      timestamp: new Date().toISOString(),
+    })
+  }
+})
+
 // GET /api/status/wheel - Get LIVE WHEEL token data from Solana
 router.get('/wheel', async (_req: Request, res: Response) => {
   try {

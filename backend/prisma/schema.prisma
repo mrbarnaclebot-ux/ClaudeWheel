@@ -118,18 +118,36 @@ model PrivyTokenConfig {
   maxSellAmountTokens   Decimal  @default(1000000) @map("max_sell_amount_tokens") @db.Decimal(30, 9)
   buyIntervalMinutes    Int      @default(5) @map("buy_interval_minutes")
   slippageBps           Int      @default(300) @map("slippage_bps")
-  algorithmMode         String   @default("simple") @map("algorithm_mode")
+  algorithmMode         String   @default("simple") @map("algorithm_mode") // simple, rebalance, twap_vwap, dynamic
   targetSolAllocation   Int      @default(30) @map("target_sol_allocation")
   targetTokenAllocation Int      @default(70) @map("target_token_allocation")
   rebalanceThreshold    Int      @default(10) @map("rebalance_threshold")
-  useTwap               Boolean  @default(true) @map("use_twap")
-  twapThresholdUsd      Decimal  @default(50) @map("twap_threshold_usd") @db.Decimal(20, 2)
   tradingRoute          String   @default("auto") @map("trading_route")
   updatedAt             DateTime @updatedAt @map("updated_at")
+
+  // TWAP/VWAP Configuration (for twap_vwap and dynamic modes)
+  twapEnabled           Boolean  @default(true) @map("twap_enabled")
+  twapSlices            Int      @default(5) @map("twap_slices")
+  twapWindowMinutes     Int      @default(30) @map("twap_window_minutes")
+  twapThresholdUsd      Decimal  @default(50) @map("twap_threshold_usd") @db.Decimal(20, 2)
+  vwapEnabled           Boolean  @default(true) @map("vwap_enabled")
+  vwapParticipationRate Int      @default(10) @map("vwap_participation_rate")
+  vwapMinVolumeUsd      Decimal  @default(1000) @map("vwap_min_volume_usd") @db.Decimal(20, 2)
+
+  // Dynamic Mode Configuration (for dynamic mode)
+  dynamicFeeEnabled         Boolean @default(true) @map("dynamic_fee_enabled")
+  reservePercentNormal      Int     @default(10) @map("reserve_percent_normal")
+  reservePercentAdverse     Int     @default(20) @map("reserve_percent_adverse")
+  minSellPercent            Int     @default(10) @map("min_sell_percent")
+  maxSellPercent            Int     @default(30) @map("max_sell_percent")
+  buybackBoostOnDump        Boolean @default(true) @map("buyback_boost_on_dump")
+  pauseOnExtremeVolatility  Boolean @default(true) @map("pause_on_extreme_volatility")
+  volatilityPauseThreshold  Int     @default(15) @map("volatility_pause_threshold")
 
   token PrivyUserToken @relation(fields: [privyTokenId], references: [id], onDelete: Cascade)
 
   @@index([flywheelActive])
+  @@index([algorithmMode])
   @@map("privy_token_config")
 }
 
@@ -156,8 +174,16 @@ model PrivyFlywheelState {
   lastCheckResult        String?   @map("last_check_result")
   updatedAt              DateTime  @updatedAt @map("updated_at")
 
+  // Dynamic Mode State (market condition tracking and reserve)
+  marketCondition         String    @default("normal") @map("market_condition") // pump, dump, ranging, normal, extreme_volatility
+  previousMarketCondition String    @default("normal") @map("previous_market_condition")
+  lastConditionChangeAt   DateTime? @map("last_condition_change_at")
+  reserveBalanceSol       Decimal   @default(0) @map("reserve_balance_sol") @db.Decimal(20, 9)
+  twapQueue               Json      @default("[]") @map("twap_queue")
+
   token PrivyUserToken @relation(fields: [privyTokenId], references: [id], onDelete: Cascade)
 
+  @@index([marketCondition])
   @@map("privy_flywheel_state")
 }
 
@@ -192,7 +218,7 @@ model PrivyPendingLaunch {
   updatedAt        DateTime  @updatedAt @map("updated_at")
 
   // MM Config - user-selected market making preferences
-  mmAlgorithm      String    @default("simple") @map("mm_algorithm") // simple, smart, rebalance
+  mmAlgorithm      String    @default("simple") @map("mm_algorithm") // simple, rebalance, twap_vwap, dynamic
   mmMinBuySol      Decimal   @default(0.01) @map("mm_min_buy_sol") @db.Decimal(20, 9)
   mmMaxBuySol      Decimal   @default(0.05) @map("mm_max_buy_sol") @db.Decimal(20, 9)
   mmAutoClaimEnabled Boolean @default(true) @map("mm_auto_claim_enabled")
@@ -286,7 +312,7 @@ model PrivyMmPending {
   opsWalletId      String   @map("ops_wallet_id")
   depositAddress   String   @map("deposit_address")
   minDepositSol    Decimal  @default(0.1) @map("min_deposit_sol") @db.Decimal(20, 9)
-  mmAlgorithm      String   @default("simple") @map("mm_algorithm") // simple, rebalance
+  mmAlgorithm      String   @default("simple") @map("mm_algorithm") // simple, rebalance, twap_vwap, dynamic
   status           String   @default("awaiting_deposit") // awaiting_deposit, active, cancelled, expired
   expiresAt        DateTime @map("expires_at")
   activatedAt      DateTime? @map("activated_at")

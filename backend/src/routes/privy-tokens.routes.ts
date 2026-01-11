@@ -367,13 +367,28 @@ const updateConfigSchema = z.object({
   max_sell_amount_tokens: z.number().min(0).optional(),
   buy_interval_minutes: z.number().int().min(1).optional(),
   slippage_bps: z.number().int().min(0).max(5000).optional(),
-  algorithm_mode: z.enum(['simple', 'smart', 'rebalance']).optional(),
+  algorithm_mode: z.enum(['simple', 'rebalance', 'twap_vwap', 'dynamic']).optional(),
   target_sol_allocation: z.number().int().min(0).max(100).optional(),
   target_token_allocation: z.number().int().min(0).max(100).optional(),
   rebalance_threshold: z.number().int().min(1).max(50).optional(),
-  use_twap: z.boolean().optional(),
-  twap_threshold_usd: z.number().min(0).optional(),
   trading_route: z.enum(['bags', 'jupiter', 'auto']).optional(),
+  // TWAP/VWAP Configuration
+  twap_enabled: z.boolean().optional(),
+  twap_slices: z.number().int().min(2).max(20).optional(),
+  twap_window_minutes: z.number().int().min(5).max(120).optional(),
+  twap_threshold_usd: z.number().min(0).optional(),
+  vwap_enabled: z.boolean().optional(),
+  vwap_participation_rate: z.number().int().min(1).max(50).optional(),
+  vwap_min_volume_usd: z.number().min(0).optional(),
+  // Dynamic Mode Configuration
+  dynamic_fee_enabled: z.boolean().optional(),
+  reserve_percent_normal: z.number().int().min(0).max(50).optional(),
+  reserve_percent_adverse: z.number().int().min(0).max(50).optional(),
+  min_sell_percent: z.number().int().min(1).max(50).optional(),
+  max_sell_percent: z.number().int().min(1).max(100).optional(),
+  buyback_boost_on_dump: z.boolean().optional(),
+  pause_on_extreme_volatility: z.boolean().optional(),
+  volatility_pause_threshold: z.number().int().min(5).max(50).optional(),
 })
 
 /**
@@ -441,9 +456,24 @@ router.put('/:id/config', async (req: PrivyRequest, res: Response) => {
     if (config.target_sol_allocation !== undefined) prismaConfig.targetSolAllocation = config.target_sol_allocation
     if (config.target_token_allocation !== undefined) prismaConfig.targetTokenAllocation = config.target_token_allocation
     if (config.rebalance_threshold !== undefined) prismaConfig.rebalanceThreshold = config.rebalance_threshold
-    if (config.use_twap !== undefined) prismaConfig.useTwap = config.use_twap
-    if (config.twap_threshold_usd !== undefined) prismaConfig.twapThresholdUsd = config.twap_threshold_usd
     if (config.trading_route !== undefined) prismaConfig.tradingRoute = config.trading_route
+    // TWAP/VWAP config
+    if (config.twap_enabled !== undefined) prismaConfig.twapEnabled = config.twap_enabled
+    if (config.twap_slices !== undefined) prismaConfig.twapSlices = config.twap_slices
+    if (config.twap_window_minutes !== undefined) prismaConfig.twapWindowMinutes = config.twap_window_minutes
+    if (config.twap_threshold_usd !== undefined) prismaConfig.twapThresholdUsd = config.twap_threshold_usd
+    if (config.vwap_enabled !== undefined) prismaConfig.vwapEnabled = config.vwap_enabled
+    if (config.vwap_participation_rate !== undefined) prismaConfig.vwapParticipationRate = config.vwap_participation_rate
+    if (config.vwap_min_volume_usd !== undefined) prismaConfig.vwapMinVolumeUsd = config.vwap_min_volume_usd
+    // Dynamic mode config
+    if (config.dynamic_fee_enabled !== undefined) prismaConfig.dynamicFeeEnabled = config.dynamic_fee_enabled
+    if (config.reserve_percent_normal !== undefined) prismaConfig.reservePercentNormal = config.reserve_percent_normal
+    if (config.reserve_percent_adverse !== undefined) prismaConfig.reservePercentAdverse = config.reserve_percent_adverse
+    if (config.min_sell_percent !== undefined) prismaConfig.minSellPercent = config.min_sell_percent
+    if (config.max_sell_percent !== undefined) prismaConfig.maxSellPercent = config.max_sell_percent
+    if (config.buyback_boost_on_dump !== undefined) prismaConfig.buybackBoostOnDump = config.buyback_boost_on_dump
+    if (config.pause_on_extreme_volatility !== undefined) prismaConfig.pauseOnExtremeVolatility = config.pause_on_extreme_volatility
+    if (config.volatility_pause_threshold !== undefined) prismaConfig.volatilityPauseThreshold = config.volatility_pause_threshold
 
     // Update config
     const updatedConfig = await prisma.privyTokenConfig.update({

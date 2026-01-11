@@ -14,6 +14,10 @@ import { bagsFmService } from './bags-fm'
 import { jupiterService } from './jupiter.service'
 import { PriceAnalyzer } from './price-analyzer'
 import { loggers } from '../utils/logger'
+// New algorithm mode services
+import { DynamicModeService } from './dynamic-mode.service'
+import { TwapVwapService } from './twap-vwap.service'
+import { ExtendedTokenConfig, TwapQueueItem, MarketCondition } from '../types/mm-strategies'
 import {
   UserToken,
   UserTokenConfig,
@@ -89,6 +93,10 @@ class MultiUserMMService {
   // Cooldown period in milliseconds (5 minutes)
   private readonly SMART_MODE_COOLDOWN_MS = 5 * 60 * 1000
 
+  // Per-token service caches for new algorithm modes
+  private dynamicModeServices: Map<string, DynamicModeService> = new Map()
+  private twapVwapServices: Map<string, TwapVwapService> = new Map()
+
   /**
    * Get or create a PriceAnalyzer for a specific token
    */
@@ -97,6 +105,26 @@ class MultiUserMMService {
       this.tokenAnalyzers.set(tokenMint, new PriceAnalyzer(tokenMint))
     }
     return this.tokenAnalyzers.get(tokenMint)!
+  }
+
+  /**
+   * Get or create a DynamicModeService for a specific token
+   */
+  private getDynamicModeService(tokenMint: string): DynamicModeService {
+    if (!this.dynamicModeServices.has(tokenMint)) {
+      this.dynamicModeServices.set(tokenMint, new DynamicModeService(tokenMint))
+    }
+    return this.dynamicModeServices.get(tokenMint)!
+  }
+
+  /**
+   * Get or create a TwapVwapService for a specific token
+   */
+  private getTwapVwapService(tokenMint: string): TwapVwapService {
+    if (!this.twapVwapServices.has(tokenMint)) {
+      this.twapVwapServices.set(tokenMint, new TwapVwapService(tokenMint))
+    }
+    return this.twapVwapServices.get(tokenMint)!
   }
 
   /**
@@ -675,13 +703,18 @@ class MultiUserMMService {
     }
 
     // Determine trade based on algorithm mode
-    if (config.algorithm_mode === 'simple') {
-      return this.runSimpleAlgorithm(token, config, state, opsWallet, connection, baseResult, tradingRoute)
-    } else if (config.algorithm_mode === 'rebalance') {
-      return this.runRebalanceAlgorithm(token, config, state, opsWallet, connection, baseResult, tradingRoute)
-    } else {
-      // Smart mode - signal-based trading with RSI, Bollinger Bands, and trend analysis
-      return this.runSmartAlgorithm(token, config, state, opsWallet, connection, baseResult, tradingRoute)
+    switch (config.algorithm_mode) {
+      case 'simple':
+        return this.runSimpleAlgorithm(token, config, state, opsWallet, connection, baseResult, tradingRoute)
+      case 'rebalance':
+        return this.runRebalanceAlgorithm(token, config, state, opsWallet, connection, baseResult, tradingRoute)
+      case 'twap_vwap':
+        return this.runTwapVwapAlgorithm(token, config, state, opsWallet, connection, baseResult, tradingRoute)
+      case 'dynamic':
+        return this.runDynamicAlgorithm(token, config, state, opsWallet, connection, baseResult, tradingRoute)
+      default:
+        // Fallback to simple for unknown modes
+        return this.runSimpleAlgorithm(token, config, state, opsWallet, connection, baseResult, tradingRoute)
     }
   }
 
@@ -1231,6 +1264,464 @@ class MultiUserMMService {
   }
 
   /**
+   * TWAP/VWAP algorithm: Uses time-weighted or volume-weighted execution
+   * Follows 5 buy → 5 sell cycle but with intelligent execution sizing
+   */
+  private async runTwapVwapAlgorithm(
+    token: UserToken,
+    config: UserTokenConfig,
+    state: UserFlywheelState,
+    wallet: Keypair,
+    connection: Connection,
+    baseResult: { userTokenId: string; tokenMint: string; tokenSymbol: string },
+    tradingRoute: 'bags' | 'jupiter' = 'bags'
+  ): Promise<TradeResult | null> {
+    const tokenMint = new PublicKey(token.token_mint_address)
+    const twapVwapService = this.getTwapVwapService(token.token_mint_address)
+
+    // Convert config to ExtendedTokenConfig for service
+    const extendedConfig: ExtendedTokenConfig = {
+      ...config,
+      // Ensure TWAP/VWAP fields are present
+      twap_enabled: config.twap_enabled ?? true,
+      twap_slices: config.twap_slices ?? 5,
+      twap_window_minutes: config.twap_window_minutes ?? 30,
+      twap_threshold_usd: config.twap_threshold_usd ?? 50,
+      vwap_enabled: config.vwap_enabled ?? true,
+      vwap_participation_rate: config.vwap_participation_rate ?? 10,
+      vwap_min_volume_usd: config.vwap_min_volume_usd ?? 1000,
+      // Dynamic mode fields (not used in TWAP/VWAP but required by type)
+      dynamic_fee_enabled: config.dynamic_fee_enabled ?? false,
+      reserve_percent_normal: config.reserve_percent_normal ?? 10,
+      reserve_percent_adverse: config.reserve_percent_adverse ?? 20,
+      min_sell_percent: config.min_sell_percent ?? 10,
+      max_sell_percent: config.max_sell_percent ?? 30,
+      buyback_boost_on_dump: config.buyback_boost_on_dump ?? true,
+      pause_on_extreme_volatility: config.pause_on_extreme_volatility ?? true,
+      volatility_pause_threshold: config.volatility_pause_threshold ?? 15,
+    }
+
+    if (state.cycle_phase === 'buy') {
+      // Check SOL balance
+      const solBalance = await getBalance(wallet.publicKey)
+      const minRequired = config.min_buy_amount_sol + 0.01
+
+      if (solBalance < minRequired) {
+        loggers.flywheel.info({ tokenSymbol: token.token_symbol, solBalance, minRequired }, 'Insufficient SOL for TWAP/VWAP buy')
+        await this.updateFlywheelCheck(token.id, 'insufficient_sol')
+        return null
+      }
+
+      // Get intended buy amount (random within bounds)
+      const intendedAmount = this.randomBetween(config.min_buy_amount_sol, config.max_buy_amount_sol)
+
+      // Get execution decision from TWAP/VWAP service
+      const decision = await twapVwapService.getExecutionDecision(
+        extendedConfig,
+        intendedAmount,
+        'buy',
+        solBalance - 0.01 // Reserve for fees
+      )
+
+      loggers.flywheel.info({
+        tokenSymbol: token.token_symbol,
+        executionType: decision.executionType,
+        tradeAmount: decision.tradeAmount,
+        intendedAmount,
+        reason: decision.reason,
+        buyCount: state.buy_count,
+        maxBuys: BUYS_PER_CYCLE,
+        route: tradingRoute,
+      }, 'Executing TWAP/VWAP BUY')
+
+      const lamports = Math.floor(decision.tradeAmount * 1e9)
+
+      // Get quote
+      const quote = await this.getTradeQuote(
+        tradingRoute,
+        SOL_MINT,
+        token.token_mint_address,
+        lamports,
+        'buy',
+        config.slippage_bps
+      )
+
+      if (!quote?.rawQuoteResponse) {
+        const errorMsg = `Failed to get ${tradingRoute} quote for TWAP/VWAP buy`
+        await this.recordFailure(token.id, errorMsg)
+        return { ...baseResult, tradeType: 'buy', success: false, amount: decision.tradeAmount, error: errorMsg }
+      }
+
+      const signature = await this.executeSwapWithRoute(connection, wallet, quote.rawQuoteResponse, tradingRoute)
+
+      if (!signature) {
+        const errorMsg = `TWAP/VWAP buy swap failed via ${tradingRoute}`
+        await this.recordFailure(token.id, errorMsg)
+        return { ...baseResult, tradeType: 'buy', success: false, amount: decision.tradeAmount, error: errorMsg }
+      }
+
+      // Clear failures on success
+      await this.clearFailures(token.id)
+
+      // Update state
+      const newBuyCount = state.buy_count + 1
+      const shouldSwitchToSell = newBuyCount >= BUYS_PER_CYCLE
+
+      let tokenSnapshot = state.sell_phase_token_snapshot
+      let sellPerTx = state.sell_amount_per_tx
+
+      if (shouldSwitchToSell) {
+        const tokenBalance = await getTokenBalance(wallet.publicKey, tokenMint)
+        tokenSnapshot = tokenBalance
+        sellPerTx = tokenBalance / SELLS_PER_CYCLE
+      }
+
+      await updateFlywheelState(token.id, {
+        cycle_phase: shouldSwitchToSell ? 'sell' : 'buy',
+        buy_count: shouldSwitchToSell ? 0 : newBuyCount,
+        sell_count: 0,
+        sell_phase_token_snapshot: tokenSnapshot,
+        sell_amount_per_tx: sellPerTx,
+        last_trade_at: new Date().toISOString(),
+      })
+
+      await this.recordTransaction(token.id, 'buy', decision.tradeAmount, signature)
+      await this.updateFlywheelCheck(token.id, `twap_vwap_buy_${decision.executionType}`)
+
+      return { ...baseResult, tradeType: 'buy', success: true, amount: decision.tradeAmount, signature }
+
+    } else {
+      // SELL phase - similar logic with TWAP/VWAP execution
+      const sellAmount = state.sell_amount_per_tx
+
+      if (sellAmount <= 0) {
+        loggers.flywheel.info({ tokenSymbol: token.token_symbol }, 'No tokens to sell in TWAP/VWAP, switching to buy')
+        await this.updateFlywheelCheck(token.id, 'no_tokens')
+        await updateFlywheelState(token.id, { cycle_phase: 'buy', sell_count: 0 })
+        return null
+      }
+
+      const tokenBalance = await getTokenBalance(wallet.publicKey, tokenMint)
+      const actualSellAmount = Math.min(sellAmount, tokenBalance)
+
+      if (actualSellAmount < 1) {
+        loggers.flywheel.info({ tokenSymbol: token.token_symbol }, 'Insufficient tokens for TWAP/VWAP sell')
+        await this.updateFlywheelCheck(token.id, 'insufficient_tokens')
+        await updateFlywheelState(token.id, { cycle_phase: 'buy', sell_count: 0 })
+        return null
+      }
+
+      // Get execution decision for sell
+      const decision = await twapVwapService.getExecutionDecision(
+        extendedConfig,
+        actualSellAmount,
+        'sell',
+        tokenBalance
+      )
+
+      const tokenUnits = Math.floor(decision.tradeAmount * Math.pow(10, token.token_decimals))
+
+      loggers.flywheel.info({
+        tokenSymbol: token.token_symbol,
+        executionType: decision.executionType,
+        sellAmount: decision.tradeAmount,
+        reason: decision.reason,
+        sellCount: state.sell_count,
+        maxSells: SELLS_PER_CYCLE,
+        route: tradingRoute,
+      }, 'Executing TWAP/VWAP SELL')
+
+      const quote = await this.getTradeQuote(
+        tradingRoute,
+        token.token_mint_address,
+        SOL_MINT,
+        tokenUnits,
+        'sell',
+        config.slippage_bps
+      )
+
+      if (!quote?.rawQuoteResponse) {
+        const errorMsg = `Failed to get ${tradingRoute} quote for TWAP/VWAP sell`
+        await this.recordFailure(token.id, errorMsg)
+        return { ...baseResult, tradeType: 'sell', success: false, amount: decision.tradeAmount, error: errorMsg }
+      }
+
+      const signature = await this.executeSwapWithRoute(connection, wallet, quote.rawQuoteResponse, tradingRoute)
+
+      if (!signature) {
+        const errorMsg = `TWAP/VWAP sell swap failed via ${tradingRoute}`
+        await this.recordFailure(token.id, errorMsg)
+        return { ...baseResult, tradeType: 'sell', success: false, amount: decision.tradeAmount, error: errorMsg }
+      }
+
+      await this.clearFailures(token.id)
+
+      const newSellCount = state.sell_count + 1
+      const shouldSwitchToBuy = newSellCount >= SELLS_PER_CYCLE
+
+      await updateFlywheelState(token.id, {
+        cycle_phase: shouldSwitchToBuy ? 'buy' : 'sell',
+        buy_count: 0,
+        sell_count: shouldSwitchToBuy ? 0 : newSellCount,
+        last_trade_at: new Date().toISOString(),
+      })
+
+      await this.recordTransaction(token.id, 'sell', decision.tradeAmount, signature)
+      await this.updateFlywheelCheck(token.id, `twap_vwap_sell_${decision.executionType}`)
+
+      return { ...baseResult, tradeType: 'sell', success: true, amount: decision.tradeAmount, signature }
+    }
+  }
+
+  /**
+   * Dynamic algorithm: Condition-based buy/sell decisions
+   * Key behavior: SELL during pumps, BUY during dumps/normal/ranging
+   */
+  private async runDynamicAlgorithm(
+    token: UserToken,
+    config: UserTokenConfig,
+    state: UserFlywheelState,
+    wallet: Keypair,
+    connection: Connection,
+    baseResult: { userTokenId: string; tokenMint: string; tokenSymbol: string },
+    tradingRoute: 'bags' | 'jupiter' = 'bags'
+  ): Promise<TradeResult | null> {
+    const tokenMint = new PublicKey(token.token_mint_address)
+    const dynamicService = this.getDynamicModeService(token.token_mint_address)
+
+    // Convert config to ExtendedTokenConfig
+    const extendedConfig: ExtendedTokenConfig = {
+      ...config,
+      twap_enabled: config.twap_enabled ?? true,
+      twap_slices: config.twap_slices ?? 5,
+      twap_window_minutes: config.twap_window_minutes ?? 30,
+      twap_threshold_usd: config.twap_threshold_usd ?? 50,
+      vwap_enabled: config.vwap_enabled ?? true,
+      vwap_participation_rate: config.vwap_participation_rate ?? 10,
+      vwap_min_volume_usd: config.vwap_min_volume_usd ?? 1000,
+      dynamic_fee_enabled: config.dynamic_fee_enabled ?? true,
+      reserve_percent_normal: config.reserve_percent_normal ?? 10,
+      reserve_percent_adverse: config.reserve_percent_adverse ?? 20,
+      min_sell_percent: config.min_sell_percent ?? 10,
+      max_sell_percent: config.max_sell_percent ?? 30,
+      buyback_boost_on_dump: config.buyback_boost_on_dump ?? true,
+      pause_on_extreme_volatility: config.pause_on_extreme_volatility ?? true,
+      volatility_pause_threshold: config.volatility_pause_threshold ?? 15,
+    }
+
+    // Get fee allocation decision from dynamic service
+    const allocation = await dynamicService.getAllocation(extendedConfig)
+
+    loggers.flywheel.info({
+      tokenSymbol: token.token_symbol,
+      tradeType: allocation.tradeType,
+      condition: allocation.conditionUsed,
+      executionStyle: allocation.executionStyle,
+      buybackPercent: allocation.buybackPercent,
+      reservePercent: allocation.reservePercent,
+      shouldPause: allocation.shouldPause,
+      pauseReason: allocation.pauseReason,
+    }, 'Dynamic mode allocation decision')
+
+    // Check if we should pause due to extreme volatility
+    if (allocation.shouldPause) {
+      loggers.flywheel.info({
+        tokenSymbol: token.token_symbol,
+        reason: allocation.pauseReason,
+      }, 'Dynamic mode pausing due to market condition')
+      await this.updateFlywheelCheck(token.id, `paused_${allocation.conditionUsed}`)
+
+      // Update market condition in state
+      await this.updateDynamicModeState(token.id, {
+        market_condition: allocation.conditionUsed as MarketCondition,
+        previous_market_condition: (state.market_condition || 'normal') as MarketCondition,
+      })
+
+      return null
+    }
+
+    // Check for reserve deployment on condition improvement
+    const previousCondition = (state.previous_market_condition || 'normal') as MarketCondition
+    const reserveBalance = state.reserve_balance_sol || 0
+    const deployment = dynamicService.shouldDeployReserve(
+      allocation.conditionUsed as MarketCondition,
+      previousCondition,
+      reserveBalance
+    )
+
+    // Track deployed reserve amount for use in buy calculation
+    let deployedReserveAmount = 0
+    if (deployment.deploy && deployment.amount > 0) {
+      deployedReserveAmount = deployment.amount
+      loggers.flywheel.info({
+        tokenSymbol: token.token_symbol,
+        deployAmount: deployment.amount,
+        reason: deployment.reason,
+      }, 'Deploying reserve on condition improvement')
+    }
+
+    // Execute trade based on allocation decision
+    if (allocation.tradeType === 'sell') {
+      // SELL during pump - take profits
+      const tokenBalance = await getTokenBalance(wallet.publicKey, tokenMint)
+
+      if (tokenBalance < 1) {
+        loggers.flywheel.info({ tokenSymbol: token.token_symbol }, 'No tokens to sell in dynamic mode')
+        await this.updateFlywheelCheck(token.id, 'no_tokens_for_sell')
+        return null
+      }
+
+      // Calculate sell amount (10-30% of token balance)
+      const sellAmount = dynamicService.calculateSellAmount(tokenBalance, extendedConfig)
+      const tokenUnits = Math.floor(sellAmount * Math.pow(10, token.token_decimals))
+
+      loggers.flywheel.info({
+        tokenSymbol: token.token_symbol,
+        sellAmount,
+        tokenBalance,
+        condition: allocation.conditionUsed,
+        route: tradingRoute,
+      }, 'Executing DYNAMIC SELL (pump detected)')
+
+      const quote = await this.getTradeQuote(
+        tradingRoute,
+        token.token_mint_address,
+        SOL_MINT,
+        tokenUnits,
+        'sell',
+        config.slippage_bps
+      )
+
+      if (!quote?.rawQuoteResponse) {
+        const errorMsg = `Failed to get ${tradingRoute} quote for dynamic sell`
+        await this.recordFailure(token.id, errorMsg)
+        return { ...baseResult, tradeType: 'sell', success: false, amount: sellAmount, error: errorMsg }
+      }
+
+      const signature = await this.executeSwapWithRoute(connection, wallet, quote.rawQuoteResponse, tradingRoute)
+
+      if (!signature) {
+        const errorMsg = `Dynamic sell swap failed via ${tradingRoute}`
+        await this.recordFailure(token.id, errorMsg)
+        return { ...baseResult, tradeType: 'sell', success: false, amount: sellAmount, error: errorMsg }
+      }
+
+      await this.clearFailures(token.id)
+
+      // Update dynamic mode state
+      await this.updateDynamicModeState(token.id, {
+        market_condition: allocation.conditionUsed as MarketCondition,
+        previous_market_condition: (state.market_condition || 'normal') as MarketCondition,
+        last_condition_change_at: allocation.conditionUsed !== state.market_condition ? new Date().toISOString() : state.last_condition_change_at,
+      })
+
+      await this.recordTransaction(token.id, 'sell', sellAmount, signature)
+      await this.updateFlywheelCheck(token.id, `dynamic_sell_${allocation.conditionUsed}`)
+
+      return { ...baseResult, tradeType: 'sell', success: true, amount: sellAmount, signature }
+
+    } else {
+      // BUY during dump/normal/ranging - accumulate
+      const solBalance = await getBalance(wallet.publicKey)
+      const minRequired = config.min_buy_amount_sol + 0.01
+
+      if (solBalance < minRequired) {
+        loggers.flywheel.info({ tokenSymbol: token.token_symbol, solBalance, minRequired }, 'Insufficient SOL for dynamic buy')
+        await this.updateFlywheelCheck(token.id, 'insufficient_sol')
+        return null
+      }
+
+      // Calculate buy amount based on allocation percentages
+      // Add deployed reserve to available balance when conditions improve
+      const availableForBuyback = (solBalance * (allocation.buybackPercent / 100)) + deployedReserveAmount
+      const reserveAmount = solBalance * (allocation.reservePercent / 100)
+      const buyAmount = Math.min(Math.max(availableForBuyback, config.min_buy_amount_sol), config.max_buy_amount_sol)
+
+      // Update reserve balance: add new reserve, subtract deployed amount
+      const newReserveBalance = Math.max(0, (state.reserve_balance_sol || 0) + reserveAmount - deployedReserveAmount)
+
+      loggers.flywheel.info({
+        tokenSymbol: token.token_symbol,
+        buyAmount,
+        reserveAmount,
+        deployedReserveAmount,
+        newReserveBalance,
+        condition: allocation.conditionUsed,
+        executionStyle: allocation.executionStyle,
+        route: tradingRoute,
+      }, 'Executing DYNAMIC BUY')
+
+      const lamports = Math.floor(buyAmount * 1e9)
+
+      const quote = await this.getTradeQuote(
+        tradingRoute,
+        SOL_MINT,
+        token.token_mint_address,
+        lamports,
+        'buy',
+        config.slippage_bps
+      )
+
+      if (!quote?.rawQuoteResponse) {
+        const errorMsg = `Failed to get ${tradingRoute} quote for dynamic buy`
+        await this.recordFailure(token.id, errorMsg)
+        return { ...baseResult, tradeType: 'buy', success: false, amount: buyAmount, error: errorMsg }
+      }
+
+      const signature = await this.executeSwapWithRoute(connection, wallet, quote.rawQuoteResponse, tradingRoute)
+
+      if (!signature) {
+        const errorMsg = `Dynamic buy swap failed via ${tradingRoute}`
+        await this.recordFailure(token.id, errorMsg)
+        return { ...baseResult, tradeType: 'buy', success: false, amount: buyAmount, error: errorMsg }
+      }
+
+      await this.clearFailures(token.id)
+
+      // Update dynamic mode state
+      await this.updateDynamicModeState(token.id, {
+        market_condition: allocation.conditionUsed as MarketCondition,
+        previous_market_condition: (state.market_condition || 'normal') as MarketCondition,
+        last_condition_change_at: allocation.conditionUsed !== state.market_condition ? new Date().toISOString() : state.last_condition_change_at,
+        reserve_balance_sol: newReserveBalance,
+      })
+
+      await this.recordTransaction(token.id, 'buy', buyAmount, signature)
+      await this.updateFlywheelCheck(token.id, `dynamic_buy_${allocation.conditionUsed}`)
+
+      return { ...baseResult, tradeType: 'buy', success: true, amount: buyAmount, signature }
+    }
+  }
+
+  /**
+   * Update dynamic mode state fields in flywheel state
+   */
+  private async updateDynamicModeState(
+    tokenId: string,
+    updates: Partial<{
+      market_condition: MarketCondition
+      previous_market_condition: MarketCondition
+      last_condition_change_at: string | null
+      reserve_balance_sol: number
+      twap_queue: TwapQueueItem[]
+    }>
+  ): Promise<void> {
+    if (!supabase) return
+
+    try {
+      await supabase
+        .from('user_flywheel_state')
+        .update({
+          ...updates,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('user_token_id', tokenId)
+    } catch (error) {
+      loggers.flywheel.warn({ tokenId, error: String(error) }, 'Failed to update dynamic mode state')
+    }
+  }
+
+  /**
    * Execute a swap using Bags.fm
    */
   private async executeSwap(
@@ -1543,8 +2034,21 @@ class MultiUserMMService {
       return { ...baseResult, tradeType: 'buy', success: false, amount: 0, error: 'Ops wallet not found' }
     }
 
-    // Use simple algorithm for now (can expand to smart/rebalance later)
-    return this.runPrivySimpleAlgorithm(token, config, state, opsWalletAddress, connection, baseResult, tradingRoute)
+    // Determine trade based on algorithm mode (same logic as legacy tokens)
+    switch (config.algorithm_mode) {
+      case 'simple':
+        return this.runPrivySimpleAlgorithm(token, config, state, opsWalletAddress, connection, baseResult, tradingRoute)
+      case 'rebalance':
+        // TODO: Implement Privy rebalance algorithm if needed
+        return this.runPrivySimpleAlgorithm(token, config, state, opsWalletAddress, connection, baseResult, tradingRoute)
+      case 'twap_vwap':
+        return this.runPrivyTwapVwapAlgorithm(token, config, state, opsWalletAddress, connection, baseResult, tradingRoute)
+      case 'dynamic':
+        return this.runPrivyDynamicAlgorithm(token, config, state, opsWalletAddress, connection, baseResult, tradingRoute)
+      default:
+        // Fallback to simple for unknown modes
+        return this.runPrivySimpleAlgorithm(token, config, state, opsWalletAddress, connection, baseResult, tradingRoute)
+    }
   }
 
   /**
@@ -1833,6 +2337,401 @@ class MultiUserMMService {
       await this.updatePrivyFlywheelCheck(token.id, 'traded')
 
       return { ...baseResult, tradeType: 'sell', success: true, amount: actualSellAmount, signature }
+    }
+  }
+
+  /**
+   * TWAP/VWAP algorithm for Privy tokens
+   * Uses Privy delegated signing instead of Keypair
+   */
+  private async runPrivyTwapVwapAlgorithm(
+    token: PrivyTokenWithConfig,
+    config: UserTokenConfig,
+    state: UserFlywheelState,
+    opsWalletAddress: string,
+    connection: Connection,
+    baseResult: { userTokenId: string; tokenMint: string; tokenSymbol: string },
+    tradingRoute: 'bags' | 'jupiter' = 'bags'
+  ): Promise<TradeResult | null> {
+    const tokenMint = new PublicKey(token.token_mint_address)
+    const opsWalletPubkey = new PublicKey(opsWalletAddress)
+    const twapVwapService = this.getTwapVwapService(token.token_mint_address)
+
+    // Convert config to ExtendedTokenConfig
+    const extendedConfig: ExtendedTokenConfig = {
+      ...config,
+      twap_enabled: config.twap_enabled ?? true,
+      twap_slices: config.twap_slices ?? 5,
+      twap_window_minutes: config.twap_window_minutes ?? 30,
+      twap_threshold_usd: config.twap_threshold_usd ?? 50,
+      vwap_enabled: config.vwap_enabled ?? true,
+      vwap_participation_rate: config.vwap_participation_rate ?? 10,
+      vwap_min_volume_usd: config.vwap_min_volume_usd ?? 1000,
+      dynamic_fee_enabled: config.dynamic_fee_enabled ?? false,
+      reserve_percent_normal: config.reserve_percent_normal ?? 10,
+      reserve_percent_adverse: config.reserve_percent_adverse ?? 20,
+      min_sell_percent: config.min_sell_percent ?? 10,
+      max_sell_percent: config.max_sell_percent ?? 30,
+      buyback_boost_on_dump: config.buyback_boost_on_dump ?? true,
+      pause_on_extreme_volatility: config.pause_on_extreme_volatility ?? true,
+      volatility_pause_threshold: config.volatility_pause_threshold ?? 15,
+    }
+
+    if (state.cycle_phase === 'buy') {
+      const solBalance = await getBalance(opsWalletPubkey)
+      const minRequired = config.min_buy_amount_sol + 0.01
+
+      if (solBalance < minRequired) {
+        loggers.flywheel.info({ tokenSymbol: token.token_symbol, solBalance, minRequired }, 'Insufficient SOL for Privy TWAP/VWAP buy')
+        await this.updatePrivyFlywheelCheck(token.id, 'insufficient_sol')
+        return null
+      }
+
+      const intendedAmount = this.randomBetween(config.min_buy_amount_sol, config.max_buy_amount_sol)
+      const decision = await twapVwapService.getExecutionDecision(
+        extendedConfig,
+        intendedAmount,
+        'buy',
+        solBalance - 0.01
+      )
+
+      loggers.flywheel.info({
+        tokenSymbol: token.token_symbol,
+        executionType: decision.executionType,
+        tradeAmount: decision.tradeAmount,
+        reason: decision.reason,
+        route: tradingRoute,
+      }, 'Executing Privy TWAP/VWAP BUY')
+
+      const lamports = Math.floor(decision.tradeAmount * 1e9)
+      const quote = await this.getTradeQuote(tradingRoute, SOL_MINT, token.token_mint_address, lamports, 'buy', config.slippage_bps)
+
+      if (!quote?.rawQuoteResponse) {
+        loggers.flywheel.info({ tokenSymbol: token.token_symbol }, 'Quote failed for Privy TWAP/VWAP buy')
+        await this.updatePrivyFlywheelCheck(token.id, 'quote_failed')
+        return { ...baseResult, tradeType: 'buy', success: false, amount: decision.tradeAmount, error: 'Quote failed' }
+      }
+
+      const signature = await this.executeSwapWithPrivySigning(connection, opsWalletAddress, quote.rawQuoteResponse, tradingRoute)
+
+      if (!signature) {
+        await this.recordPrivyFailure(token.id, 'TWAP/VWAP buy swap failed')
+        return { ...baseResult, tradeType: 'buy', success: false, amount: decision.tradeAmount, error: 'Swap failed' }
+      }
+
+      await this.clearPrivyFailures(token.id)
+
+      const newBuyCount = state.buy_count + 1
+      const shouldSwitchToSell = newBuyCount >= BUYS_PER_CYCLE
+
+      let tokenSnapshot = state.sell_phase_token_snapshot
+      let sellPerTx = state.sell_amount_per_tx
+
+      if (shouldSwitchToSell) {
+        const tokenBalance = await getTokenBalance(opsWalletPubkey, tokenMint)
+        tokenSnapshot = tokenBalance
+        sellPerTx = tokenBalance / SELLS_PER_CYCLE
+      }
+
+      await updatePrivyFlywheelState(token.id, {
+        cycle_phase: shouldSwitchToSell ? 'sell' : 'buy',
+        buy_count: shouldSwitchToSell ? 0 : newBuyCount,
+        sell_count: 0,
+        sell_phase_token_snapshot: tokenSnapshot,
+        sell_amount_per_tx: sellPerTx,
+        last_trade_at: new Date().toISOString(),
+      })
+
+      await this.recordPrivyTransaction(token.id, 'buy', decision.tradeAmount, signature)
+      await this.updatePrivyFlywheelCheck(token.id, `twap_vwap_buy_${decision.executionType}`)
+
+      return { ...baseResult, tradeType: 'buy', success: true, amount: decision.tradeAmount, signature }
+
+    } else {
+      // SELL phase
+      const sellAmount = state.sell_amount_per_tx
+
+      if (sellAmount <= 0) {
+        await this.updatePrivyFlywheelCheck(token.id, 'no_tokens')
+        await updatePrivyFlywheelState(token.id, { cycle_phase: 'buy', sell_count: 0 })
+        return null
+      }
+
+      const tokenBalance = await getTokenBalance(opsWalletPubkey, tokenMint)
+      const actualSellAmount = Math.min(sellAmount, tokenBalance)
+
+      if (actualSellAmount < 1) {
+        await this.updatePrivyFlywheelCheck(token.id, 'insufficient_tokens')
+        await updatePrivyFlywheelState(token.id, { cycle_phase: 'buy', sell_count: 0 })
+        return null
+      }
+
+      const decision = await twapVwapService.getExecutionDecision(extendedConfig, actualSellAmount, 'sell', tokenBalance)
+      const tokenUnits = Math.floor(decision.tradeAmount * Math.pow(10, token.token_decimals))
+
+      loggers.flywheel.info({
+        tokenSymbol: token.token_symbol,
+        executionType: decision.executionType,
+        sellAmount: decision.tradeAmount,
+        reason: decision.reason,
+        route: tradingRoute,
+      }, 'Executing Privy TWAP/VWAP SELL')
+
+      const quote = await this.getTradeQuote(tradingRoute, token.token_mint_address, SOL_MINT, tokenUnits, 'sell', config.slippage_bps)
+
+      if (!quote?.rawQuoteResponse) {
+        await this.updatePrivyFlywheelCheck(token.id, 'quote_failed')
+        return { ...baseResult, tradeType: 'sell', success: false, amount: decision.tradeAmount, error: 'Quote failed' }
+      }
+
+      const signature = await this.executeSwapWithPrivySigning(connection, opsWalletAddress, quote.rawQuoteResponse, tradingRoute)
+
+      if (!signature) {
+        await this.recordPrivyFailure(token.id, 'TWAP/VWAP sell swap failed')
+        return { ...baseResult, tradeType: 'sell', success: false, amount: decision.tradeAmount, error: 'Swap failed' }
+      }
+
+      await this.clearPrivyFailures(token.id)
+
+      const newSellCount = state.sell_count + 1
+      const shouldSwitchToBuy = newSellCount >= SELLS_PER_CYCLE
+
+      await updatePrivyFlywheelState(token.id, {
+        cycle_phase: shouldSwitchToBuy ? 'buy' : 'sell',
+        buy_count: 0,
+        sell_count: shouldSwitchToBuy ? 0 : newSellCount,
+        last_trade_at: new Date().toISOString(),
+      })
+
+      await this.recordPrivyTransaction(token.id, 'sell', decision.tradeAmount, signature)
+      await this.updatePrivyFlywheelCheck(token.id, `twap_vwap_sell_${decision.executionType}`)
+
+      return { ...baseResult, tradeType: 'sell', success: true, amount: decision.tradeAmount, signature }
+    }
+  }
+
+  /**
+   * Dynamic algorithm for Privy tokens
+   * Uses Privy delegated signing instead of Keypair
+   */
+  private async runPrivyDynamicAlgorithm(
+    token: PrivyTokenWithConfig,
+    config: UserTokenConfig,
+    state: UserFlywheelState,
+    opsWalletAddress: string,
+    connection: Connection,
+    baseResult: { userTokenId: string; tokenMint: string; tokenSymbol: string },
+    tradingRoute: 'bags' | 'jupiter' = 'bags'
+  ): Promise<TradeResult | null> {
+    const tokenMint = new PublicKey(token.token_mint_address)
+    const opsWalletPubkey = new PublicKey(opsWalletAddress)
+    const dynamicService = this.getDynamicModeService(token.token_mint_address)
+
+    // Convert config to ExtendedTokenConfig
+    const extendedConfig: ExtendedTokenConfig = {
+      ...config,
+      twap_enabled: config.twap_enabled ?? true,
+      twap_slices: config.twap_slices ?? 5,
+      twap_window_minutes: config.twap_window_minutes ?? 30,
+      twap_threshold_usd: config.twap_threshold_usd ?? 50,
+      vwap_enabled: config.vwap_enabled ?? true,
+      vwap_participation_rate: config.vwap_participation_rate ?? 10,
+      vwap_min_volume_usd: config.vwap_min_volume_usd ?? 1000,
+      dynamic_fee_enabled: config.dynamic_fee_enabled ?? true,
+      reserve_percent_normal: config.reserve_percent_normal ?? 10,
+      reserve_percent_adverse: config.reserve_percent_adverse ?? 20,
+      min_sell_percent: config.min_sell_percent ?? 10,
+      max_sell_percent: config.max_sell_percent ?? 30,
+      buyback_boost_on_dump: config.buyback_boost_on_dump ?? true,
+      pause_on_extreme_volatility: config.pause_on_extreme_volatility ?? true,
+      volatility_pause_threshold: config.volatility_pause_threshold ?? 15,
+    }
+
+    // Get fee allocation decision from dynamic service
+    const allocation = await dynamicService.getAllocation(extendedConfig)
+
+    loggers.flywheel.info({
+      tokenSymbol: token.token_symbol,
+      tradeType: allocation.tradeType,
+      condition: allocation.conditionUsed,
+      shouldPause: allocation.shouldPause,
+    }, 'Privy Dynamic mode allocation decision')
+
+    // Check if we should pause due to extreme volatility
+    if (allocation.shouldPause) {
+      loggers.flywheel.info({
+        tokenSymbol: token.token_symbol,
+        reason: allocation.pauseReason,
+      }, 'Privy Dynamic mode pausing')
+      await this.updatePrivyFlywheelCheck(token.id, `paused_${allocation.conditionUsed}`)
+
+      // Update market condition in state
+      await this.updatePrivyDynamicModeState(token.id, {
+        market_condition: allocation.conditionUsed as MarketCondition,
+        previous_market_condition: (state.market_condition || 'normal') as MarketCondition,
+      })
+
+      return null
+    }
+
+    // Check for reserve deployment on condition improvement
+    const previousCondition = (state.previous_market_condition || 'normal') as MarketCondition
+    const reserveBalance = state.reserve_balance_sol || 0
+    const deployment = dynamicService.shouldDeployReserve(
+      allocation.conditionUsed as MarketCondition,
+      previousCondition,
+      reserveBalance
+    )
+
+    // Track deployed reserve amount for use in buy calculation
+    let deployedReserveAmount = 0
+    if (deployment.deploy && deployment.amount > 0) {
+      deployedReserveAmount = deployment.amount
+      loggers.flywheel.info({
+        tokenSymbol: token.token_symbol,
+        deployAmount: deployment.amount,
+        reason: deployment.reason,
+      }, 'Privy: Deploying reserve on condition improvement')
+    }
+
+    // Execute trade based on allocation decision
+    if (allocation.tradeType === 'sell') {
+      // SELL during pump
+      const tokenBalance = await getTokenBalance(opsWalletPubkey, tokenMint)
+
+      if (tokenBalance < 1) {
+        await this.updatePrivyFlywheelCheck(token.id, 'no_tokens_for_sell')
+        return null
+      }
+
+      const sellAmount = dynamicService.calculateSellAmount(tokenBalance, extendedConfig)
+      const tokenUnits = Math.floor(sellAmount * Math.pow(10, token.token_decimals))
+
+      loggers.flywheel.info({
+        tokenSymbol: token.token_symbol,
+        sellAmount,
+        condition: allocation.conditionUsed,
+        route: tradingRoute,
+      }, 'Executing Privy DYNAMIC SELL (pump detected)')
+
+      const quote = await this.getTradeQuote(tradingRoute, token.token_mint_address, SOL_MINT, tokenUnits, 'sell', config.slippage_bps)
+
+      if (!quote?.rawQuoteResponse) {
+        await this.updatePrivyFlywheelCheck(token.id, 'quote_failed')
+        return { ...baseResult, tradeType: 'sell', success: false, amount: sellAmount, error: 'Quote failed' }
+      }
+
+      const signature = await this.executeSwapWithPrivySigning(connection, opsWalletAddress, quote.rawQuoteResponse, tradingRoute)
+
+      if (!signature) {
+        await this.recordPrivyFailure(token.id, 'Dynamic sell swap failed')
+        return { ...baseResult, tradeType: 'sell', success: false, amount: sellAmount, error: 'Swap failed' }
+      }
+
+      await this.clearPrivyFailures(token.id)
+
+      // Update dynamic mode state
+      await this.updatePrivyDynamicModeState(token.id, {
+        market_condition: allocation.conditionUsed as MarketCondition,
+        previous_market_condition: (state.market_condition || 'normal') as MarketCondition,
+        last_condition_change_at: allocation.conditionUsed !== state.market_condition ? new Date().toISOString() : state.last_condition_change_at,
+      })
+
+      await this.recordPrivyTransaction(token.id, 'sell', sellAmount, signature)
+      await this.updatePrivyFlywheelCheck(token.id, `dynamic_sell_${allocation.conditionUsed}`)
+
+      return { ...baseResult, tradeType: 'sell', success: true, amount: sellAmount, signature }
+
+    } else {
+      // BUY during dump/normal/ranging
+      const solBalance = await getBalance(opsWalletPubkey)
+      const minRequired = config.min_buy_amount_sol + 0.01
+
+      if (solBalance < minRequired) {
+        await this.updatePrivyFlywheelCheck(token.id, 'insufficient_sol')
+        return null
+      }
+
+      // Calculate buy amount based on allocation percentages
+      // Add deployed reserve to available balance when conditions improve
+      const availableForBuyback = (solBalance * (allocation.buybackPercent / 100)) + deployedReserveAmount
+      const reserveAmount = solBalance * (allocation.reservePercent / 100)
+      const buyAmount = Math.min(Math.max(availableForBuyback, config.min_buy_amount_sol), config.max_buy_amount_sol)
+
+      // Update reserve balance: add new reserve, subtract deployed amount
+      const newReserveBalance = Math.max(0, (state.reserve_balance_sol || 0) + reserveAmount - deployedReserveAmount)
+
+      loggers.flywheel.info({
+        tokenSymbol: token.token_symbol,
+        buyAmount,
+        reserveAmount,
+        deployedReserveAmount,
+        newReserveBalance,
+        condition: allocation.conditionUsed,
+        route: tradingRoute,
+      }, 'Executing Privy DYNAMIC BUY')
+
+      const lamports = Math.floor(buyAmount * 1e9)
+      const quote = await this.getTradeQuote(tradingRoute, SOL_MINT, token.token_mint_address, lamports, 'buy', config.slippage_bps)
+
+      if (!quote?.rawQuoteResponse) {
+        await this.updatePrivyFlywheelCheck(token.id, 'quote_failed')
+        return { ...baseResult, tradeType: 'buy', success: false, amount: buyAmount, error: 'Quote failed' }
+      }
+
+      const signature = await this.executeSwapWithPrivySigning(connection, opsWalletAddress, quote.rawQuoteResponse, tradingRoute)
+
+      if (!signature) {
+        await this.recordPrivyFailure(token.id, 'Dynamic buy swap failed')
+        return { ...baseResult, tradeType: 'buy', success: false, amount: buyAmount, error: 'Swap failed' }
+      }
+
+      await this.clearPrivyFailures(token.id)
+
+      // Update dynamic mode state
+      await this.updatePrivyDynamicModeState(token.id, {
+        market_condition: allocation.conditionUsed as MarketCondition,
+        previous_market_condition: (state.market_condition || 'normal') as MarketCondition,
+        last_condition_change_at: allocation.conditionUsed !== state.market_condition ? new Date().toISOString() : state.last_condition_change_at,
+        reserve_balance_sol: newReserveBalance,
+      })
+
+      await this.recordPrivyTransaction(token.id, 'buy', buyAmount, signature)
+      await this.updatePrivyFlywheelCheck(token.id, `dynamic_buy_${allocation.conditionUsed}`)
+
+      return { ...baseResult, tradeType: 'buy', success: true, amount: buyAmount, signature }
+    }
+  }
+
+  /**
+   * Update dynamic mode state for Privy tokens
+   */
+  private async updatePrivyDynamicModeState(
+    privyTokenId: string,
+    updates: Partial<{
+      market_condition: MarketCondition
+      previous_market_condition: MarketCondition
+      last_condition_change_at: string | null
+      reserve_balance_sol: number
+      twap_queue: TwapQueueItem[]
+    }>
+  ): Promise<void> {
+    if (!isPrismaConfigured()) return
+
+    try {
+      const prismaUpdates: Record<string, unknown> = {}
+      if (updates.market_condition !== undefined) prismaUpdates.marketCondition = updates.market_condition
+      if (updates.previous_market_condition !== undefined) prismaUpdates.previousMarketCondition = updates.previous_market_condition
+      if (updates.last_condition_change_at !== undefined) prismaUpdates.lastConditionChangeAt = updates.last_condition_change_at ? new Date(updates.last_condition_change_at) : null
+      if (updates.reserve_balance_sol !== undefined) prismaUpdates.reserveBalanceSol = updates.reserve_balance_sol
+      if (updates.twap_queue !== undefined) prismaUpdates.twapQueue = updates.twap_queue
+
+      await prisma.privyFlywheelState.update({
+        where: { privyTokenId },
+        data: prismaUpdates,
+      })
+    } catch (error) {
+      loggers.flywheel.warn({ privyTokenId, error: String(error) }, 'Failed to update Privy dynamic mode state')
     }
   }
 

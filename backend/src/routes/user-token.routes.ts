@@ -480,7 +480,7 @@ router.put('/tokens/:tokenId/config', verifyWalletOwnership, async (req: Request
     if (typeof config.slippage_bps === 'number' && config.slippage_bps >= 0 && config.slippage_bps <= 5000) {
       validatedConfig.slippage_bps = Math.floor(config.slippage_bps)
     }
-    if (['simple', 'smart', 'rebalance'].includes(config.algorithm_mode)) {
+    if (['simple', 'rebalance', 'twap_vwap', 'dynamic'].includes(config.algorithm_mode)) {
       validatedConfig.algorithm_mode = config.algorithm_mode
     }
     if (typeof config.target_sol_allocation === 'number' && config.target_sol_allocation >= 0 && config.target_sol_allocation <= 100) {

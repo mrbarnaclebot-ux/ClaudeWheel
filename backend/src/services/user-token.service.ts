@@ -38,15 +38,32 @@ export interface UserTokenConfig {
   max_sell_amount_tokens: number
   buy_interval_minutes: number
   slippage_bps: number
-  algorithm_mode: 'simple' | 'smart' | 'rebalance'
+  algorithm_mode: 'simple' | 'rebalance' | 'twap_vwap' | 'dynamic'
   target_sol_allocation: number
   target_token_allocation: number
   rebalance_threshold: number
-  use_twap: boolean
-  twap_threshold_usd: number
   // Trading route: 'bags' (bonding curve), 'jupiter' (graduated), 'auto' (detect)
   trading_route: 'bags' | 'jupiter' | 'auto'
   updated_at: string
+
+  // TWAP/VWAP Configuration (for twap_vwap and dynamic modes)
+  twap_enabled: boolean
+  twap_slices: number
+  twap_window_minutes: number
+  twap_threshold_usd: number
+  vwap_enabled: boolean
+  vwap_participation_rate: number
+  vwap_min_volume_usd: number
+
+  // Dynamic Mode Configuration (for dynamic mode)
+  dynamic_fee_enabled: boolean
+  reserve_percent_normal: number
+  reserve_percent_adverse: number
+  min_sell_percent: number
+  max_sell_percent: number
+  buyback_boost_on_dump: boolean
+  pause_on_extreme_volatility: boolean
+  volatility_pause_threshold: number
 }
 
 export interface UserFlywheelState {
@@ -64,7 +81,16 @@ export interface UserFlywheelState {
   last_failure_at: string | null
   paused_until: string | null
   total_failures: number
+  last_checked_at: string | null
+  last_check_result: string | null
   updated_at: string
+
+  // Dynamic Mode State (market condition tracking and reserve)
+  market_condition: 'pump' | 'dump' | 'ranging' | 'normal' | 'extreme_volatility'
+  previous_market_condition: 'pump' | 'dump' | 'ranging' | 'normal' | 'extreme_volatility'
+  last_condition_change_at: string | null
+  reserve_balance_sol: number
+  twap_queue: any[] // TwapQueueItem[]
 }
 
 export interface RegisterTokenParams {
@@ -92,9 +118,26 @@ const DEFAULT_CONFIG: Omit<UserTokenConfig, 'id' | 'user_token_id' | 'updated_at
   target_sol_allocation: 30,
   target_token_allocation: 70,
   rebalance_threshold: 10,
-  use_twap: true,
-  twap_threshold_usd: 50,
   trading_route: 'auto',
+
+  // TWAP/VWAP defaults
+  twap_enabled: true,
+  twap_slices: 5,
+  twap_window_minutes: 30,
+  twap_threshold_usd: 50,
+  vwap_enabled: true,
+  vwap_participation_rate: 10,
+  vwap_min_volume_usd: 1000,
+
+  // Dynamic mode defaults
+  dynamic_fee_enabled: true,
+  reserve_percent_normal: 10,
+  reserve_percent_adverse: 20,
+  min_sell_percent: 10,
+  max_sell_percent: 30,
+  buyback_boost_on_dump: true,
+  pause_on_extreme_volatility: true,
+  volatility_pause_threshold: 15,
 }
 
 const DEFAULT_FLYWHEEL_STATE: Omit<UserFlywheelState, 'id' | 'user_token_id' | 'updated_at'> = {
@@ -110,6 +153,15 @@ const DEFAULT_FLYWHEEL_STATE: Omit<UserFlywheelState, 'id' | 'user_token_id' | '
   last_failure_at: null,
   paused_until: null,
   total_failures: 0,
+  last_checked_at: null,
+  last_check_result: null,
+
+  // Dynamic Mode State
+  market_condition: 'normal',
+  previous_market_condition: 'normal',
+  last_condition_change_at: null,
+  reserve_balance_sol: 0,
+  twap_queue: [],
 }
 
 /**
@@ -918,14 +970,29 @@ function mapPrismaTokenToPrivyTokenWithConfig(token: any): PrivyTokenWithConfig 
       max_sell_amount_tokens: Number(token.config.maxSellAmountTokens),
       buy_interval_minutes: token.config.buyIntervalMinutes,
       slippage_bps: token.config.slippageBps,
-      algorithm_mode: token.config.algorithmMode as 'simple' | 'smart' | 'rebalance',
+      algorithm_mode: token.config.algorithmMode as 'simple' | 'rebalance' | 'twap_vwap' | 'dynamic',
       target_sol_allocation: token.config.targetSolAllocation,
       target_token_allocation: token.config.targetTokenAllocation,
       rebalance_threshold: token.config.rebalanceThreshold,
-      use_twap: token.config.useTwap,
-      twap_threshold_usd: Number(token.config.twapThresholdUsd),
       trading_route: token.config.tradingRoute as 'bags' | 'jupiter' | 'auto',
       updated_at: token.config.updatedAt.toISOString(),
+      // TWAP/VWAP config
+      twap_enabled: token.config.twapEnabled,
+      twap_slices: token.config.twapSlices,
+      twap_window_minutes: token.config.twapWindowMinutes,
+      twap_threshold_usd: Number(token.config.twapThresholdUsd),
+      vwap_enabled: token.config.vwapEnabled,
+      vwap_participation_rate: token.config.vwapParticipationRate,
+      vwap_min_volume_usd: Number(token.config.vwapMinVolumeUsd),
+      // Dynamic mode config
+      dynamic_fee_enabled: token.config.dynamicFeeEnabled,
+      reserve_percent_normal: token.config.reservePercentNormal,
+      reserve_percent_adverse: token.config.reservePercentAdverse,
+      min_sell_percent: token.config.minSellPercent,
+      max_sell_percent: token.config.maxSellPercent,
+      buyback_boost_on_dump: token.config.buybackBoostOnDump,
+      pause_on_extreme_volatility: token.config.pauseOnExtremeVolatility,
+      volatility_pause_threshold: token.config.volatilityPauseThreshold,
     } : undefined as any,
     privy_flywheel_state: token.flywheelState ? {
       id: token.flywheelState.id,
@@ -941,7 +1008,15 @@ function mapPrismaTokenToPrivyTokenWithConfig(token: any): PrivyTokenWithConfig 
       last_failure_at: token.flywheelState.lastFailureAt?.toISOString() || null,
       paused_until: token.flywheelState.pausedUntil?.toISOString() || null,
       total_failures: token.flywheelState.totalFailures,
+      last_checked_at: token.flywheelState.lastCheckedAt?.toISOString() || null,
+      last_check_result: token.flywheelState.lastCheckResult,
       updated_at: token.flywheelState.updatedAt.toISOString(),
+      // Dynamic mode state
+      market_condition: token.flywheelState.marketCondition as 'pump' | 'dump' | 'ranging' | 'normal' | 'extreme_volatility',
+      previous_market_condition: token.flywheelState.previousMarketCondition as 'pump' | 'dump' | 'ranging' | 'normal' | 'extreme_volatility',
+      last_condition_change_at: token.flywheelState.lastConditionChangeAt?.toISOString() || null,
+      reserve_balance_sol: Number(token.flywheelState.reserveBalanceSol),
+      twap_queue: token.flywheelState.twapQueue as any[] || [],
     } : undefined,
   }
 }
@@ -1091,7 +1166,15 @@ export async function getPrivyFlywheelState(privyTokenId: string): Promise<UserF
       last_failure_at: state.lastFailureAt?.toISOString() || null,
       paused_until: state.pausedUntil?.toISOString() || null,
       total_failures: state.totalFailures,
+      last_checked_at: (state as any).lastCheckedAt?.toISOString() || null,
+      last_check_result: (state as any).lastCheckResult || null,
       updated_at: state.updatedAt.toISOString(),
+      // Dynamic mode state
+      market_condition: ((state as any).marketCondition || 'normal') as 'pump' | 'dump' | 'ranging' | 'normal' | 'extreme_volatility',
+      previous_market_condition: ((state as any).previousMarketCondition || 'normal') as 'pump' | 'dump' | 'ranging' | 'normal' | 'extreme_volatility',
+      last_condition_change_at: (state as any).lastConditionChangeAt?.toISOString() || null,
+      reserve_balance_sol: Number((state as any).reserveBalanceSol) || 0,
+      twap_queue: (state as any).twapQueue || [],
     }
   } catch (error) {
     loggers.user.error({ error: String(error), privyTokenId }, 'Failed to get Privy flywheel state')

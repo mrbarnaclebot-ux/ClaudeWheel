@@ -2,25 +2,12 @@
 
 import { motion } from 'framer-motion'
 import Image from 'next/image'
-import { formatSOL, formatNumber } from '@/lib/utils'
 
-interface WoodenWheelProps {
-  devBalance: number
-  opsBalance: number
-  tokenBalance: number
-  tokenSymbol?: string
-}
-
-export default function WoodenWheel({
-  devBalance,
-  opsBalance,
-  tokenBalance,
-  tokenSymbol = 'TOKEN',
-}: WoodenWheelProps) {
+export default function WoodenWheel() {
   const spokes = 12
 
   return (
-    <div className="flex flex-col items-center justify-center py-8">
+    <div className="flex flex-col items-center justify-center">
       {/* Hero Title with Logo */}
       <motion.div
         initial={{ opacity: 0, y: -20 }}
@@ -296,34 +283,6 @@ export default function WoodenWheel({
             />
           </svg>
         </motion.div>
-      </div>
-
-      {/* Stats below the wheel */}
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.4 }}
-        className="mt-8 grid grid-cols-3 gap-6 md:gap-10 w-full max-w-xl"
-      >
-        <StatItem label="Dev Wallet" value={formatSOL(devBalance)} unit="SOL" />
-        <StatItem label="Ops Wallet" value={formatSOL(opsBalance)} unit="SOL" />
-        <StatItem label="Token" value={formatNumber(tokenBalance)} unit={tokenSymbol} />
-      </motion.div>
-    </div>
-  )
-}
-
-function StatItem({ label, value, unit }: { label: string; value: string; unit: string }) {
-  return (
-    <div className="text-center">
-      <div className="text-xs font-mono text-text-muted uppercase tracking-wider mb-1">
-        {label}
-      </div>
-      <div className="text-xl md:text-2xl font-mono font-bold text-text-primary">
-        {value}
-      </div>
-      <div className="text-xs font-mono text-accent-primary">
-        {unit}
       </div>
     </div>
   )
