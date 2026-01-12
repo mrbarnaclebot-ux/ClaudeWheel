@@ -17,6 +17,7 @@
     "@telegram-apps/bridge": "^2.11.0",
     "@telegram-apps/sdk-react": "^3.3.9",
     "axios": "^1.7.9",
+    "bs58": "^6.0.0",
     "clsx": "^2.1.1",
     "framer-motion": "^11.15.0",
     "next": "14.2.21",

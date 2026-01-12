@@ -7,6 +7,8 @@ import { useTelegram } from '@/components/TelegramProvider';
 import { api } from '@/lib/api';
 import Link from 'next/link';
 import { motion } from 'framer-motion';
+import { Keypair } from '@solana/web3.js';
+import bs58 from 'bs58';
 
 interface TokenInfo {
     tokenMint: string;
@@ -17,15 +19,17 @@ interface TokenInfo {
     creatorAddress: string;
 }
 
-type Step = 'enter' | 'validate' | 'review' | 'success';
+type Step = 'enter_mint' | 'validating' | 'enter_key' | 'registering' | 'success';
 
 export default function RegisterPage() {
     const queryClient = useQueryClient();
     const { getAccessToken } = usePrivy();
     const { hapticFeedback } = useTelegram();
 
-    const [step, setStep] = useState<Step>('enter');
+    const [step, setStep] = useState<Step>('enter_mint');
     const [mintAddress, setMintAddress] = useState('');
+    const [privateKey, setPrivateKey] = useState('');
+    const [derivedAddress, setDerivedAddress] = useState<string | null>(null);
     const [tokenInfo, setTokenInfo] = useState<TokenInfo | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [registeredTokenId, setRegisteredTokenId] = useState<string | null>(null);
@@ -42,62 +46,119 @@ export default function RegisterPage() {
         onSuccess: (data) => {
             setTokenInfo(data);
             setError(null);
-            setStep('review');
+            setStep('enter_key');
             hapticFeedback('medium');
         },
         onError: (err: any) => {
+            setStep('enter_mint');
             setError(err.response?.data?.error || 'Failed to fetch token info. Make sure this is a valid Bags.fm token.');
             hapticFeedback('heavy');
         },
     });
 
-    // Register token
+    // Register token with imported dev wallet
     const registerMutation = useMutation({
         mutationFn: async () => {
             if (!tokenInfo) throw new Error('No token info');
+            if (!privateKey) throw new Error('No private key');
+
             const token = await getAccessToken();
-            const res = await api.post('/api/privy/tokens', {
+            const res = await api.post('/api/privy/tokens/register-with-import', {
                 tokenMintAddress: tokenInfo.tokenMint,
                 tokenSymbol: tokenInfo.tokenSymbol,
                 tokenName: tokenInfo.tokenName,
                 tokenImage: tokenInfo.tokenImage,
                 tokenDecimals: tokenInfo.tokenDecimals,
+                devWalletPrivateKey: privateKey,
+                tokenSource: 'registered',
             }, {
                 headers: { Authorization: `Bearer ${token}` },
             });
             return res.data;
         },
         onSuccess: (data) => {
-            setRegisteredTokenId(data.tokenId);
+            setRegisteredTokenId(data.data?.token?.id);
             setStep('success');
             queryClient.invalidateQueries({ queryKey: ['tokens'] });
             hapticFeedback('medium');
+            // Clear sensitive data
+            setPrivateKey('');
         },
         onError: (err: any) => {
+            setStep('enter_key');
             setError(err.response?.data?.error || 'Failed to register token');
             hapticFeedback('heavy');
         },
     });
 
-    const handleValidate = () => {
+    const handleValidateMint = () => {
         if (!mintAddress.trim()) {
             setError('Please enter a token mint address');
             return;
         }
-        setStep('validate');
+        setError(null);
+        setStep('validating');
         validateMutation.mutate(mintAddress.trim());
     };
 
+    // Validate private key client-side and derive address
+    const handlePrivateKeyChange = (value: string) => {
+        setPrivateKey(value);
+        setError(null);
+        setDerivedAddress(null);
+
+        if (!value.trim()) return;
+
+        try {
+            const secretKey = bs58.decode(value.trim());
+            const keypair = Keypair.fromSecretKey(secretKey);
+            setDerivedAddress(keypair.publicKey.toString());
+        } catch {
+            // Invalid key format - will show error on submit
+        }
+    };
+
     const handleRegister = () => {
+        if (!privateKey.trim()) {
+            setError('Please enter your dev wallet private key');
+            return;
+        }
+
+        // Validate key format
+        try {
+            const secretKey = bs58.decode(privateKey.trim());
+            const keypair = Keypair.fromSecretKey(secretKey);
+            const derived = keypair.publicKey.toString();
+
+            // Check if it matches the creator address
+            if (tokenInfo && derived !== tokenInfo.creatorAddress) {
+                setError(`This private key derives to ${derived.slice(0, 8)}...${derived.slice(-4)}, but the token creator is ${tokenInfo.creatorAddress.slice(0, 8)}...${tokenInfo.creatorAddress.slice(-4)}. Please use the correct dev wallet key.`);
+                hapticFeedback('heavy');
+                return;
+            }
+        } catch {
+            setError('Invalid private key format. Please enter a valid base58-encoded Solana private key.');
+            hapticFeedback('heavy');
+            return;
+        }
+
+        setError(null);
+        setStep('registering');
         registerMutation.mutate();
     };
 
     const handleBack = () => {
-        if (step === 'review') {
-            setStep('enter');
+        if (step === 'enter_key') {
+            setStep('enter_mint');
             setTokenInfo(null);
+            setPrivateKey('');
+            setDerivedAddress(null);
+            setError(null);
         }
     };
+
+    const keyMatchesCreator = derivedAddress && tokenInfo && derivedAddress === tokenInfo.creatorAddress;
+    const keyMismatch = derivedAddress && tokenInfo && derivedAddress !== tokenInfo.creatorAddress;
 
     return (
         <div className="min-h-screen p-4">
@@ -114,18 +175,30 @@ export default function RegisterPage() {
                 )}
                 <div>
                     <h1 className="text-xl font-bold">Register Token</h1>
-                    <p className="text-sm text-gray-400">Add an existing token to flywheel</p>
+                    <p className="text-sm text-gray-400">Import existing token with dev wallet</p>
                 </div>
             </div>
 
             {/* Step Indicator */}
             {step !== 'success' && (
                 <div className="flex items-center justify-center gap-2 mb-8">
-                    <StepDot active={step === 'enter'} completed={step !== 'enter'} label="1" />
+                    <StepDot
+                        active={step === 'enter_mint' || step === 'validating'}
+                        completed={step === 'enter_key' || step === 'registering'}
+                        label="1"
+                    />
                     <div className="w-8 h-0.5 bg-gray-700" />
-                    <StepDot active={step === 'validate'} completed={step === 'review'} label="2" />
+                    <StepDot
+                        active={step === 'enter_key'}
+                        completed={step === 'registering'}
+                        label="2"
+                    />
                     <div className="w-8 h-0.5 bg-gray-700" />
-                    <StepDot active={step === 'review'} completed={false} label="3" />
+                    <StepDot
+                        active={step === 'registering'}
+                        completed={false}
+                        label="3"
+                    />
                 </div>
             )}
 
@@ -136,14 +209,18 @@ export default function RegisterPage() {
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -20 }}
             >
-                {step === 'enter' && (
+                {/* Step 1: Enter Mint Address */}
+                {step === 'enter_mint' && (
                     <div className="space-y-6">
                         <div className="bg-gray-800/50 rounded-xl p-4">
                             <label className="block text-sm text-gray-400 mb-2">Token Mint Address</label>
                             <input
                                 type="text"
                                 value={mintAddress}
-                                onChange={(e) => setMintAddress(e.target.value)}
+                                onChange={(e) => {
+                                    setMintAddress(e.target.value);
+                                    setError(null);
+                                }}
                                 placeholder="Enter mint address..."
                                 className="w-full bg-gray-900 rounded-lg px-4 py-3 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-green-500 font-mono text-sm"
                             />
@@ -159,7 +236,7 @@ export default function RegisterPage() {
                         )}
 
                         <button
-                            onClick={handleValidate}
+                            onClick={handleValidateMint}
                             disabled={!mintAddress.trim()}
                             className="w-full bg-green-600 hover:bg-green-500 disabled:bg-gray-700 disabled:cursor-not-allowed rounded-xl py-4 font-medium transition-colors"
                         >
@@ -168,51 +245,82 @@ export default function RegisterPage() {
                     </div>
                 )}
 
-                {step === 'validate' && (
+                {/* Validating */}
+                {step === 'validating' && (
                     <div className="bg-gray-800/50 rounded-xl p-8 text-center">
                         <div className="animate-spin w-8 h-8 border-2 border-green-500 border-t-transparent rounded-full mx-auto mb-4" />
                         <p className="text-gray-400">Fetching token info from Bags.fm...</p>
                     </div>
                 )}
 
-                {step === 'review' && tokenInfo && (
+                {/* Step 2: Enter Private Key */}
+                {step === 'enter_key' && tokenInfo && (
                     <div className="space-y-6">
                         {/* Token Preview */}
-                        <div className="bg-gray-800/50 rounded-xl p-6 text-center">
-                            {tokenInfo.tokenImage ? (
-                                <img
-                                    src={tokenInfo.tokenImage}
-                                    alt={tokenInfo.tokenSymbol}
-                                    className="w-20 h-20 rounded-full mx-auto mb-4 object-cover"
-                                />
-                            ) : (
-                                <div className="w-20 h-20 bg-gray-700 rounded-full mx-auto mb-4 flex items-center justify-center text-3xl font-bold">
-                                    {tokenInfo.tokenSymbol[0]}
+                        <div className="bg-gray-800/50 rounded-xl p-4">
+                            <div className="flex items-center gap-4">
+                                {tokenInfo.tokenImage ? (
+                                    <img
+                                        src={tokenInfo.tokenImage}
+                                        alt={tokenInfo.tokenSymbol}
+                                        className="w-16 h-16 rounded-full object-cover"
+                                    />
+                                ) : (
+                                    <div className="w-16 h-16 bg-gray-700 rounded-full flex items-center justify-center text-2xl font-bold">
+                                        {tokenInfo.tokenSymbol[0]}
+                                    </div>
+                                )}
+                                <div>
+                                    <h2 className="text-xl font-bold">{tokenInfo.tokenName}</h2>
+                                    <p className="text-gray-400">${tokenInfo.tokenSymbol}</p>
+                                </div>
+                            </div>
+                            <div className="mt-4 pt-4 border-t border-gray-700 space-y-2 text-sm">
+                                <div className="flex justify-between">
+                                    <span className="text-gray-400">Creator (Dev Wallet)</span>
+                                    <span className="font-mono text-xs truncate max-w-[160px]">{tokenInfo.creatorAddress}</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Private Key Input */}
+                        <div className="bg-gray-800/50 rounded-xl p-4">
+                            <label className="block text-sm text-gray-400 mb-2">Dev Wallet Private Key</label>
+                            <input
+                                type="password"
+                                value={privateKey}
+                                onChange={(e) => handlePrivateKeyChange(e.target.value)}
+                                placeholder="Enter base58 private key..."
+                                className="w-full bg-gray-900 rounded-lg px-4 py-3 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-green-500 font-mono text-sm"
+                            />
+
+                            {/* Key validation feedback */}
+                            {derivedAddress && (
+                                <div className={`mt-3 p-3 rounded-lg text-sm ${
+                                    keyMatchesCreator
+                                        ? 'bg-green-500/20 border border-green-500/50 text-green-400'
+                                        : 'bg-red-500/20 border border-red-500/50 text-red-400'
+                                }`}>
+                                    {keyMatchesCreator ? (
+                                        <span className="flex items-center gap-2">
+                                            <span>✓</span> Key matches token creator
+                                        </span>
+                                    ) : (
+                                        <span>✗ Key derives to {derivedAddress.slice(0, 8)}...{derivedAddress.slice(-4)} (doesn&apos;t match creator)</span>
+                                    )}
                                 </div>
                             )}
-                            <h2 className="text-2xl font-bold">{tokenInfo.tokenName}</h2>
-                            <p className="text-gray-400">${tokenInfo.tokenSymbol}</p>
+
+                            <p className="text-xs text-gray-500 mt-2">
+                                Your private key will be securely imported into Privy for delegated signing.
+                                We never store your raw private key.
+                            </p>
                         </div>
 
-                        {/* Token Details */}
-                        <div className="bg-gray-800/50 rounded-xl p-4 space-y-3">
-                            <div className="flex justify-between">
-                                <span className="text-gray-400">Mint Address</span>
-                                <span className="font-mono text-xs truncate max-w-[180px]">{tokenInfo.tokenMint}</span>
-                            </div>
-                            <div className="flex justify-between">
-                                <span className="text-gray-400">Decimals</span>
-                                <span>{tokenInfo.tokenDecimals}</span>
-                            </div>
-                            <div className="flex justify-between">
-                                <span className="text-gray-400">Creator</span>
-                                <span className="font-mono text-xs truncate max-w-[180px]">{tokenInfo.creatorAddress}</span>
-                            </div>
-                        </div>
-
-                        {/* Info */}
-                        <div className="bg-blue-500/20 border border-blue-500/50 rounded-xl p-4 text-blue-400 text-sm">
-                            By registering this token, you confirm that you are the creator and want to enable the flywheel for automated fee collection and market making.
+                        {/* Security Notice */}
+                        <div className="bg-amber-500/20 border border-amber-500/50 rounded-xl p-4 text-amber-400 text-sm">
+                            <p className="font-medium mb-1">🔐 Security Notice</p>
+                            <p>Your private key is imported directly into Privy&apos;s secure enclave. ClaudeWheel uses delegated signing - we never have access to your raw key.</p>
                         </div>
 
                         {error && (
@@ -231,15 +339,27 @@ export default function RegisterPage() {
                             </button>
                             <button
                                 onClick={handleRegister}
-                                disabled={registerMutation.isPending}
-                                className="flex-1 bg-green-600 hover:bg-green-500 disabled:bg-gray-700 rounded-xl py-4 font-medium transition-colors"
+                                disabled={!privateKey.trim() || !!keyMismatch}
+                                className="flex-1 bg-green-600 hover:bg-green-500 disabled:bg-gray-700 disabled:cursor-not-allowed rounded-xl py-4 font-medium transition-colors"
                             >
-                                {registerMutation.isPending ? 'Registering...' : 'Register Token'}
+                                Register Token
                             </button>
                         </div>
                     </div>
                 )}
 
+                {/* Registering */}
+                {step === 'registering' && (
+                    <div className="bg-gray-800/50 rounded-xl p-8 text-center space-y-4">
+                        <div className="animate-spin w-8 h-8 border-2 border-green-500 border-t-transparent rounded-full mx-auto" />
+                        <div>
+                            <p className="text-white font-medium">Importing wallet to Privy...</p>
+                            <p className="text-gray-400 text-sm">This may take a few seconds</p>
+                        </div>
+                    </div>
+                )}
+
+                {/* Success */}
                 {step === 'success' && (
                     <div className="text-center space-y-6">
                         <div className="w-20 h-20 bg-green-500/20 rounded-full mx-auto flex items-center justify-center">
@@ -248,18 +368,21 @@ export default function RegisterPage() {
                         <div>
                             <h2 className="text-2xl font-bold mb-2">Token Registered!</h2>
                             <p className="text-gray-400">
-                                Your token has been added to ClaudeWheel. The flywheel is now active.
+                                Your dev wallet has been imported and the flywheel is now active.
                             </p>
                         </div>
 
                         <div className="bg-gray-800/50 rounded-xl p-4 space-y-2 text-left">
+                            <p className="text-green-400 flex items-center gap-2">
+                                <span>✓</span> Dev wallet imported to Privy
+                            </p>
                             <p className="text-green-400 flex items-center gap-2">
                                 <span>✓</span> Flywheel enabled
                             </p>
                             <p className="text-green-400 flex items-center gap-2">
                                 <span>✓</span> Auto-claim active
                             </p>
-                            <p className="text-gray-400 text-sm">
+                            <p className="text-gray-400 text-sm mt-2">
                                 Trading will begin automatically when the ops wallet has SOL.
                             </p>
                         </div>

@@ -128,13 +128,14 @@ export default function DashboardPage() {
                     <div className="text-2xl mb-1">📈</div>
                     <div className="font-medium text-sm">MM Mode</div>
                 </Link>
-                <div
-                    className="bg-bg-card border border-border-subtle rounded-xl p-4 text-center opacity-50 cursor-not-allowed"
+                <Link
+                    href="/register"
+                    onClick={handleLinkClick}
+                    className="bg-bg-card border border-border-subtle hover:border-border-accent rounded-xl p-4 text-center transition-all btn-press"
                 >
                     <div className="text-2xl mb-1">📝</div>
-                    <div className="font-medium text-sm text-text-muted">Register</div>
-                    <div className="text-xs text-text-muted">Soon</div>
-                </div>
+                    <div className="font-medium text-sm">Register</div>
+                </Link>
             </div>
 
             {/* Stats Summary */}
