@@ -1,5 +1,6 @@
 import { PrivyClient, SolanaCaip2ChainId } from '@privy-io/server-auth'
-import { Transaction, VersionedTransaction } from '@solana/web3.js'
+import { Transaction, VersionedTransaction, Keypair } from '@solana/web3.js'
+import bs58 from 'bs58'
 import { env } from '../config/env'
 import { prisma, isPrismaConfigured } from '../config/prisma'
 import { createLogger } from '../utils/logger'
@@ -202,9 +203,8 @@ class PrivyService {
   // ═══════════════════════════════════════════════════════════════════════════
 
   /**
-   * Sign a Solana transaction using delegated access
-   * Uses walletApi.solana.signTransaction (same pattern as signAndSendTransaction)
-   * IMPORTANT: Only works if user has delegated the wallet via frontend
+   * Sign a Solana transaction using Privy's delegated signing API
+   * All wallets (including imported ones) use Privy for signing
    */
   async signSolanaTransaction(
     walletAddress: string,
@@ -218,6 +218,7 @@ class PrivyService {
     try {
       // Look up the Privy wallet ID from our database
       let walletId: string | undefined
+
       if (isPrismaConfigured()) {
         const wallet = await prisma.privyWallet.findUnique({
           where: { walletAddress },
@@ -579,6 +580,169 @@ class PrivyService {
 
     const wallet = wallets.find((w) => w.walletType === walletType)
     return wallet?.walletAddress || null
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // EMBEDDED WALLET CREATION (Server-Side)
+  // Note: Server-side wallet creation requires user to initiate via client SDK.
+  // This method is a placeholder for future implementation if Privy adds support.
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * Create a new embedded wallet for a user via Privy API
+   * NOTE: Currently not supported server-side. Users must create wallets via TMA client.
+   * Returns null - wallet creation must happen client-side during onboarding.
+   */
+  async createEmbeddedWallet(_privyUserId: string): Promise<{ walletId: string; address: string } | null> {
+    // Server-side wallet creation is not currently supported by Privy SDK
+    // Users must complete onboarding in TMA which creates wallets client-side
+    logger.warn('createEmbeddedWallet called but server-side wallet creation is not supported')
+    logger.warn('Users must complete onboarding in TMA to create wallets')
+    return null
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // IMPORTED WALLET MANAGEMENT
+  // Imports wallets INTO Privy so all wallets use delegated signing uniformly
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * Import a wallet INTO Privy for a user
+   * The wallet will then use Privy's delegated signing like all other wallets
+   *
+   * @returns The Privy wallet ID if successful, null otherwise
+   */
+  async importWalletToPrivy(params: {
+    privyUserId: string
+    privateKey: string // Base58 encoded private key
+  }): Promise<{ walletId: string; address: string } | null> {
+    if (!this.client) {
+      logger.error('Privy client not configured')
+      return null
+    }
+
+    const { privyUserId, privateKey } = params
+
+    try {
+      // Derive address from private key for validation
+      const secretKey = bs58.decode(privateKey)
+      const keypair = Keypair.fromSecretKey(secretKey)
+      const walletAddress = keypair.publicKey.toString()
+
+      logger.info({ privyUserId, walletAddress }, 'Importing wallet into Privy')
+
+      // Import the wallet into Privy
+      // This makes it a Privy-managed wallet that uses delegated signing
+      const result = await this.client.walletApi.importWallet({
+        chainType: 'solana',
+        address: walletAddress,
+        entropy: privateKey, // Base58 private key
+        entropyType: 'private-key',
+        ownerId: privyUserId, // Privy user ID that will own this wallet
+      })
+
+      logger.info({ privyUserId, walletAddress, walletId: result.id }, 'Successfully imported wallet into Privy')
+
+      return {
+        walletId: result.id,
+        address: walletAddress,
+      }
+    } catch (error) {
+      logger.error({ error: String(error), privyUserId }, 'Failed to import wallet into Privy')
+      return null
+    }
+  }
+
+  /**
+   * Import and store a wallet for a user
+   * 1. Imports the wallet INTO Privy (so it uses delegated signing)
+   * 2. Stores the wallet record in our database
+   *
+   * All wallets use Privy delegated signing uniformly after import
+   */
+  async importAndStoreWallet(params: {
+    privyUserId: string
+    walletType: 'dev' | 'ops'
+    privateKey: string // Base58 encoded private key
+  }): Promise<{ walletId: string; address: string } | null> {
+    if (!isPrismaConfigured()) {
+      logger.error('Prisma not configured')
+      return null
+    }
+
+    const { privyUserId, walletType, privateKey } = params
+
+    try {
+      // First, import the wallet into Privy
+      const importResult = await this.importWalletToPrivy({
+        privyUserId,
+        privateKey,
+      })
+
+      if (!importResult) {
+        logger.error({ privyUserId, walletType }, 'Failed to import wallet into Privy')
+        return null
+      }
+
+      const { walletId, address } = importResult
+
+      // Store the wallet record in our database
+      // Note: isImported=true just marks that this was originally imported (for tracking)
+      // but ALL signing goes through Privy now
+      await prisma.privyWallet.upsert({
+        where: {
+          privyUserId_walletType: {
+            privyUserId,
+            walletType,
+          },
+        },
+        update: {
+          walletAddress: address,
+          privyWalletId: walletId,
+          isImported: true, // Track that this was imported (for UI/audit purposes)
+          // No encrypted keys - Privy handles signing
+          encryptedPrivateKey: null,
+          encryptionIv: null,
+          encryptionAuthTag: null,
+        },
+        create: {
+          privyUserId,
+          walletType,
+          walletAddress: address,
+          privyWalletId: walletId,
+          chainType: 'solana',
+          isImported: true,
+        },
+      })
+
+      logger.info({ privyUserId, walletType, walletId, address }, 'Imported and stored wallet')
+      return { walletId, address }
+    } catch (error) {
+      logger.error({ error: String(error), privyUserId, walletType }, 'Failed to import and store wallet')
+      return null
+    }
+  }
+
+  /**
+   * Check if a wallet was originally imported (vs created by Privy)
+   * Note: All wallets now use Privy delegated signing regardless
+   */
+  async isImportedWallet(walletAddress: string): Promise<boolean> {
+    if (!isPrismaConfigured()) {
+      return false
+    }
+
+    try {
+      const wallet = await prisma.privyWallet.findUnique({
+        where: { walletAddress },
+        select: { isImported: true },
+      })
+
+      return wallet?.isImported ?? false
+    } catch (error) {
+      logger.error({ error: String(error), walletAddress }, 'Failed to check if wallet is imported')
+      return false
+    }
   }
 }
 

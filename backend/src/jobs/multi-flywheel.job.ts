@@ -1,6 +1,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 // MULTI-USER FLYWHEEL JOB
 // Scheduled job for running flywheels across all active users
+// Uses Prisma/Privy for data storage and delegated signing
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { multiUserMMService } from '../services/multi-user-mm.service'
@@ -18,13 +19,13 @@ export function startMultiUserFlywheelJob(): void {
 
   // Check if job is enabled
   if (process.env.MULTI_USER_FLYWHEEL_ENABLED === 'false') {
-    loggers.flywheel.info('ℹ️ Multi-user flywheel job disabled via MULTI_USER_FLYWHEEL_ENABLED=false')
+    loggers.flywheel.info('Multi-user flywheel job disabled via MULTI_USER_FLYWHEEL_ENABLED=false')
     return
   }
 
-  loggers.flywheel.info({ intervalMinutes, maxTradesPerMinute }, '🔄 Starting multi-user flywheel job scheduler')
+  loggers.flywheel.info({ intervalMinutes, maxTradesPerMinute }, 'Starting multi-user flywheel job scheduler')
 
-  // Run immediately on start (like single-token flywheel does)
+  // Run immediately on start
   runFlywheelCycle(maxTradesPerMinute)
 
   // Schedule recurring runs
@@ -33,7 +34,7 @@ export function startMultiUserFlywheelJob(): void {
     intervalMinutes * 60 * 1000
   )
 
-  loggers.flywheel.info('📅 Multi-user flywheel job scheduled successfully')
+  loggers.flywheel.info('Multi-user flywheel job scheduled successfully')
 }
 
 /**
@@ -43,24 +44,19 @@ export function stopMultiUserFlywheelJob(): void {
   if (flywheelJobInterval) {
     clearInterval(flywheelJobInterval)
     flywheelJobInterval = null
-    loggers.flywheel.info('🛑 Multi-user flywheel job stopped')
+    loggers.flywheel.info('Multi-user flywheel job stopped')
   }
 }
 
 /**
- * Run a single flywheel cycle (both legacy encrypted and Privy tokens)
+ * Run a single flywheel cycle for all Privy tokens
  */
 async function runFlywheelCycle(maxTradesPerMinute: number): Promise<void> {
   try {
-    loggers.flywheel.info({ maxTradesPerMinute }, '⏰ Multi-user flywheel job triggered')
-
-    // Run legacy encrypted keypair tokens (e.g., WHEEL)
+    loggers.flywheel.info({ maxTradesPerMinute }, 'Multi-user flywheel job triggered')
     await multiUserMMService.runFlywheelCycle(maxTradesPerMinute)
-
-    // Run Privy tokens (TMA users)
-    await multiUserMMService.runPrivyFlywheelCycle(maxTradesPerMinute)
   } catch (error) {
-    loggers.flywheel.error({ error: String(error) }, '❌ Multi-user flywheel job failed')
+    loggers.flywheel.error({ error: String(error) }, 'Multi-user flywheel job failed')
   }
 }
 
@@ -109,5 +105,5 @@ export function restartFlywheelJob(newIntervalMinutes?: number, newMaxTrades?: n
   // Start with new settings
   startMultiUserFlywheelJob()
 
-  loggers.flywheel.info({ intervalMinutes: process.env.MULTI_USER_FLYWHEEL_INTERVAL_MINUTES, maxTrades: process.env.MAX_TRADES_PER_MINUTE }, '🔄 Flywheel job restarted')
+  loggers.flywheel.info({ intervalMinutes: process.env.MULTI_USER_FLYWHEEL_INTERVAL_MINUTES, maxTrades: process.env.MAX_TRADES_PER_MINUTE }, 'Flywheel job restarted')
 }

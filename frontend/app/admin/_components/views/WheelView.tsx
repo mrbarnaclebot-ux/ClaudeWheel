@@ -11,7 +11,7 @@ import { StatusBadge, FlywheelPhaseBadge } from '../shared/StatusBadge'
 import { StatsGridSkeleton, PanelSkeleton } from '../shared/LoadingSkeleton'
 
 export function WheelView() {
-  const { publicKey, signature, message } = useAdminAuth()
+  const { isAuthenticated, getToken } = useAdminAuth()
   const queryClient = useQueryClient()
   const [sellPercentage, setSellPercentage] = useState<number | null>(null)
   const [showSellConfirm, setShowSellConfirm] = useState(false)
@@ -19,15 +19,22 @@ export function WheelView() {
   // Fetch $WHEEL data
   const { data: wheelData, isLoading, error } = useQuery({
     queryKey: adminQueryKeys.wheelData(),
-    queryFn: () => fetchWheelData(publicKey!, signature!, message!),
-    enabled: Boolean(publicKey && signature && message),
+    queryFn: async () => {
+      const token = await getToken()
+      if (!token) return null
+      return fetchWheelData(token)
+    },
+    enabled: isAuthenticated,
     staleTime: 10000,
   })
 
   // Execute sell mutation
   const sellMutation = useMutation({
-    mutationFn: (percentage: number) =>
-      executeWheelSell(publicKey!, signature!, message!, percentage),
+    mutationFn: async (percentage: number) => {
+      const token = await getToken()
+      if (!token) throw new Error('Not authenticated')
+      return executeWheelSell(token, percentage)
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: adminQueryKeys.wheel() })
       setSellPercentage(null)

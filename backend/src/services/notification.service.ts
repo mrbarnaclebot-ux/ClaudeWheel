@@ -5,7 +5,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { getBot } from '../telegram/bot'
-import { supabase } from '../config/database'
+import { prisma } from '../config/prisma'
 import { env } from '../config/env'
 import { createLogger } from '../utils/logger'
 
@@ -337,22 +337,21 @@ Flywheel is now active! Your token will automatically:
    * Get Telegram ID from Privy user ID
    */
   async getTelegramIdForPrivyUser(privyUserId: string): Promise<number | null> {
-    if (!supabase) {
-      logger.warn('Supabase not configured')
+    try {
+      const user = await prisma.privyUser.findUnique({
+        where: { privyUserId },
+        select: { telegramId: true }
+      })
+
+      if (!user?.telegramId) {
+        return null
+      }
+
+      return Number(user.telegramId)
+    } catch (error) {
+      logger.error({ error: String(error), privyUserId }, 'Failed to get Telegram ID for Privy user')
       return null
     }
-
-    const { data, error } = await supabase
-      .from('privy_users')
-      .select('telegram_id')
-      .eq('privy_user_id', privyUserId)
-      .single()
-
-    if (error || !data?.telegram_id) {
-      return null
-    }
-
-    return data.telegram_id
   }
 
   /**

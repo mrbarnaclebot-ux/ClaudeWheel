@@ -35,13 +35,15 @@ model PrivyUser {
   tokens          PrivyUserToken[]
   pendingLaunches PrivyPendingLaunch[]
   mmPending       PrivyMmPending[]
+  adminRole       AdminRole?
+  telegramUser    TelegramUser?
 
   @@map("privy_users")
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
 // PRIVY WALLETS
-// Embedded wallets managed by Privy (no private keys stored!)
+// Embedded wallets managed by Privy OR imported wallets with encrypted keys
 // ═══════════════════════════════════════════════════════════════════════════
 
 model PrivyWallet {
@@ -52,6 +54,12 @@ model PrivyWallet {
   privyWalletId String   @map("privy_wallet_id")
   chainType     String   @default("solana") @map("chain_type")
   createdAt     DateTime @default(now()) @map("created_at")
+
+  // Imported wallet fields (for wallets not managed by Privy)
+  isImported          Boolean @default(false) @map("is_imported")
+  encryptedPrivateKey String? @map("encrypted_private_key")
+  encryptionIv        String? @map("encryption_iv")
+  encryptionAuthTag   String? @map("encryption_auth_tag")
 
   user               PrivyUser            @relation(fields: [privyUserId], references: [privyUserId], onDelete: Cascade)
   devTokens          PrivyUserToken[]     @relation("DevWallet")
@@ -113,19 +121,23 @@ model PrivyTokenConfig {
   marketMakingEnabled   Boolean  @default(false) @map("market_making_enabled")
   autoClaimEnabled      Boolean  @default(true) @map("auto_claim_enabled")
   feeThresholdSol       Decimal  @default(0.01) @map("fee_threshold_sol") @db.Decimal(20, 9)
+  slippageBps           Int      @default(300) @map("slippage_bps")
+  tradingRoute          String   @default("auto") @map("trading_route")
+  updatedAt             DateTime @updatedAt @map("updated_at")
+
+  // Percentage-based trading (simple algorithm)
+  buyPercent            Int      @default(20) @map("buy_percent")  // % of SOL balance to use for buys
+  sellPercent           Int      @default(20) @map("sell_percent") // % of token balance to use for sells
+
+  // Legacy fields - kept for backwards compatibility but not used
   minBuyAmountSol       Decimal  @default(0.01) @map("min_buy_amount_sol") @db.Decimal(20, 9)
   maxBuyAmountSol       Decimal  @default(0.1) @map("max_buy_amount_sol") @db.Decimal(20, 9)
   maxSellAmountTokens   Decimal  @default(1000000) @map("max_sell_amount_tokens") @db.Decimal(30, 9)
   buyIntervalMinutes    Int      @default(5) @map("buy_interval_minutes")
-  slippageBps           Int      @default(300) @map("slippage_bps")
-  algorithmMode         String   @default("simple") @map("algorithm_mode") // simple, rebalance, twap_vwap, dynamic
+  algorithmMode         String   @default("simple") @map("algorithm_mode")
   targetSolAllocation   Int      @default(30) @map("target_sol_allocation")
   targetTokenAllocation Int      @default(70) @map("target_token_allocation")
   rebalanceThreshold    Int      @default(10) @map("rebalance_threshold")
-  tradingRoute          String   @default("auto") @map("trading_route")
-  updatedAt             DateTime @updatedAt @map("updated_at")
-
-  // TWAP/VWAP Configuration (for twap_vwap and dynamic modes)
   twapEnabled           Boolean  @default(true) @map("twap_enabled")
   twapSlices            Int      @default(5) @map("twap_slices")
   twapWindowMinutes     Int      @default(30) @map("twap_window_minutes")
@@ -133,8 +145,6 @@ model PrivyTokenConfig {
   vwapEnabled           Boolean  @default(true) @map("vwap_enabled")
   vwapParticipationRate Int      @default(10) @map("vwap_participation_rate")
   vwapMinVolumeUsd      Decimal  @default(1000) @map("vwap_min_volume_usd") @db.Decimal(20, 2)
-
-  // Dynamic Mode Configuration (for dynamic mode)
   dynamicFeeEnabled         Boolean @default(true) @map("dynamic_fee_enabled")
   reservePercentNormal      Int     @default(10) @map("reserve_percent_normal")
   reservePercentAdverse     Int     @default(20) @map("reserve_percent_adverse")
@@ -326,4 +336,168 @@ model PrivyMmPending {
   @@index([privyUserId])
   @@index([expiresAt])
   @@map("privy_mm_pending")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PLATFORM CONFIG (replaces Supabase config table)
+// ═══════════════════════════════════════════════════════════════════════════
+
+model PlatformConfig {
+  id                      String   @id @default("main")
+
+  // Token settings
+  tokenMintAddress        String   @map("token_mint_address")
+  tokenSymbol             String   @default("WHEEL") @map("token_symbol")
+  tokenDecimals           Int      @default(6) @map("token_decimals")
+
+  // Feature flags
+  flywheelActive          Boolean  @default(true) @map("flywheel_active")
+  marketMakingEnabled     Boolean  @default(true) @map("market_making_enabled")
+  feeCollectionEnabled    Boolean  @default(true) @map("fee_collection_enabled")
+
+  // Fee settings
+  feeThresholdSol         Decimal  @default(0.1) @map("fee_threshold_sol") @db.Decimal(20, 9)
+  feePercentage           Int      @default(100) @map("fee_percentage")
+  platformFeePercentage   Int      @default(10) @map("platform_fee_percentage")
+
+  // WHEEL trading limits
+  wheelMinBuySol          Decimal  @default(0.01) @map("wheel_min_buy_sol") @db.Decimal(20, 9)
+  wheelMaxBuySol          Decimal  @default(0.1) @map("wheel_max_buy_sol") @db.Decimal(20, 9)
+  wheelMinSellSol         Decimal  @default(0.01) @map("wheel_min_sell_sol") @db.Decimal(20, 9)
+  wheelMaxSellSol         Decimal  @default(0.1) @map("wheel_max_sell_sol") @db.Decimal(20, 9)
+
+  // Trading settings
+  minBuyAmountSol         Decimal  @default(0.01) @map("min_buy_amount_sol") @db.Decimal(20, 9)
+  maxBuyAmountSol         Decimal  @default(0.1) @map("max_buy_amount_sol") @db.Decimal(20, 9)
+  buyIntervalMinutes      Int      @default(5) @map("buy_interval_minutes")
+  slippageBps             Int      @default(300) @map("slippage_bps")
+
+  // Job settings
+  fastClaimIntervalSeconds Int     @default(30) @map("fast_claim_interval_seconds")
+  fastClaimEnabled        Boolean  @default(true) @map("fast_claim_enabled")
+  flywheelJobEnabled      Boolean  @default(true) @map("flywheel_job_enabled")
+
+  updatedAt               DateTime @updatedAt @map("updated_at")
+
+  @@map("platform_config")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PLATFORM WALLET BALANCES (replaces Supabase wallet_balances)
+// ═══════════════════════════════════════════════════════════════════════════
+
+model PlatformWalletBalance {
+  id            String   @id @default(uuid())
+  walletType    String   @unique @map("wallet_type") // 'dev' | 'ops' | 'wheel_dev' | 'wheel_ops'
+  address       String   @map("address")
+  solBalance    Decimal  @default(0) @map("sol_balance") @db.Decimal(20, 9)
+  tokenBalance  Decimal  @default(0) @map("token_balance") @db.Decimal(30, 9)
+  usdValue      Decimal  @default(0) @map("usd_value") @db.Decimal(20, 2)
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  @@map("platform_wallet_balances")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PLATFORM FEE STATS (replaces Supabase fee_stats)
+// ═══════════════════════════════════════════════════════════════════════════
+
+model PlatformFeeStats {
+  id              String   @id @default("main")
+  totalCollected  Decimal  @default(0) @map("total_collected") @db.Decimal(20, 9)
+  todayCollected  Decimal  @default(0) @map("today_collected") @db.Decimal(20, 9)
+  hourCollected   Decimal  @default(0) @map("hour_collected") @db.Decimal(20, 9)
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  @@map("platform_fee_stats")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// AUDIT LOG (replaces Supabase audit_log)
+// ═══════════════════════════════════════════════════════════════════════════
+
+model AuditLog {
+  id          String   @id @default(uuid())
+  action      String
+  tableName   String?  @map("table_name")
+  recordId    String?  @map("record_id")
+  details     Json?
+  adminWallet String?  @map("admin_wallet")
+  userId      String?  @map("user_id")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@index([action])
+  @@index([createdAt(sort: Desc)])
+  @@map("audit_log")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ADMIN USERS (role-based access via Privy)
+// ═══════════════════════════════════════════════════════════════════════════
+
+model AdminRole {
+  id          String   @id @default(uuid())
+  privyUserId String   @unique @map("privy_user_id")
+  role        String   @default("viewer") // 'super_admin' | 'admin' | 'viewer'
+  permissions Json     @default("[]") // Array of specific permissions
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  user PrivyUser @relation(fields: [privyUserId], references: [privyUserId], onDelete: Cascade)
+
+  @@map("admin_roles")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// TELEGRAM USERS
+// Maps Telegram IDs to Privy users (replaces Supabase telegram_users)
+// ═══════════════════════════════════════════════════════════════════════════
+
+model TelegramUser {
+  id               String   @id @default(uuid())
+  telegramId       BigInt   @unique @map("telegram_id")
+  telegramUsername String?  @map("telegram_username")
+  privyUserId      String?  @unique @map("privy_user_id")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  privyUser PrivyUser? @relation(fields: [privyUserId], references: [privyUserId], onDelete: SetNull)
+
+  @@index([telegramId])
+  @@map("telegram_users")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// TELEGRAM ALERT SUBSCRIBERS
+// Users subscribed to maintenance/downtime alerts
+// ═══════════════════════════════════════════════════════════════════════════
+
+model TelegramAlertSubscriber {
+  id               String   @id @default(uuid())
+  telegramId       BigInt   @unique @map("telegram_id")
+  telegramUsername String?  @map("telegram_username")
+  isActive         Boolean  @default(true) @map("is_active")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  @@index([telegramId])
+  @@index([isActive])
+  @@map("telegram_alert_subscribers")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// BOT STATUS
+// Singleton table for maintenance mode state
+// ═══════════════════════════════════════════════════════════════════════════
+
+model BotStatus {
+  id                  String    @id @default("main")
+  isMaintenanceMode   Boolean   @default(false) @map("is_maintenance_mode")
+  maintenanceReason   String?   @map("maintenance_reason")
+  maintenanceStartedAt DateTime? @map("maintenance_started_at")
+  estimatedEndTime    DateTime? @map("estimated_end_time")
+  createdAt           DateTime  @default(now()) @map("created_at")
+  updatedAt           DateTime  @updatedAt @map("updated_at")
+
+  @@map("bot_status")
 }

@@ -33,41 +33,14 @@ export interface UserTokenConfig {
   market_making_enabled: boolean
   auto_claim_enabled: boolean
   fee_threshold_sol: number
-  min_buy_amount_sol: number
-  max_buy_amount_sol: number
-  max_sell_amount_tokens: number
-  buy_interval_minutes: number
   slippage_bps: number
-  algorithm_mode: 'simple' | 'rebalance' | 'twap_vwap' | 'dynamic'
-  target_sol_allocation: number
-  target_token_allocation: number
-  rebalance_threshold: number
   // Trading route: 'bags' (bonding curve), 'jupiter' (graduated), 'auto' (detect)
   trading_route: 'bags' | 'jupiter' | 'auto'
   updated_at: string
 
-  // TWAP/VWAP Configuration (for twap_vwap and dynamic modes)
-  twap_enabled: boolean
-  twap_slices: number
-  twap_window_minutes: number
-  twap_threshold_usd: number
-  vwap_enabled: boolean
-  vwap_participation_rate: number
-  vwap_min_volume_usd: number
-
-  // Percentage-based trading (0 = use min/max SOL instead)
-  buy_percent: number   // % of SOL balance to use for buys
-  sell_percent: number  // % of token balance to use for sells
-
-  // Dynamic Mode Configuration (for dynamic mode)
-  dynamic_fee_enabled: boolean
-  reserve_percent_normal: number
-  reserve_percent_adverse: number
-  min_sell_percent: number
-  max_sell_percent: number
-  buyback_boost_on_dump: boolean
-  pause_on_extreme_volatility: boolean
-  volatility_pause_threshold: number
+  // Percentage-based trading: 20% of current balance per trade
+  buy_percent: number   // % of SOL balance to use for buys (default 20)
+  sell_percent: number  // % of token balance to use for sells (default 20)
 }
 
 export interface UserFlywheelState {
@@ -76,8 +49,6 @@ export interface UserFlywheelState {
   cycle_phase: 'buy' | 'sell'
   buy_count: number
   sell_count: number
-  sell_phase_token_snapshot: number
-  sell_amount_per_tx: number
   last_trade_at: string | null
   // Failure tracking
   consecutive_failures: number
@@ -88,13 +59,6 @@ export interface UserFlywheelState {
   last_checked_at: string | null
   last_check_result: string | null
   updated_at: string
-
-  // Dynamic Mode State (market condition tracking and reserve)
-  market_condition: 'pump' | 'dump' | 'ranging' | 'normal' | 'extreme_volatility'
-  previous_market_condition: 'pump' | 'dump' | 'ranging' | 'normal' | 'extreme_volatility'
-  last_condition_change_at: string | null
-  reserve_balance_sol: number
-  twap_queue: any[] // TwapQueueItem[]
 }
 
 export interface RegisterTokenParams {
@@ -113,47 +77,17 @@ const DEFAULT_CONFIG: Omit<UserTokenConfig, 'id' | 'user_token_id' | 'updated_at
   market_making_enabled: false,
   auto_claim_enabled: true,
   fee_threshold_sol: 0.01,
-  min_buy_amount_sol: 0.01,
-  max_buy_amount_sol: 0.1,
-  max_sell_amount_tokens: 1000000,
-  buy_interval_minutes: 5,
   slippage_bps: 300,
-  algorithm_mode: 'simple',
-  target_sol_allocation: 30,
-  target_token_allocation: 70,
-  rebalance_threshold: 10,
   trading_route: 'auto',
-
-  // TWAP/VWAP defaults
-  twap_enabled: true,
-  twap_slices: 5,
-  twap_window_minutes: 30,
-  twap_threshold_usd: 50,
-  vwap_enabled: true,
-  vwap_participation_rate: 10,
-  vwap_min_volume_usd: 1000,
-
-  // Percentage-based trading (0 = use min/max instead)
-  buy_percent: 0,
-  sell_percent: 0,
-
-  // Dynamic mode defaults
-  dynamic_fee_enabled: true,
-  reserve_percent_normal: 10,
-  reserve_percent_adverse: 20,
-  min_sell_percent: 10,
-  max_sell_percent: 30,
-  buyback_boost_on_dump: true,
-  pause_on_extreme_volatility: true,
-  volatility_pause_threshold: 15,
+  // 20% of current balance per trade (5 buys then 5 sells)
+  buy_percent: 20,
+  sell_percent: 20,
 }
 
 const DEFAULT_FLYWHEEL_STATE: Omit<UserFlywheelState, 'id' | 'user_token_id' | 'updated_at'> = {
   cycle_phase: 'buy',
   buy_count: 0,
   sell_count: 0,
-  sell_phase_token_snapshot: 0,
-  sell_amount_per_tx: 0,
   last_trade_at: null,
   // Failure tracking
   consecutive_failures: 0,
@@ -163,13 +97,6 @@ const DEFAULT_FLYWHEEL_STATE: Omit<UserFlywheelState, 'id' | 'user_token_id' | '
   total_failures: 0,
   last_checked_at: null,
   last_check_result: null,
-
-  // Dynamic Mode State
-  market_condition: 'normal',
-  previous_market_condition: 'normal',
-  last_condition_change_at: null,
-  reserve_balance_sol: 0,
-  twap_queue: [],
 }
 
 /**
@@ -528,15 +455,22 @@ export async function getFlywheelState(userTokenId: string): Promise<UserFlywhee
     return null
   }
 
-  // Convert numeric strings to numbers
+  // Map to simplified interface (database may have extra legacy columns)
   return {
-    ...data,
+    id: data.id,
+    user_token_id: data.user_token_id,
+    cycle_phase: data.cycle_phase,
     buy_count: Number(data.buy_count) || 0,
     sell_count: Number(data.sell_count) || 0,
-    sell_phase_token_snapshot: Number(data.sell_phase_token_snapshot) || 0,
-    sell_amount_per_tx: Number(data.sell_amount_per_tx) || 0,
+    last_trade_at: data.last_trade_at,
     consecutive_failures: Number(data.consecutive_failures) || 0,
+    last_failure_reason: data.last_failure_reason,
+    last_failure_at: data.last_failure_at,
+    paused_until: data.paused_until,
     total_failures: Number(data.total_failures) || 0,
+    last_checked_at: data.last_checked_at,
+    last_check_result: data.last_check_result,
+    updated_at: data.updated_at,
   } as UserFlywheelState
 }
 
@@ -898,8 +832,6 @@ export async function reactivateSuspendedToken(
         cycle_phase: 'buy',
         buy_count: 0,
         sell_count: 0,
-        sell_phase_token_snapshot: 0,
-        sell_amount_per_tx: 0,
       })
       .eq('user_token_id', userTokenId)
 
@@ -973,34 +905,11 @@ function mapPrismaTokenToPrivyTokenWithConfig(token: any): PrivyTokenWithConfig 
       market_making_enabled: token.config.marketMakingEnabled,
       auto_claim_enabled: token.config.autoClaimEnabled,
       fee_threshold_sol: Number(token.config.feeThresholdSol),
-      min_buy_amount_sol: Number(token.config.minBuyAmountSol),
-      max_buy_amount_sol: Number(token.config.maxBuyAmountSol),
-      max_sell_amount_tokens: Number(token.config.maxSellAmountTokens),
-      buy_interval_minutes: token.config.buyIntervalMinutes,
       slippage_bps: token.config.slippageBps,
-      algorithm_mode: token.config.algorithmMode as 'simple' | 'rebalance' | 'twap_vwap' | 'dynamic',
-      target_sol_allocation: token.config.targetSolAllocation,
-      target_token_allocation: token.config.targetTokenAllocation,
-      rebalance_threshold: token.config.rebalanceThreshold,
       trading_route: token.config.tradingRoute as 'bags' | 'jupiter' | 'auto',
       updated_at: token.config.updatedAt.toISOString(),
-      // TWAP/VWAP config
-      twap_enabled: token.config.twapEnabled,
-      twap_slices: token.config.twapSlices,
-      twap_window_minutes: token.config.twapWindowMinutes,
-      twap_threshold_usd: Number(token.config.twapThresholdUsd),
-      vwap_enabled: token.config.vwapEnabled,
-      vwap_participation_rate: token.config.vwapParticipationRate,
-      vwap_min_volume_usd: Number(token.config.vwapMinVolumeUsd),
-      // Dynamic mode config
-      dynamic_fee_enabled: token.config.dynamicFeeEnabled,
-      reserve_percent_normal: token.config.reservePercentNormal,
-      reserve_percent_adverse: token.config.reservePercentAdverse,
-      min_sell_percent: token.config.minSellPercent,
-      max_sell_percent: token.config.maxSellPercent,
-      buyback_boost_on_dump: token.config.buybackBoostOnDump,
-      pause_on_extreme_volatility: token.config.pauseOnExtremeVolatility,
-      volatility_pause_threshold: token.config.volatilityPauseThreshold,
+      buy_percent: token.config.buyPercent ?? 20,
+      sell_percent: token.config.sellPercent ?? 20,
     } : undefined as any,
     privy_flywheel_state: token.flywheelState ? {
       id: token.flywheelState.id,
@@ -1008,8 +917,6 @@ function mapPrismaTokenToPrivyTokenWithConfig(token: any): PrivyTokenWithConfig 
       cycle_phase: token.flywheelState.cyclePhase as 'buy' | 'sell',
       buy_count: token.flywheelState.buyCount,
       sell_count: token.flywheelState.sellCount,
-      sell_phase_token_snapshot: Number(token.flywheelState.sellPhaseTokenSnapshot),
-      sell_amount_per_tx: Number(token.flywheelState.sellAmountPerTx),
       last_trade_at: token.flywheelState.lastTradeAt?.toISOString() || null,
       consecutive_failures: token.flywheelState.consecutiveFailures,
       last_failure_reason: token.flywheelState.lastFailureReason,
@@ -1019,12 +926,6 @@ function mapPrismaTokenToPrivyTokenWithConfig(token: any): PrivyTokenWithConfig 
       last_checked_at: token.flywheelState.lastCheckedAt?.toISOString() || null,
       last_check_result: token.flywheelState.lastCheckResult,
       updated_at: token.flywheelState.updatedAt.toISOString(),
-      // Dynamic mode state
-      market_condition: token.flywheelState.marketCondition as 'pump' | 'dump' | 'ranging' | 'normal' | 'extreme_volatility',
-      previous_market_condition: token.flywheelState.previousMarketCondition as 'pump' | 'dump' | 'ranging' | 'normal' | 'extreme_volatility',
-      last_condition_change_at: token.flywheelState.lastConditionChangeAt?.toISOString() || null,
-      reserve_balance_sol: Number(token.flywheelState.reserveBalanceSol),
-      twap_queue: token.flywheelState.twapQueue as any[] || [],
     } : undefined,
   }
 }
@@ -1159,15 +1060,13 @@ export async function getPrivyFlywheelState(privyTokenId: string): Promise<UserF
       return null
     }
 
-    // Map Prisma model to UserFlywheelState interface
+    // Map Prisma model to simplified UserFlywheelState interface
     return {
       id: state.id,
       user_token_id: state.privyTokenId,
       cycle_phase: state.cyclePhase as 'buy' | 'sell',
       buy_count: state.buyCount,
       sell_count: state.sellCount,
-      sell_phase_token_snapshot: Number(state.sellPhaseTokenSnapshot),
-      sell_amount_per_tx: Number(state.sellAmountPerTx),
       last_trade_at: state.lastTradeAt?.toISOString() || null,
       consecutive_failures: state.consecutiveFailures,
       last_failure_reason: state.lastFailureReason,
@@ -1177,12 +1076,6 @@ export async function getPrivyFlywheelState(privyTokenId: string): Promise<UserF
       last_checked_at: (state as any).lastCheckedAt?.toISOString() || null,
       last_check_result: (state as any).lastCheckResult || null,
       updated_at: state.updatedAt.toISOString(),
-      // Dynamic mode state
-      market_condition: ((state as any).marketCondition || 'normal') as 'pump' | 'dump' | 'ranging' | 'normal' | 'extreme_volatility',
-      previous_market_condition: ((state as any).previousMarketCondition || 'normal') as 'pump' | 'dump' | 'ranging' | 'normal' | 'extreme_volatility',
-      last_condition_change_at: (state as any).lastConditionChangeAt?.toISOString() || null,
-      reserve_balance_sol: Number((state as any).reserveBalanceSol) || 0,
-      twap_queue: (state as any).twapQueue || [],
     }
   } catch (error) {
     loggers.user.error({ error: String(error), privyTokenId }, 'Failed to get Privy flywheel state')
@@ -1208,8 +1101,6 @@ export async function updatePrivyFlywheelState(
     if (updates.cycle_phase !== undefined) prismaUpdates.cyclePhase = updates.cycle_phase
     if (updates.buy_count !== undefined) prismaUpdates.buyCount = updates.buy_count
     if (updates.sell_count !== undefined) prismaUpdates.sellCount = updates.sell_count
-    if (updates.sell_phase_token_snapshot !== undefined) prismaUpdates.sellPhaseTokenSnapshot = updates.sell_phase_token_snapshot
-    if (updates.sell_amount_per_tx !== undefined) prismaUpdates.sellAmountPerTx = updates.sell_amount_per_tx
     if (updates.last_trade_at !== undefined) prismaUpdates.lastTradeAt = updates.last_trade_at ? new Date(updates.last_trade_at) : null
     if (updates.consecutive_failures !== undefined) prismaUpdates.consecutiveFailures = updates.consecutive_failures
     if (updates.last_failure_reason !== undefined) prismaUpdates.lastFailureReason = updates.last_failure_reason

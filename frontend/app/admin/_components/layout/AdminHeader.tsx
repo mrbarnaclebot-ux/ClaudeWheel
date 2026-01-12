@@ -2,18 +2,13 @@
 
 import { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
-import { useWallet } from '@solana/wallet-adapter-react'
+import { usePrivy } from '@privy-io/react-auth'
 import { useAdminAuth, useAdminUI, useAdminRefresh } from '../../_stores/adminStore'
 import { StatusBadge, ConnectionBadge } from '../shared/StatusBadge'
 
-interface AdminHeaderProps {
-  onAuthenticate: () => Promise<void>
-  isAuthenticating?: boolean
-}
-
-export function AdminHeader({ onAuthenticate, isAuthenticating = false }: AdminHeaderProps) {
-  const { publicKey, connected, disconnect } = useWallet()
-  const { isAuthenticated, clearAuth } = useAdminAuth()
+export function AdminHeader() {
+  const { user } = usePrivy()
+  const { isAuthenticated, logout } = useAdminAuth()
   const { activeTab } = useAdminUI()
   const { autoRefresh, refreshInterval, setAutoRefresh, setRefreshInterval, wsConnected } =
     useAdminRefresh()
@@ -27,11 +22,6 @@ export function AdminHeader({ onAuthenticate, isAuthenticating = false }: AdminH
     return () => clearInterval(timer)
   }, [])
 
-  const handleDisconnect = () => {
-    clearAuth()
-    disconnect()
-  }
-
   const tabTitles: Record<string, string> = {
     overview: 'Dashboard Overview',
     tokens: 'Token Management',
@@ -39,6 +29,17 @@ export function AdminHeader({ onAuthenticate, isAuthenticating = false }: AdminH
     logs: 'System Logs',
     wheel: '$WHEEL Platform Token',
     settings: 'Platform Settings',
+  }
+
+  // Get display name from Privy user
+  const getDisplayName = () => {
+    if (!user) return null
+    if (user.email?.address) return user.email.address
+    if (user.telegram?.username) return `@${user.telegram.username}`
+    if (user.wallet?.address) {
+      return `${user.wallet.address.slice(0, 4)}...${user.wallet.address.slice(-4)}`
+    }
+    return 'User'
   }
 
   return (
@@ -131,36 +132,24 @@ export function AdminHeader({ onAuthenticate, isAuthenticating = false }: AdminH
         </div>
 
         {/* Auth Status */}
-        {connected && publicKey ? (
+        {isAuthenticated ? (
           <div className="flex items-center gap-3">
-            {isAuthenticated ? (
-              <>
-                <StatusBadge variant="success" dot pulse>
-                  Authenticated
-                </StatusBadge>
-                <div className="text-xs text-text-muted font-mono">
-                  {publicKey.toString().slice(0, 4)}...{publicKey.toString().slice(-4)}
-                </div>
-                <button
-                  onClick={handleDisconnect}
-                  className="px-3 py-1.5 text-xs font-mono bg-error/20 text-error border border-error/30 rounded-lg hover:bg-error/30 transition-colors"
-                >
-                  Disconnect
-                </button>
-              </>
-            ) : (
-              <button
-                onClick={onAuthenticate}
-                disabled={isAuthenticating}
-                className="px-4 py-2 text-sm font-mono bg-accent-primary/20 text-accent-primary border border-accent-primary/30 rounded-lg hover:bg-accent-primary/30 transition-colors disabled:opacity-50"
-              >
-                {isAuthenticating ? 'Signing...' : 'Sign to Authenticate'}
-              </button>
-            )}
+            <StatusBadge variant="success" dot pulse>
+              Authenticated
+            </StatusBadge>
+            <div className="text-xs text-text-muted font-mono">
+              {getDisplayName()}
+            </div>
+            <button
+              onClick={logout}
+              className="px-3 py-1.5 text-xs font-mono bg-error/20 text-error border border-error/30 rounded-lg hover:bg-error/30 transition-colors"
+            >
+              Sign Out
+            </button>
           </div>
         ) : (
           <StatusBadge variant="warning" dot>
-            Wallet Not Connected
+            Not Authenticated
           </StatusBadge>
         )}
       </div>

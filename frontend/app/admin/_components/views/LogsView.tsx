@@ -23,7 +23,7 @@ interface FormattedLogEntry {
 }
 
 export function LogsView() {
-  const { publicKey, signature, message } = useAdminAuth()
+  const { isAuthenticated, getToken } = useAdminAuth()
   const [activeTab, setActiveTab] = useState<LogType>('flywheel')
   const [levelFilter, setLevelFilter] = useState<LogLevel>('all')
   const [searchQuery, setSearchQuery] = useState('')
@@ -43,8 +43,12 @@ export function LogsView() {
   // Fetch historical telegram logs for system tab
   const { data: historicalLogs, isLoading: isHistoricalLoading } = useQuery({
     queryKey: adminQueryKeys.logList({ limit: 100 }),
-    queryFn: () => fetchAuditLogs(publicKey!, signature!, message!, { limit: 100 }),
-    enabled: Boolean(publicKey && signature && message) && activeTab === 'system',
+    queryFn: async () => {
+      const token = await getToken()
+      if (!token) return null
+      return fetchAuditLogs(token, { limit: 100 })
+    },
+    enabled: isAuthenticated && activeTab === 'system',
     staleTime: 30000,
   })
 

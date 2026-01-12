@@ -174,6 +174,41 @@ Key service: `backend/src/services/privy.service.ts`
 - Admin WebSocket provides real-time updates to the dashboard
 - Structured logging with Pino using emoji prefixes
 
+### Discord Error Reporting
+
+All errors are automatically sent to a Discord webhook with rich context:
+- **Rate limiting**: Same error only sent once per configurable interval (default 60s)
+- **Deduplication**: Errors hashed by message + stack + module to prevent spam
+- **Rich embeds**: Formatted with module, operation, stack trace, system info
+- **Severity levels**: Error (red), Fatal (dark red), Warning (orange), Critical (magenta)
+- **Global handlers**: Uncaught exceptions and unhandled rejections auto-reported
+
+Key files:
+- `backend/src/services/discord-error.service.ts` - Core Discord integration
+- `backend/src/utils/logger.ts` - Logger utilities with Discord hooks
+
+Usage in code:
+```typescript
+import { logErrorWithDiscord, logFatalWithDiscord, reportToDiscord } from '../utils/logger'
+
+// Log error and send to Discord
+await logErrorWithDiscord(loggers.myModule, error, 'Operation failed', {
+  userId: 'user123',
+  tokenMint: 'mint...',
+  additionalInfo: { context: 'value' }
+})
+
+// For critical errors (bypasses rate limit)
+await logFatalWithDiscord(loggers.myModule, error, 'Critical failure', context)
+
+// Report to Discord without local logging
+reportToDiscord(error, { module: 'myModule', operation: 'task' })
+```
+
+Admin endpoints:
+- `GET /api/admin/discord/stats` - Get reporting stats
+- `POST /api/admin/discord/test` - Send test error to verify webhook
+
 ### Frontend State
 
 - Zustand stores in `_stores/` directories for local state
@@ -328,6 +363,14 @@ Key service: `backend/src/services/privy.service.ts`
 | `PLATFORM_FEE_PERCENTAGE` | Platform fee (default: 10%)           |
 | `ENABLE_*_JOB`          | Flags to enable/disable individual jobs |
 
+### Discord Error Reporting Variables
+
+| Variable                          | Purpose                                              |
+| --------------------------------- | ---------------------------------------------------- |
+| `DISCORD_ERROR_WEBHOOK_URL`       | Discord webhook URL for error notifications          |
+| `DISCORD_ERROR_RATE_LIMIT_SECONDS`| Min seconds between same error (default: 60)         |
+| `DISCORD_ERROR_ENABLED`           | Enable/disable Discord error reporting (default: true)|
+
 ## Admin Dashboard Settings
 
 The admin dashboard at `/admin` provides configuration for various platform settings.
@@ -361,6 +404,8 @@ The admin dashboard at `/admin` provides configuration for various platform sett
 | `backend/src/config/env.ts`                     | Environment validation schema (Zod)       |
 | `backend/src/config/prisma.ts`                  | Prisma client configuration               |
 | `backend/src/config/database.ts`                | Supabase client configuration             |
+| `backend/src/services/discord-error.service.ts` | Discord webhook error reporting           |
+| `backend/src/utils/logger.ts`                   | Pino logging with Discord integration     |
 
 ### Market Making
 

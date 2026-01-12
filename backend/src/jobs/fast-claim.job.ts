@@ -1,9 +1,10 @@
-// ═══════════════════════════════════════════════════════════════════════════
+// ===============================================================================
 // FAST CLAIM JOB
 // High-frequency fee claiming - runs every 30 seconds by default
 // Claims fees when they reach >= 0.15 SOL threshold
 // Takes 10% platform fee to WHEEL ops wallet, 90% to user's ops wallet
-// ═══════════════════════════════════════════════════════════════════════════
+// Privy-only implementation - uses delegated signing via Privy API
+// ===============================================================================
 
 import { fastClaimService } from '../services/fast-claim.service'
 import { loggers } from '../utils/logger'
@@ -22,27 +23,27 @@ export function startFastClaimJob(): void {
 
   // Check if job is enabled
   if (process.env.FAST_CLAIM_JOB_ENABLED === 'false') {
-    loggers.claim.info('ℹ️ Fast claim job disabled via FAST_CLAIM_JOB_ENABLED=false')
+    loggers.claim.info('Fast claim job disabled via FAST_CLAIM_JOB_ENABLED=false')
     return
   }
 
   const threshold = process.env.FAST_CLAIM_THRESHOLD_SOL || '0.15'
 
-  loggers.claim.info({ intervalSeconds, threshold, platformFee: '10%', userReceives: '90%' }, '⚡ Starting FAST CLAIM job scheduler')
+  loggers.claim.info({ intervalSeconds, threshold, platformFee: '10%', userReceives: '90%' }, 'Starting FAST CLAIM job scheduler')
 
   // Run immediately on startup (after a short delay)
   setTimeout(() => {
-    loggers.claim.info('⚡ Running initial fast claim cycle...')
-    runFastClaimCycle()
+    loggers.claim.info('Running initial fast claim cycle...')
+    runClaimCycle()
   }, 5000)
 
   // Schedule recurring runs
   fastClaimJobInterval = setInterval(
-    () => runFastClaimCycle(),
+    () => runClaimCycle(),
     intervalSeconds * 1000
   )
 
-  loggers.claim.info('📅 Fast claim job scheduled successfully')
+  loggers.claim.info('Fast claim job scheduled successfully')
 }
 
 /**
@@ -52,22 +53,18 @@ export function stopFastClaimJob(): void {
   if (fastClaimJobInterval) {
     clearInterval(fastClaimJobInterval)
     fastClaimJobInterval = null
-    loggers.claim.info('🛑 Fast claim job stopped')
+    loggers.claim.info('Fast claim job stopped')
   }
 }
 
 /**
- * Run a single fast claim cycle (both legacy encrypted and Privy tokens)
+ * Run a single fast claim cycle for all Privy tokens
  */
-async function runFastClaimCycle(): Promise<void> {
+async function runClaimCycle(): Promise<void> {
   try {
-    // Run legacy encrypted keypair tokens (e.g., WHEEL)
-    await fastClaimService.runFastClaimCycle()
-
-    // Run Privy tokens (TMA users)
-    await fastClaimService.runPrivyFastClaimCycle()
+    await fastClaimService.runClaimCycle()
   } catch (error) {
-    loggers.claim.error({ error: String(error) }, '❌ Fast claim job error')
+    loggers.claim.error({ error: String(error) }, 'Fast claim job error')
   }
 }
 
@@ -75,8 +72,8 @@ async function runFastClaimCycle(): Promise<void> {
  * Manually trigger a fast claim cycle (for admin/testing)
  */
 export async function triggerFastClaimCycle(): Promise<void> {
-  loggers.claim.info('⚡ Manual fast claim cycle triggered')
-  await runFastClaimCycle()
+  loggers.claim.info('Manual fast claim cycle triggered')
+  await runClaimCycle()
 }
 
 /**
@@ -112,5 +109,5 @@ export function restartFastClaimJob(newIntervalSeconds?: number): void {
   stopFastClaimJob()
   startFastClaimJob()
 
-  loggers.claim.info('🔄 Fast claim job restarted')
+  loggers.claim.info('Fast claim job restarted')
 }

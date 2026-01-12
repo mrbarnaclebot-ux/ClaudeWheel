@@ -1,30 +1,25 @@
-// ═══════════════════════════════════════════════════════════════════════════
+// ===============================================================================
 // FAST CLAIM SERVICE
 // High-frequency fee claiming - checks every 30 seconds, claims when >= 0.15 SOL
 // Optimized for speed with batch position checking and parallel execution
-// ═══════════════════════════════════════════════════════════════════════════
+// Privy-only implementation - uses delegated signing via Privy API
+// ===============================================================================
 
-import { Connection, Transaction, Keypair, PublicKey, SystemProgram } from '@solana/web3.js'
-import { supabase } from '../config/database'
+import { Connection, Transaction, PublicKey, SystemProgram } from '@solana/web3.js'
 import { prisma, isPrismaConfigured } from '../config/prisma'
 import { getConnection, getOpsWallet, getSolPrice } from '../config/solana'
 import { env } from '../config/env'
 import { bagsFmService, ClaimablePosition } from './bags-fm'
 import { loggers } from '../utils/logger'
-import { sendSerializedTransactionWithRetry, sendAndConfirmTransactionWithRetry, sendTransactionWithPrivySigning, signAndSendWithPrivyExact } from '../utils/transaction'
+import { sendTransactionWithPrivySigning, signAndSendWithPrivyExact } from '../utils/transaction'
 import {
-  UserToken,
-  getTokensForAutoClaim,
-  getDecryptedDevWallet,
-  // Privy imports
   PrivyTokenWithConfig,
   getPrivyTokensForAutoClaim,
 } from './user-token.service'
-import { privyService } from './privy.service'
 
-// ═══════════════════════════════════════════════════════════════════════════
+// ===============================================================================
 // CONFIGURATION
-// ═══════════════════════════════════════════════════════════════════════════
+// ===============================================================================
 
 // Platform WHEEL token - excluded from platform fees
 const PLATFORM_WHEEL_TOKEN_MINT = '8JLGQ7RqhsvhsDhvjMuJUeeuaQ53GTJqSHNaBWf4BAGS'
@@ -38,12 +33,12 @@ const MAX_CONCURRENT_CLAIMS = parseInt(process.env.FAST_CLAIM_MAX_CONCURRENT || 
 // Delay between claim batches (ms)
 const BATCH_DELAY_MS = parseInt(process.env.FAST_CLAIM_BATCH_DELAY_MS || '500', 10)
 
-// ═══════════════════════════════════════════════════════════════════════════
+// ===============================================================================
 // TYPES
-// ═══════════════════════════════════════════════════════════════════════════
+// ===============================================================================
 
 interface ClaimableToken {
-  token: UserToken
+  token: PrivyTokenWithConfig
   position: ClaimablePosition
 }
 
@@ -74,9 +69,9 @@ interface FastClaimCycleResult {
   results: FastClaimResult[]
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
+// ===============================================================================
 // SERVICE
-// ═══════════════════════════════════════════════════════════════════════════
+// ===============================================================================
 
 class FastClaimService {
   private isRunning = false
@@ -84,10 +79,10 @@ class FastClaimService {
   private cycleCount = 0
 
   /**
-   * Run a fast claim cycle
+   * Run a fast claim cycle for all Privy tokens
    * Checks all tokens and claims any with >= 0.15 SOL claimable
    */
-  async runFastClaimCycle(): Promise<FastClaimCycleResult> {
+  async runClaimCycle(): Promise<FastClaimCycleResult> {
     if (this.isRunning) {
       loggers.claim.warn('Fast claim cycle already in progress, skipping')
       return this.emptyResult()
@@ -97,15 +92,15 @@ class FastClaimService {
     this.cycleCount++
     const cycleStartedAt = new Date().toISOString()
 
-    loggers.claim.info({ cycleCount: this.cycleCount, threshold: MIN_CLAIM_THRESHOLD_SOL, maxConcurrent: MAX_CONCURRENT_CLAIMS }, 'Starting fast claim cycle')
+    loggers.claim.info({ cycleCount: this.cycleCount, threshold: MIN_CLAIM_THRESHOLD_SOL }, 'Starting fast claim cycle')
 
     const results: FastClaimResult[] = []
     let tokensChecked = 0
     let tokensClaimable = 0
 
     try {
-      // Step 1: Get all tokens with auto-claim enabled
-      const tokens = await getTokensForAutoClaim()
+      // Get all Privy tokens with auto-claim enabled
+      const tokens = await getPrivyTokensForAutoClaim()
       tokensChecked = tokens.length
 
       if (tokens.length === 0) {
@@ -115,11 +110,10 @@ class FastClaimService {
 
       loggers.claim.info({ tokenCount: tokens.length }, 'Checking tokens for claimable fees')
 
-      // Step 2: Group tokens by dev wallet to minimize API calls
+      // Group tokens by dev wallet
       const walletToTokens = this.groupTokensByDevWallet(tokens)
-      loggers.claim.debug({ walletCount: Object.keys(walletToTokens).length }, 'Grouped tokens by dev wallet')
 
-      // Step 3: Batch check claimable positions for all wallets
+      // Batch check claimable positions
       const claimableTokens = await this.batchCheckClaimablePositions(walletToTokens)
       tokensClaimable = claimableTokens.length
 
@@ -140,7 +134,7 @@ class FastClaimService {
         tokens: claimableTokens.map(ct => ({ symbol: ct.token.token_symbol, amount: ct.position.claimableAmount }))
       }, 'Found tokens ready to claim')
 
-      // Step 4: Execute claims in parallel batches
+      // Execute claims in batches
       const claimResults = await this.executeClaimsInBatches(claimableTokens)
       results.push(...claimResults)
 
@@ -158,7 +152,6 @@ class FastClaimService {
     const totalPlatformFee = successful.reduce((sum, r) => sum + r.platformFeeSol, 0)
     const totalUserReceived = successful.reduce((sum, r) => sum + r.userReceivedSol, 0)
 
-    // Summary
     loggers.claim.info({
       successfulCount: successful.length,
       failedCount: failed.length,
@@ -185,11 +178,13 @@ class FastClaimService {
   /**
    * Group tokens by dev wallet address for efficient batch checking
    */
-  private groupTokensByDevWallet(tokens: UserToken[]): Record<string, UserToken[]> {
-    const walletToTokens: Record<string, UserToken[]> = {}
+  private groupTokensByDevWallet(tokens: PrivyTokenWithConfig[]): Record<string, PrivyTokenWithConfig[]> {
+    const walletToTokens: Record<string, PrivyTokenWithConfig[]> = {}
 
     for (const token of tokens) {
-      const wallet = token.dev_wallet_address
+      const wallet = token.dev_wallet?.wallet_address
+      if (!wallet) continue
+
       if (!walletToTokens[wallet]) {
         walletToTokens[wallet] = []
       }
@@ -204,12 +199,11 @@ class FastClaimService {
    * Returns tokens with >= MIN_CLAIM_THRESHOLD_SOL claimable
    */
   private async batchCheckClaimablePositions(
-    walletToTokens: Record<string, UserToken[]>
+    walletToTokens: Record<string, PrivyTokenWithConfig[]>
   ): Promise<ClaimableToken[]> {
     const claimableTokens: ClaimableToken[] = []
     const wallets = Object.keys(walletToTokens)
 
-    // Check all wallets in parallel (with some rate limiting)
     const BATCH_SIZE = 10
     for (let i = 0; i < wallets.length; i += BATCH_SIZE) {
       const batch = wallets.slice(i, i + BATCH_SIZE)
@@ -235,7 +229,6 @@ class FastClaimService {
         }
       }
 
-      // Small delay between batches to avoid rate limiting
       if (i + BATCH_SIZE < wallets.length) {
         await this.sleep(200)
       }
@@ -250,11 +243,13 @@ class FastClaimService {
   private async executeClaimsInBatches(claimableTokens: ClaimableToken[]): Promise<FastClaimResult[]> {
     const results: FastClaimResult[] = []
 
-    // Process in batches of MAX_CONCURRENT_CLAIMS
     for (let i = 0; i < claimableTokens.length; i += MAX_CONCURRENT_CLAIMS) {
       const batch = claimableTokens.slice(i, i + MAX_CONCURRENT_CLAIMS)
 
-      loggers.claim.debug({ batchNumber: Math.floor(i / MAX_CONCURRENT_CLAIMS) + 1, totalBatches: Math.ceil(claimableTokens.length / MAX_CONCURRENT_CLAIMS) }, 'Processing claim batch')
+      loggers.claim.debug({
+        batchNumber: Math.floor(i / MAX_CONCURRENT_CLAIMS) + 1,
+        totalBatches: Math.ceil(claimableTokens.length / MAX_CONCURRENT_CLAIMS)
+      }, 'Processing claim batch')
 
       const batchResults = await Promise.allSettled(
         batch.map(ct => this.executeSingleClaim(ct))
@@ -281,7 +276,6 @@ class FastClaimService {
         }
       }
 
-      // Delay between batches
       if (i + MAX_CONCURRENT_CLAIMS < claimableTokens.length) {
         await this.sleep(BATCH_DELAY_MS)
       }
@@ -292,54 +286,133 @@ class FastClaimService {
 
   /**
    * Execute a single claim for a token
+   * Uses RAW transaction objects (no serialization) - same pattern as token-launcher.ts
+   * Fresh transactions for each retry to avoid stale blockhash
    */
   private async executeSingleClaim(claimable: ClaimableToken): Promise<FastClaimResult> {
     const { token, position } = claimable
     const claimedAt = new Date().toISOString()
+    const maxRetries = 3
+    const retryDelays = [2000, 4000, 8000] // Exponential backoff
 
     try {
-      loggers.claim.info({ tokenSymbol: token.token_symbol, claimableAmount: position.claimableAmount }, 'Claiming fees')
+      loggers.claim.info({
+        tokenSymbol: token.token_symbol,
+        tokenMint: token.token_mint_address,
+        claimableAmount: position.claimableAmount,
+        isGraduated: token.is_graduated,
+      }, 'Claiming fees')
 
-      // Get decrypted dev wallet
-      const devWallet = await getDecryptedDevWallet(token.id)
-      if (!devWallet) {
-        throw new Error('Failed to decrypt dev wallet')
+      const devWalletAddress = token.dev_wallet?.wallet_address
+      if (!devWalletAddress) {
+        throw new Error('Dev wallet not found')
       }
 
-      // Generate claim transactions
-      const claimTxs = await bagsFmService.generateClaimTransactions(
-        token.dev_wallet_address,
-        [token.token_mint_address]
-      )
-
-      if (!claimTxs || claimTxs.length === 0) {
-        throw new Error('Failed to generate claim transactions')
-      }
-
-      // Execute claim transactions
       const connection = getConnection()
       let lastSignature: string | undefined
+      let lastError: Error | null = null
 
-      for (const txBase64 of claimTxs) {
-        const signature = await this.signAndSendTransaction(connection, txBase64, devWallet)
-        if (signature) {
-          lastSignature = signature
+      // Retry loop - generate FRESH RAW transactions each attempt
+      for (let attempt = 0; attempt < maxRetries; attempt++) {
+        try {
+          loggers.claim.debug({
+            tokenSymbol: token.token_symbol,
+            devWallet: devWalletAddress,
+            tokenMint: token.token_mint_address,
+            attempt: attempt + 1,
+          }, 'Generating fresh RAW claim transactions')
+
+          // Generate RAW claim transactions (no serialization - like token-launcher.ts)
+          const claimTxs = await bagsFmService.generateClaimTransactionsRaw(
+            devWalletAddress,
+            [token.token_mint_address]
+          )
+
+          if (!claimTxs || claimTxs.length === 0) {
+            throw new Error('Failed to generate claim transactions')
+          }
+
+          loggers.claim.info({
+            tokenSymbol: token.token_symbol,
+            txCount: claimTxs.length,
+            attempt: attempt + 1,
+          }, 'Fresh RAW claim transactions generated, executing with Privy signing')
+
+          // Execute claim transactions using EXACT token-launcher.ts pattern:
+          // - NO transaction modifications (especially no blockhash changes)
+          // - Sign with Privy -> Serialize ourselves -> Broadcast ourselves -> Poll
+          for (let txIndex = 0; txIndex < claimTxs.length; txIndex++) {
+            const tx = claimTxs[txIndex]
+            const result = await signAndSendWithPrivyExact(
+              connection,
+              devWalletAddress,
+              tx,
+              `claim tx ${txIndex + 1}/${claimTxs.length} for ${token.token_symbol}`
+            )
+            if (result.success && result.signature) {
+              lastSignature = result.signature
+              // Continue to next tx if there are more (some claims have multiple txs)
+            } else if (!result.success) {
+              throw new Error(result.error || 'Claim transaction failed')
+            }
+          }
+
+          if (lastSignature) {
+            break // Success - exit retry loop
+          }
+
+          throw new Error('Claim transaction signing/broadcast failed')
+        } catch (error: any) {
+          lastError = error
+          const errorStr = String(error)
+          const isBlockhashError = errorStr.includes('Blockhash') ||
+            errorStr.includes('blockhash') ||
+            errorStr.includes('block height') ||
+            errorStr.includes('not confirmed')
+
+          loggers.claim.warn({
+            tokenSymbol: token.token_symbol,
+            attempt: attempt + 1,
+            maxRetries,
+            error: errorStr,
+            isBlockhashError,
+          }, 'Claim attempt failed')
+
+          if (attempt < maxRetries - 1) {
+            const delay = retryDelays[attempt]
+            loggers.claim.debug({
+              tokenSymbol: token.token_symbol,
+              delay,
+              nextAttempt: attempt + 2,
+            }, 'Retrying claim with fresh transaction')
+            await new Promise(resolve => setTimeout(resolve, delay))
+          }
         }
       }
 
       if (!lastSignature) {
-        throw new Error('Claim transaction failed')
+        const errorMsg = lastError?.message || 'Claim transaction failed after all retries'
+        loggers.claim.error({
+          tokenSymbol: token.token_symbol,
+          tokenMint: token.token_mint_address,
+          devWallet: devWalletAddress,
+          isGraduated: token.is_graduated,
+          claimableAmount: position.claimableAmount,
+          error: errorMsg,
+        }, 'Failed to complete claim after all attempts')
+        throw new Error(errorMsg)
       }
 
       // Transfer to ops wallet with platform fee split
       let platformFeeSol = 0
       let userReceivedSol = position.claimableAmount
+      const opsWalletAddress = token.ops_wallet?.wallet_address
 
-      if (token.ops_wallet_address) {
+      if (opsWalletAddress) {
         const transferResult = await this.transferWithPlatformFee(
           connection,
-          devWallet,
-          token.ops_wallet_address,
+          devWalletAddress,
+          opsWalletAddress,
           position.claimableAmount,
           token.token_symbol,
           token.token_mint_address
@@ -381,42 +454,19 @@ class FastClaimService {
   }
 
   /**
-   * Sign and send a transaction using unified transaction utility
-   */
-  private async signAndSendTransaction(
-    connection: Connection,
-    txBase64: string,
-    signer: Keypair
-  ): Promise<string | null> {
-    const result = await sendSerializedTransactionWithRetry(
-      connection,
-      txBase64,
-      signer,
-      {
-        skipPreflight: false,
-        maxRetries: 3,
-        logContext: { service: 'fast-claim' },
-      }
-    )
-
-    return result.success ? result.signature || null : null
-  }
-
-  /**
-   * Transfer SOL with platform fee split
+   * Transfer SOL with platform fee split using Privy signing
    * 10% goes to WHEEL ops wallet, 90% goes to user's ops wallet
-   * WHEEL token is excluded from platform fees (100% goes to user)
+   * WHEEL token (platform token) is excluded from platform fees (100% goes to user)
    */
   private async transferWithPlatformFee(
     connection: Connection,
-    fromWallet: Keypair,
+    devWalletAddress: string,
     userOpsWalletAddress: string,
     amountSol: number,
     tokenSymbol: string,
     tokenMint: string
   ): Promise<{ success: boolean; platformFeeSol: number; userAmountSol: number }> {
     try {
-      // Reserve some SOL for rent and future transactions
       const reserveSol = 0.1
       const transferAmount = Math.max(0, amountSol - reserveSol)
 
@@ -436,568 +486,10 @@ class FastClaimService {
         loggers.claim.info({ tokenSymbol }, 'WHEEL token - skipping platform fee')
       }
 
-      // Get WHEEL platform ops wallet
-      const platformOpsWallet = getOpsWallet()
-
-      // Transfer 1: Platform fee to WHEEL ops wallet (10%) - skip for WHEEL token
-      if (platformOpsWallet && platformFeeSol >= 0.001) {
-        const platformTx = new Transaction().add(
-          SystemProgram.transfer({
-            fromPubkey: fromWallet.publicKey,
-            toPubkey: platformOpsWallet.publicKey,
-            lamports: Math.floor(platformFeeSol * 1e9),
-          })
-        )
-
-        const platformResult = await sendAndConfirmTransactionWithRetry(
-          connection,
-          platformTx,
-          [fromWallet],
-          { commitment: 'confirmed', logContext: { service: 'fast-claim', type: 'platform-fee', tokenSymbol } }
-        )
-
-        if (platformResult.success) {
-          loggers.claim.info({ tokenSymbol, platformFeeSol, signature: platformResult.signature }, 'Platform fee transferred')
-        } else {
-          loggers.claim.error({ tokenSymbol, error: platformResult.error }, 'Platform fee transfer failed')
-        }
-      }
-
-      // Transfer 2: User's portion to their ops wallet (90%)
-      if (userAmountSol >= 0.001) {
-        const userTx = new Transaction().add(
-          SystemProgram.transfer({
-            fromPubkey: fromWallet.publicKey,
-            toPubkey: new PublicKey(userOpsWalletAddress),
-            lamports: Math.floor(userAmountSol * 1e9),
-          })
-        )
-
-        const userResult = await sendAndConfirmTransactionWithRetry(
-          connection,
-          userTx,
-          [fromWallet],
-          { commitment: 'confirmed', logContext: { service: 'fast-claim', type: 'user-portion', tokenSymbol } }
-        )
-
-        if (userResult.success) {
-          loggers.claim.info({ tokenSymbol, userAmountSol, signature: userResult.signature }, 'User portion transferred')
-        } else {
-          loggers.claim.error({ tokenSymbol, error: userResult.error }, 'User transfer failed')
-        }
-      }
-
-      return { success: true, platformFeeSol, userAmountSol }
-    } catch (error: any) {
-      loggers.claim.error({ tokenSymbol, error: String(error) }, 'Transfer with platform fee failed')
-      return { success: false, platformFeeSol: 0, userAmountSol: 0 }
-    }
-  }
-
-  /**
-   * Record claim in database
-   */
-  private async recordClaim(
-    userTokenId: string,
-    amountSol: number,
-    signature: string,
-    platformFeeSol: number,
-    userReceivedSol: number
-  ): Promise<void> {
-    if (!supabase) return
-
-    try {
-      // Fetch current SOL price for USD value tracking
-      let amountUsd = 0
-      try {
-        const solPrice = await getSolPrice()
-        amountUsd = amountSol * solPrice
-      } catch (priceError) {
-        loggers.claim.warn({ error: String(priceError) }, 'Failed to fetch SOL price for USD calculation')
-      }
-
-      const { error: historyError } = await supabase.from('user_claim_history').insert([{
-        user_token_id: userTokenId,
-        amount_sol: amountSol,
-        amount_usd: amountUsd,
-        platform_fee_sol: platformFeeSol,
-        user_received_sol: userReceivedSol,
-        transaction_signature: signature,
-        claimed_at: new Date().toISOString(),
-      }])
-
-      if (historyError) {
-        console.error('Failed to insert claim history:', historyError)
-      }
-
-      // Also record as transaction for activity feed
-      const usdStr = amountUsd > 0 ? ` ($${amountUsd.toFixed(2)})` : ''
-      const { error: txError } = await supabase.from('user_transactions').insert([{
-        user_token_id: userTokenId,
-        type: 'transfer',
-        amount: amountSol,
-        signature,
-        message: `Claimed ${amountSol.toFixed(4)} SOL${usdStr} fees (${platformFeeSol.toFixed(4)} platform fee)`,
-        status: 'confirmed',
-      }])
-
-      if (txError) {
-        console.error('Failed to insert transaction record:', txError)
-      }
-    } catch (error) {
-      loggers.claim.error({ error: String(error) }, 'Failed to record claim')
-    }
-  }
-
-  private emptyResult(): FastClaimCycleResult {
-    return {
-      cycleStartedAt: new Date().toISOString(),
-      cycleCompletedAt: new Date().toISOString(),
-      tokensChecked: 0,
-      tokensClaimable: 0,
-      claimsAttempted: 0,
-      claimsSuccessful: 0,
-      claimsFailed: 0,
-      totalClaimedSol: 0,
-      totalPlatformFeeSol: 0,
-      totalUserReceivedSol: 0,
-      results: [],
-    }
-  }
-
-  private sleep(ms: number): Promise<void> {
-    return new Promise(resolve => setTimeout(resolve, ms))
-  }
-
-  // ═══════════════════════════════════════════════════════════════════════════
-  // STATUS METHODS
-  // ═══════════════════════════════════════════════════════════════════════════
-
-  getStatus(): {
-    isRunning: boolean
-    lastCycleAt: Date | null
-    cycleCount: number
-    threshold: number
-  } {
-    return {
-      isRunning: this.isRunning,
-      lastCycleAt: this.lastCycleAt,
-      cycleCount: this.cycleCount,
-      threshold: MIN_CLAIM_THRESHOLD_SOL,
-    }
-  }
-
-  isJobRunning(): boolean {
-    return this.isRunning
-  }
-
-  getLastCycleAt(): Date | null {
-    return this.lastCycleAt
-  }
-
-  // ═══════════════════════════════════════════════════════════════════════════
-  // PRIVY TOKEN CLAIMING
-  // For tokens registered via Privy (TMA/embedded wallets)
-  // ═══════════════════════════════════════════════════════════════════════════
-
-  /**
-   * Run a fast claim cycle for Privy tokens
-   */
-  async runPrivyFastClaimCycle(): Promise<FastClaimCycleResult> {
-    if (this.isRunning) {
-      loggers.claim.warn('Fast claim cycle already in progress, skipping Privy tokens')
-      return this.emptyResult()
-    }
-
-    this.isRunning = true
-    this.cycleCount++
-    const cycleStartedAt = new Date().toISOString()
-
-    loggers.claim.info({ cycleCount: this.cycleCount, threshold: MIN_CLAIM_THRESHOLD_SOL }, 'Starting Privy fast claim cycle')
-
-    const results: FastClaimResult[] = []
-    let tokensChecked = 0
-    let tokensClaimable = 0
-
-    try {
-      // Get all Privy tokens with auto-claim enabled
-      const tokens = await getPrivyTokensForAutoClaim()
-      tokensChecked = tokens.length
-
-      if (tokens.length === 0) {
-        loggers.claim.debug('No Privy tokens with auto-claim enabled')
-        return this.emptyResult()
-      }
-
-      loggers.claim.info({ tokenCount: tokens.length }, 'Checking Privy tokens for claimable fees')
-
-      // Group tokens by dev wallet
-      const walletToTokens = this.groupPrivyTokensByDevWallet(tokens)
-
-      // Batch check claimable positions
-      const claimableTokens = await this.batchCheckPrivyClaimablePositions(walletToTokens)
-      tokensClaimable = claimableTokens.length
-
-      if (claimableTokens.length === 0) {
-        loggers.claim.debug({ threshold: MIN_CLAIM_THRESHOLD_SOL }, 'No Privy tokens with claimable amount above threshold')
-        this.lastCycleAt = new Date()
-        this.isRunning = false
-        return {
-          ...this.emptyResult(),
-          cycleStartedAt,
-          cycleCompletedAt: new Date().toISOString(),
-          tokensChecked,
-        }
-      }
-
-      loggers.claim.info({
-        claimableCount: claimableTokens.length,
-        tokens: claimableTokens.map(ct => ({ symbol: ct.token.token_symbol, amount: ct.position.claimableAmount }))
-      }, 'Found Privy tokens ready to claim')
-
-      // Execute claims in batches
-      const claimResults = await this.executePrivyClaimsInBatches(claimableTokens)
-      results.push(...claimResults)
-
-    } catch (error: any) {
-      loggers.claim.error({ error: String(error) }, 'Privy fast claim cycle error')
-    } finally {
-      this.isRunning = false
-      this.lastCycleAt = new Date()
-    }
-
-    const cycleCompletedAt = new Date().toISOString()
-    const successful = results.filter(r => r.success)
-    const failed = results.filter(r => !r.success)
-    const totalClaimed = successful.reduce((sum, r) => sum + r.amountClaimedSol, 0)
-    const totalPlatformFee = successful.reduce((sum, r) => sum + r.platformFeeSol, 0)
-    const totalUserReceived = successful.reduce((sum, r) => sum + r.userReceivedSol, 0)
-
-    loggers.claim.info({
-      successfulCount: successful.length,
-      failedCount: failed.length,
-      totalClaimedSol: totalClaimed,
-    }, 'Privy fast claim cycle completed')
-
-    return {
-      cycleStartedAt,
-      cycleCompletedAt,
-      tokensChecked,
-      tokensClaimable,
-      claimsAttempted: results.length,
-      claimsSuccessful: successful.length,
-      claimsFailed: failed.length,
-      totalClaimedSol: totalClaimed,
-      totalPlatformFeeSol: totalPlatformFee,
-      totalUserReceivedSol: totalUserReceived,
-      results,
-    }
-  }
-
-  /**
-   * Group Privy tokens by dev wallet address
-   */
-  private groupPrivyTokensByDevWallet(tokens: PrivyTokenWithConfig[]): Record<string, PrivyTokenWithConfig[]> {
-    const walletToTokens: Record<string, PrivyTokenWithConfig[]> = {}
-
-    for (const token of tokens) {
-      const wallet = token.dev_wallet?.wallet_address
-      if (!wallet) continue
-
-      if (!walletToTokens[wallet]) {
-        walletToTokens[wallet] = []
-      }
-      walletToTokens[wallet].push(token)
-    }
-
-    return walletToTokens
-  }
-
-  /**
-   * Batch check claimable positions for Privy wallets
-   */
-  private async batchCheckPrivyClaimablePositions(
-    walletToTokens: Record<string, PrivyTokenWithConfig[]>
-  ): Promise<{ token: PrivyTokenWithConfig; position: ClaimablePosition }[]> {
-    const claimableTokens: { token: PrivyTokenWithConfig; position: ClaimablePosition }[] = []
-    const wallets = Object.keys(walletToTokens)
-
-    const BATCH_SIZE = 10
-    for (let i = 0; i < wallets.length; i += BATCH_SIZE) {
-      const batch = wallets.slice(i, i + BATCH_SIZE)
-
-      const batchResults = await Promise.allSettled(
-        batch.map(async (wallet) => {
-          const positions = await bagsFmService.getClaimablePositions(wallet)
-          return { wallet, positions }
-        })
-      )
-
-      for (const result of batchResults) {
-        if (result.status === 'fulfilled' && result.value.positions) {
-          const { wallet, positions } = result.value
-          const tokens = walletToTokens[wallet]
-
-          for (const token of tokens) {
-            const position = positions.find(p => p.tokenMint === token.token_mint_address)
-            if (position && position.claimableAmount >= MIN_CLAIM_THRESHOLD_SOL) {
-              claimableTokens.push({ token, position })
-            }
-          }
-        }
-      }
-
-      if (i + BATCH_SIZE < wallets.length) {
-        await this.sleep(200)
-      }
-    }
-
-    return claimableTokens
-  }
-
-  /**
-   * Execute Privy claims in batches
-   */
-  private async executePrivyClaimsInBatches(
-    claimableTokens: { token: PrivyTokenWithConfig; position: ClaimablePosition }[]
-  ): Promise<FastClaimResult[]> {
-    const results: FastClaimResult[] = []
-
-    for (let i = 0; i < claimableTokens.length; i += MAX_CONCURRENT_CLAIMS) {
-      const batch = claimableTokens.slice(i, i + MAX_CONCURRENT_CLAIMS)
-
-      const batchResults = await Promise.allSettled(
-        batch.map(ct => this.executePrivySingleClaim(ct))
-      )
-
-      for (let j = 0; j < batchResults.length; j++) {
-        const result = batchResults[j]
-        const ct = batch[j]
-
-        if (result.status === 'fulfilled') {
-          results.push(result.value)
-        } else {
-          results.push({
-            userTokenId: ct.token.id,
-            tokenSymbol: ct.token.token_symbol,
-            tokenMint: ct.token.token_mint_address,
-            amountClaimedSol: 0,
-            platformFeeSol: 0,
-            userReceivedSol: 0,
-            success: false,
-            error: result.reason?.message || 'Unknown error',
-            claimedAt: new Date().toISOString(),
-          })
-        }
-      }
-
-      if (i + MAX_CONCURRENT_CLAIMS < claimableTokens.length) {
-        await this.sleep(BATCH_DELAY_MS)
-      }
-    }
-
-    return results
-  }
-
-  /**
-   * Execute a single Privy claim
-   * Uses RAW transaction objects (no serialization) - same pattern as token-launcher.ts
-   * Fresh transactions for each retry to avoid stale blockhash
-   */
-  private async executePrivySingleClaim(
-    claimable: { token: PrivyTokenWithConfig; position: ClaimablePosition }
-  ): Promise<FastClaimResult> {
-    const { token, position } = claimable
-    const claimedAt = new Date().toISOString()
-    const maxRetries = 3
-    const retryDelays = [2000, 4000, 8000] // Exponential backoff
-
-    try {
-      loggers.claim.info({
-        tokenSymbol: token.token_symbol,
-        tokenMint: token.token_mint_address,
-        claimableAmount: position.claimableAmount,
-        isGraduated: token.is_graduated,
-      }, 'Claiming Privy fees')
-
-      const devWalletAddress = token.dev_wallet?.wallet_address
-      if (!devWalletAddress) {
-        throw new Error('Dev wallet not found')
-      }
-
-      const connection = getConnection()
-      let lastSignature: string | undefined
-      let lastError: Error | null = null
-
-      // Retry loop - generate FRESH RAW transactions each attempt
-      // Uses the same pattern as token-launcher.ts (which works)
-      for (let attempt = 0; attempt < maxRetries; attempt++) {
-        try {
-          loggers.claim.debug({
-            tokenSymbol: token.token_symbol,
-            devWallet: devWalletAddress,
-            tokenMint: token.token_mint_address,
-            attempt: attempt + 1,
-          }, 'Generating fresh RAW claim transactions for Privy token')
-
-          // Generate RAW claim transactions (no serialization - like token-launcher.ts)
-          const claimTxs = await bagsFmService.generateClaimTransactionsRaw(
-            devWalletAddress,
-            [token.token_mint_address]
-          )
-
-          if (!claimTxs || claimTxs.length === 0) {
-            throw new Error('Failed to generate claim transactions')
-          }
-
-          loggers.claim.info({
-            tokenSymbol: token.token_symbol,
-            txCount: claimTxs.length,
-            attempt: attempt + 1,
-          }, 'Fresh RAW claim transactions generated, executing with Privy signing')
-
-          // Execute claim transactions using EXACT token-launcher.ts pattern:
-          // - NO transaction modifications (especially no blockhash changes)
-          // - Sign with Privy → Serialize ourselves → Broadcast ourselves → Poll
-          // This is copy-pasted logic from the working token launches
-          for (let txIndex = 0; txIndex < claimTxs.length; txIndex++) {
-            const tx = claimTxs[txIndex]
-            const result = await signAndSendWithPrivyExact(
-              connection,
-              devWalletAddress,
-              tx,
-              `claim tx ${txIndex + 1}/${claimTxs.length} for ${token.token_symbol}`
-            )
-            if (result.success && result.signature) {
-              lastSignature = result.signature
-              // Continue to next tx if there are more (some claims have multiple txs)
-            } else if (!result.success) {
-              throw new Error(result.error || 'Claim transaction failed')
-            }
-          }
-
-          if (lastSignature) {
-            break // Success - exit retry loop
-          }
-
-          throw new Error('Claim transaction signing/broadcast failed')
-        } catch (error: any) {
-          lastError = error
-          const errorStr = String(error)
-          const isBlockhashError = errorStr.includes('Blockhash') ||
-            errorStr.includes('blockhash') ||
-            errorStr.includes('block height') ||
-            errorStr.includes('not confirmed')
-
-          loggers.claim.warn({
-            tokenSymbol: token.token_symbol,
-            attempt: attempt + 1,
-            maxRetries,
-            error: errorStr,
-            isBlockhashError,
-          }, 'Privy claim attempt failed')
-
-          if (attempt < maxRetries - 1) {
-            const delay = retryDelays[attempt]
-            loggers.claim.debug({
-              tokenSymbol: token.token_symbol,
-              delay,
-              nextAttempt: attempt + 2,
-            }, 'Retrying claim with fresh transaction')
-            await new Promise(resolve => setTimeout(resolve, delay))
-          }
-        }
-      }
-
-      if (!lastSignature) {
-        const errorMsg = lastError?.message || 'Claim transaction failed after all retries'
-        loggers.claim.error({
-          tokenSymbol: token.token_symbol,
-          tokenMint: token.token_mint_address,
-          devWallet: devWalletAddress,
-          isGraduated: token.is_graduated,
-          claimableAmount: position.claimableAmount,
-          error: errorMsg,
-        }, 'Failed to complete Privy claim after all attempts')
-        throw new Error(errorMsg)
-      }
-
-      // Transfer to ops wallet with platform fee split
-      let platformFeeSol = 0
-      let userReceivedSol = position.claimableAmount
-      const opsWalletAddress = token.ops_wallet?.wallet_address
-
-      if (opsWalletAddress) {
-        const transferResult = await this.transferPrivyWithPlatformFee(
-          connection,
-          devWalletAddress,
-          opsWalletAddress,
-          position.claimableAmount,
-          token.token_symbol
-        )
-        platformFeeSol = transferResult.platformFeeSol
-        userReceivedSol = transferResult.userAmountSol
-      }
-
-      // Record the claim
-      await this.recordPrivyClaim(token.id, position.claimableAmount, lastSignature, platformFeeSol, userReceivedSol)
-
-      loggers.claim.info({ tokenSymbol: token.token_symbol, claimedAmount: position.claimableAmount, signature: lastSignature }, 'Privy claim successful')
-
-      return {
-        userTokenId: token.id,
-        tokenSymbol: token.token_symbol,
-        tokenMint: token.token_mint_address,
-        amountClaimedSol: position.claimableAmount,
-        platformFeeSol,
-        userReceivedSol,
-        success: true,
-        signature: lastSignature,
-        claimedAt,
-      }
-    } catch (error: any) {
-      loggers.claim.error({ tokenSymbol: token.token_symbol, error: String(error) }, 'Privy claim failed')
-      return {
-        userTokenId: token.id,
-        tokenSymbol: token.token_symbol,
-        tokenMint: token.token_mint_address,
-        amountClaimedSol: 0,
-        platformFeeSol: 0,
-        userReceivedSol: 0,
-        success: false,
-        error: error.message,
-        claimedAt,
-      }
-    }
-  }
-
-  /**
-   * Transfer SOL with platform fee split using Privy signing
-   */
-  private async transferPrivyWithPlatformFee(
-    connection: Connection,
-    devWalletAddress: string,
-    userOpsWalletAddress: string,
-    amountSol: number,
-    tokenSymbol: string
-  ): Promise<{ success: boolean; platformFeeSol: number; userAmountSol: number }> {
-    try {
-      const reserveSol = 0.1
-      const transferAmount = Math.max(0, amountSol - reserveSol)
-
-      if (transferAmount <= 0) {
-        return { success: true, platformFeeSol: 0, userAmountSol: 0 }
-      }
-
-      // Calculate platform fee (10%)
-      const platformFeePercent = env.platformFeePercentage || 10
-      const platformFeeSol = transferAmount * (platformFeePercent / 100)
-      const userAmountSol = transferAmount - platformFeeSol
-
       const devPubkey = new PublicKey(devWalletAddress)
       const platformOpsWallet = getOpsWallet()
 
-      // Transfer 1: Platform fee to WHEEL ops wallet (10%)
+      // Transfer 1: Platform fee to WHEEL ops wallet (10%) - skip for WHEEL token
       if (platformOpsWallet && platformFeeSol >= 0.001) {
         const platformTx = new Transaction().add(
           SystemProgram.transfer({
@@ -1012,13 +504,13 @@ class FastClaimService {
           connection,
           platformTx,
           devWalletAddress,
-          { commitment: 'confirmed', logContext: { service: 'privy-fast-claim', type: 'platform-fee', tokenSymbol } }
+          { commitment: 'confirmed', logContext: { service: 'fast-claim', type: 'platform-fee', tokenSymbol } }
         )
 
         if (platformResult.success) {
-          loggers.claim.info({ tokenSymbol, platformFeeSol, signature: platformResult.signature }, 'Privy platform fee transferred')
+          loggers.claim.info({ tokenSymbol, platformFeeSol, signature: platformResult.signature }, 'Platform fee transferred')
         } else {
-          loggers.claim.error({ tokenSymbol, error: platformResult.error }, 'Privy platform fee transfer failed')
+          loggers.claim.error({ tokenSymbol, error: platformResult.error }, 'Platform fee transfer failed')
         }
       }
 
@@ -1037,27 +529,27 @@ class FastClaimService {
           connection,
           userTx,
           devWalletAddress,
-          { commitment: 'confirmed', logContext: { service: 'privy-fast-claim', type: 'user-portion', tokenSymbol } }
+          { commitment: 'confirmed', logContext: { service: 'fast-claim', type: 'user-portion', tokenSymbol } }
         )
 
         if (userResult.success) {
-          loggers.claim.info({ tokenSymbol, userAmountSol, signature: userResult.signature }, 'Privy user portion transferred')
+          loggers.claim.info({ tokenSymbol, userAmountSol, signature: userResult.signature }, 'User portion transferred')
         } else {
-          loggers.claim.error({ tokenSymbol, error: userResult.error }, 'Privy user transfer failed')
+          loggers.claim.error({ tokenSymbol, error: userResult.error }, 'User transfer failed')
         }
       }
 
       return { success: true, platformFeeSol, userAmountSol }
     } catch (error: any) {
-      loggers.claim.error({ tokenSymbol, error: String(error) }, 'Privy transfer with platform fee failed')
+      loggers.claim.error({ tokenSymbol, error: String(error) }, 'Transfer with platform fee failed')
       return { success: false, platformFeeSol: 0, userAmountSol: 0 }
     }
   }
 
   /**
-   * Record Privy claim in database using Prisma
+   * Record claim in database using Prisma
    */
-  private async recordPrivyClaim(
+  private async recordClaim(
     privyTokenId: string,
     amountSol: number,
     signature: string,
@@ -1073,7 +565,7 @@ class FastClaimService {
         const solPrice = await getSolPrice()
         amountUsd = amountSol * solPrice
       } catch {
-        loggers.claim.warn('Failed to fetch SOL price for Privy claim USD calculation')
+        loggers.claim.warn('Failed to fetch SOL price for claim USD calculation')
       }
 
       // Insert into privy_claim_history using Prisma
@@ -1108,8 +600,54 @@ class FastClaimService {
         },
       })
     } catch (error) {
-      loggers.claim.error({ error: String(error) }, 'Failed to record Privy claim')
+      loggers.claim.error({ error: String(error) }, 'Failed to record claim')
     }
+  }
+
+  private emptyResult(): FastClaimCycleResult {
+    return {
+      cycleStartedAt: new Date().toISOString(),
+      cycleCompletedAt: new Date().toISOString(),
+      tokensChecked: 0,
+      tokensClaimable: 0,
+      claimsAttempted: 0,
+      claimsSuccessful: 0,
+      claimsFailed: 0,
+      totalClaimedSol: 0,
+      totalPlatformFeeSol: 0,
+      totalUserReceivedSol: 0,
+      results: [],
+    }
+  }
+
+  private sleep(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms))
+  }
+
+  // ===============================================================================
+  // STATUS METHODS
+  // ===============================================================================
+
+  getStatus(): {
+    isRunning: boolean
+    lastCycleAt: Date | null
+    cycleCount: number
+    threshold: number
+  } {
+    return {
+      isRunning: this.isRunning,
+      lastCycleAt: this.lastCycleAt,
+      cycleCount: this.cycleCount,
+      threshold: MIN_CLAIM_THRESHOLD_SOL,
+    }
+  }
+
+  isJobRunning(): boolean {
+    return this.isRunning
+  }
+
+  getLastCycleAt(): Date | null {
+    return this.lastCycleAt
   }
 }
 

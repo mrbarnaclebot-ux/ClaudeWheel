@@ -55,10 +55,18 @@ export function stopBalanceUpdateJob(): void {
 
 /**
  * Run a single balance update cycle
+ * Updates balances for both legacy (Supabase) and Privy tokens, plus platform wallets
  */
 async function runBalanceUpdateCycle(): Promise<void> {
   try {
+    // Update legacy Supabase tokens
     await balanceMonitorService.updateAllBalances()
+
+    // Update Privy tokens
+    await balanceMonitorService.updateAllPrivyBalances()
+
+    // Update platform wallet balances
+    await balanceMonitorService.updatePlatformWallets()
   } catch (error) {
     loggers.balance.error({ error: String(error) }, '❌ Balance update job error')
   }

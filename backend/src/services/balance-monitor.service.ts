@@ -1,15 +1,18 @@
 // ═══════════════════════════════════════════════════════════════════════════
 // BALANCE MONITOR SERVICE
-// Tracks and caches wallet balances for all user tokens in Supabase
+// Tracks and caches wallet balances for all user tokens
+// Supports both Supabase (legacy) and Prisma (Privy) systems
 // Fetches balances from Solana blockchain and claimable fees from Bags.fm
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { PublicKey } from '@solana/web3.js'
 import { supabase } from '../config/database'
+import { prisma, isPrismaConfigured, type PrivyUserToken, type PrivyWallet, type PrivyTokenConfig } from '../config/prisma'
 import { getConnection, getBalance, getTokenBalance, getSolPrice } from '../config/solana'
 import { bagsFmService } from './bags-fm'
 import { getTokensForAutoClaim } from './user-token.service'
 import { loggers } from '../utils/logger'
+import { env } from '../config/env'
 
 // ═══════════════════════════════════════════════════════════════════════════
 // TYPES
@@ -56,6 +59,13 @@ export interface BatchBalanceUpdateResult {
   durationMs: number
 }
 
+// Type for Privy token with wallets included
+type PrivyTokenWithWallets = PrivyUserToken & {
+  devWallet: PrivyWallet
+  opsWallet: PrivyWallet
+  config: PrivyTokenConfig | null
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // CONFIGURATION
 // ═══════════════════════════════════════════════════════════════════════════
@@ -79,7 +89,8 @@ class BalanceMonitorService {
   private updateCount = 0
 
   /**
-   * Update balances for all active tokens
+   * Update balances for all active tokens (Supabase/legacy system)
+   * @deprecated Use updateAllPrivyBalances() for Privy tokens
    */
   async updateAllBalances(): Promise<BatchBalanceUpdateResult> {
     if (this.isRunning) {
@@ -186,7 +197,8 @@ class BalanceMonitorService {
   }
 
   /**
-   * Update balance for a single token
+   * Update balance for a single token (Supabase/legacy system)
+   * @deprecated Use updateSinglePrivyTokenBalance() for Privy tokens
    */
   async updateSingleTokenBalance(userTokenId: string): Promise<BalanceUpdateResult | null> {
     if (!supabase) return null
@@ -563,6 +575,285 @@ class BalanceMonitorService {
 
   private sleep(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms))
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // PRIVY BALANCE METHODS
+  // New methods for Privy-authenticated tokens (delegated signing, no stored keys)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * Update balances for all active Privy tokens
+   * Fetches SOL and token balances from Solana, claimable fees from Bags.fm
+   */
+  async updateAllPrivyBalances(): Promise<BatchBalanceUpdateResult> {
+    if (!isPrismaConfigured()) {
+      loggers.balance.debug('Prisma not configured, skipping Privy balance update')
+      return this.emptyResult()
+    }
+
+    const startedAt = new Date()
+    const results: BalanceUpdateResult[] = []
+
+    loggers.balance.info('Starting Privy balance update cycle')
+
+    try {
+      // Get all active Privy tokens
+      const activeTokens = await prisma.privyUserToken.findMany({
+        where: { isActive: true },
+        include: {
+          devWallet: true,
+          opsWallet: true,
+          config: true,
+        },
+      })
+
+      if (activeTokens.length === 0) {
+        loggers.balance.info('No active Privy tokens to update')
+        return this.emptyResult()
+      }
+
+      const tokensToProcess = activeTokens.slice(0, MAX_TOKENS_PER_BATCH)
+      loggers.balance.info({ tokensToProcess: tokensToProcess.length, totalTokens: activeTokens.length }, 'Processing Privy tokens')
+
+      // Get current SOL price once for all updates
+      const solPrice = await getSolPrice()
+
+      // Group tokens by dev wallet to batch claimable position checks
+      const walletAddresses = [...new Set(tokensToProcess.map(t => t.devWallet.walletAddress))]
+      const claimableByWallet = await this.batchGetClaimablePositions(walletAddresses)
+
+      // Update each token's balances
+      for (const token of tokensToProcess) {
+        try {
+          const result = await this.updatePrivyTokenBalances(token as PrivyTokenWithWallets, solPrice, claimableByWallet)
+          results.push(result)
+
+          if (result.success) {
+            loggers.balance.debug({ tokenSymbol: token.tokenSymbol, devSol: result.devSol, opsSol: result.opsSol, claimableFees: result.claimableFees }, 'Privy token balance updated')
+          } else {
+            loggers.balance.warn({ tokenSymbol: token.tokenSymbol, error: result.error }, 'Privy token balance update failed')
+          }
+
+          // Small delay to avoid RPC rate limits
+          await this.sleep(FETCH_DELAY_MS)
+        } catch (error: any) {
+          results.push({
+            userTokenId: token.id,
+            tokenSymbol: token.tokenSymbol,
+            success: false,
+            devSol: 0,
+            devToken: 0,
+            opsSol: 0,
+            opsToken: 0,
+            claimableFees: 0,
+            error: error.message,
+          })
+        }
+      }
+    } catch (error: any) {
+      loggers.balance.error({ error: String(error) }, 'Privy balance update error')
+    }
+
+    const completedAt = new Date()
+    const successful = results.filter(r => r.success)
+    const totalDevSol = successful.reduce((sum, r) => sum + r.devSol, 0)
+    const totalOpsSol = successful.reduce((sum, r) => sum + r.opsSol, 0)
+    const totalClaimable = successful.reduce((sum, r) => sum + r.claimableFees, 0)
+
+    loggers.balance.info({
+      updatedCount: successful.length,
+      totalCount: results.length,
+      totalDevSol,
+      totalOpsSol,
+      totalClaimableFees: totalClaimable,
+    }, 'Privy balance update cycle completed')
+
+    return {
+      totalTokens: results.length,
+      successCount: successful.length,
+      failedCount: results.length - successful.length,
+      totalDevSol,
+      totalOpsSol,
+      totalClaimableFees: totalClaimable,
+      results,
+      startedAt: startedAt.toISOString(),
+      completedAt: completedAt.toISOString(),
+      durationMs: completedAt.getTime() - startedAt.getTime(),
+    }
+  }
+
+  /**
+   * Update balances for a single Privy token
+   */
+  private async updatePrivyTokenBalances(
+    token: PrivyTokenWithWallets,
+    solPrice: number,
+    claimableByWallet: Record<string, any[]>
+  ): Promise<BalanceUpdateResult> {
+    const baseResult = {
+      userTokenId: token.id,
+      tokenSymbol: token.tokenSymbol,
+    }
+
+    try {
+      const tokenMint = token.tokenMintAddress ? new PublicKey(token.tokenMintAddress) : null
+      const devWallet = new PublicKey(token.devWallet.walletAddress)
+      const opsWallet = new PublicKey(token.opsWallet.walletAddress)
+
+      // Fetch balances from Solana
+      const [devSol, devToken, opsSol, opsToken] = await Promise.all([
+        getBalance(devWallet),
+        tokenMint ? getTokenBalance(devWallet, tokenMint) : Promise.resolve(0),
+        getBalance(opsWallet),
+        tokenMint ? getTokenBalance(opsWallet, tokenMint) : Promise.resolve(0),
+      ])
+
+      // Get claimable fees from pre-fetched data
+      const walletPositions = claimableByWallet[token.devWallet.walletAddress] || []
+      const tokenPosition = walletPositions.find((p: any) => p.tokenMint === token.tokenMintAddress)
+      const claimableFees = tokenPosition?.claimableAmount || 0
+
+      // Note: Privy tokens don't have a separate balance table (yet)
+      // The balance data is returned in the result for use by the job
+      // If needed in the future, we could add a PrivyWalletBalance table
+
+      return {
+        ...baseResult,
+        success: true,
+        devSol,
+        devToken,
+        opsSol,
+        opsToken,
+        claimableFees,
+      }
+    } catch (error: any) {
+      return {
+        ...baseResult,
+        success: false,
+        devSol: 0,
+        devToken: 0,
+        opsSol: 0,
+        opsToken: 0,
+        claimableFees: 0,
+        error: error.message,
+      }
+    }
+  }
+
+  /**
+   * Update balance for a single Privy token by ID
+   */
+  async updateSinglePrivyTokenBalance(tokenId: string): Promise<BalanceUpdateResult | null> {
+    if (!isPrismaConfigured()) return null
+
+    const token = await prisma.privyUserToken.findUnique({
+      where: { id: tokenId },
+      include: {
+        devWallet: true,
+        opsWallet: true,
+        config: true,
+      },
+    })
+
+    if (!token || !token.isActive) {
+      return null
+    }
+
+    const solPrice = await getSolPrice()
+
+    // Get claimable positions for this wallet
+    const positions = await bagsFmService.getClaimablePositions(token.devWallet.walletAddress)
+    const claimableByWallet: Record<string, any[]> = {
+      [token.devWallet.walletAddress]: positions || [],
+    }
+
+    return this.updatePrivyTokenBalances(token as PrivyTokenWithWallets, solPrice, claimableByWallet)
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // PLATFORM WALLET METHODS
+  // Updates PlatformWalletBalance records for platform wallets
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * Update platform wallet balances in PlatformWalletBalance table
+   * Tracks dev, ops, wheel_dev, wheel_ops wallets
+   */
+  async updatePlatformWallets(): Promise<{
+    updated: number
+    wallets: Array<{ type: string; address: string; solBalance: number; tokenBalance: number }>
+  }> {
+    if (!isPrismaConfigured()) {
+      loggers.balance.debug('Prisma not configured, skipping platform wallet update')
+      return { updated: 0, wallets: [] }
+    }
+
+    const results: Array<{ type: string; address: string; solBalance: number; tokenBalance: number }> = []
+    const solPrice = await getSolPrice()
+
+    try {
+      // Define platform wallets from environment
+      const platformWallets: Array<{ type: string; address: string | undefined }> = [
+        { type: 'dev', address: env.devWalletAddress },
+        { type: 'ops', address: env.platformFeeWallet },
+      ]
+
+      // Filter out undefined addresses
+      const validWallets = platformWallets.filter(w => w.address)
+
+      for (const wallet of validWallets) {
+        try {
+          const pubkey = new PublicKey(wallet.address!)
+          const tokenMint = env.tokenMintAddress ? new PublicKey(env.tokenMintAddress) : null
+
+          const [solBalance, tokenBalance] = await Promise.all([
+            getBalance(pubkey),
+            tokenMint ? getTokenBalance(pubkey, tokenMint) : Promise.resolve(0),
+          ])
+
+          const usdValue = solBalance * solPrice
+
+          // Upsert the platform wallet balance
+          await prisma.platformWalletBalance.upsert({
+            where: { walletType: wallet.type },
+            create: {
+              walletType: wallet.type,
+              address: wallet.address!,
+              solBalance,
+              tokenBalance,
+              usdValue,
+            },
+            update: {
+              address: wallet.address!,
+              solBalance,
+              tokenBalance,
+              usdValue,
+            },
+          })
+
+          results.push({
+            type: wallet.type,
+            address: wallet.address!,
+            solBalance,
+            tokenBalance,
+          })
+
+          loggers.balance.debug({ walletType: wallet.type, solBalance, tokenBalance }, 'Platform wallet balance updated')
+        } catch (error: any) {
+          loggers.balance.warn({ walletType: wallet.type, error: error.message }, 'Failed to update platform wallet balance')
+        }
+
+        // Small delay between wallet fetches
+        await this.sleep(FETCH_DELAY_MS)
+      }
+
+      loggers.balance.info({ updatedCount: results.length }, 'Platform wallet balances updated')
+    } catch (error: any) {
+      loggers.balance.error({ error: String(error) }, 'Platform wallet update error')
+    }
+
+    return { updated: results.length, wallets: results }
   }
 
   // ═══════════════════════════════════════════════════════════════════════════

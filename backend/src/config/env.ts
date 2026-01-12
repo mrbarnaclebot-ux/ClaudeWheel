@@ -19,22 +19,22 @@ const envSchema = z.object({
   SOLANA_WS_URL: z.string().default('wss://api.mainnet-beta.solana.com'),
   HELIUS_API_KEY: z.string().optional(),
 
-  // Wallets
-  DEV_WALLET_PRIVATE_KEY: z.string().optional(),
+  // Wallets (DEPRECATED: Legacy system only, will be removed in future version)
+  DEV_WALLET_PRIVATE_KEY: z.string().optional(), // DEPRECATED: Use Privy delegated signing
   DEV_WALLET_ADDRESS: z.string().optional(), // Public key for admin authorization
-  OPS_WALLET_PRIVATE_KEY: z.string().optional(),
+  OPS_WALLET_PRIVATE_KEY: z.string().optional(), // DEPRECATED: Use Privy delegated signing
 
   // Token
   TOKEN_MINT_ADDRESS: z.string().default('8JLGQ7RqhsvhsDhvjMuJUeeuaQ53GTJqSHNaBWf4BAGS'),
   TOKEN_SYMBOL: z.string().default('TOKEN'),
   TOKEN_DECIMALS: z.string().default('6'),
 
-  // Supabase
-  SUPABASE_URL: z.string().url().optional(),
-  SUPABASE_SERVICE_KEY: z.string().optional(),
+  // Supabase (DEPRECATED: Legacy system only, will be removed in future version)
+  SUPABASE_URL: z.string().url().optional(), // DEPRECATED: Migrate to Prisma/Privy system
+  SUPABASE_SERVICE_KEY: z.string().optional(), // DEPRECATED: Migrate to Prisma/Privy system
 
-  // Encryption
-  ENCRYPTION_MASTER_KEY: z.string().optional(),
+  // Encryption (DEPRECATED: Legacy system only, will be removed in future version)
+  ENCRYPTION_MASTER_KEY: z.string().optional(), // DEPRECATED: Privy system uses delegated signing
 
   // Automation
   FEE_COLLECTION_INTERVAL_MS: z.string().default('60000'),
@@ -81,6 +81,20 @@ const envSchema = z.object({
   PRIVY_APP_SECRET: z.string().optional(),
   PRIVY_AUTHORIZATION_KEY: z.string().optional(), // Authorization key for signing transactions
   TMA_URL: z.string().url().optional(), // Telegram Mini App URL
+  INITIAL_ADMIN_PRIVY_USER_ID: z.string().optional(), // Initial super admin Privy user ID
+  PLATFORM_PRIVY_USER_ID: z.string().default('platform-wheel-user'), // Platform user for WHEEL token
+
+  // WebSocket
+  WS_HEARTBEAT_INTERVAL_MS: z.string().default('30000'), // WebSocket heartbeat interval in ms
+
+  // Pinata (IPFS Image Storage)
+  PINATA_JWT: z.string().optional(),
+  PINATA_GATEWAY_URL: z.string().url().optional(),
+
+  // Discord Error Reporting
+  DISCORD_ERROR_WEBHOOK_URL: z.string().url().optional(),
+  DISCORD_ERROR_RATE_LIMIT_SECONDS: z.string().default('60'), // Min seconds between same error
+  DISCORD_ERROR_ENABLED: z.string().default('true'),
 })
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -169,6 +183,15 @@ export const env = {
   privyAppSecret: parsed.data.PRIVY_APP_SECRET,
   privyAuthorizationKey: parsed.data.PRIVY_AUTHORIZATION_KEY,
   tmaUrl: parsed.data.TMA_URL,
+
+  // Pinata (IPFS Image Storage)
+  pinataJwt: parsed.data.PINATA_JWT,
+  pinataGatewayUrl: parsed.data.PINATA_GATEWAY_URL,
+
+  // Discord Error Reporting
+  discordErrorWebhookUrl: parsed.data.DISCORD_ERROR_WEBHOOK_URL,
+  discordErrorRateLimitSeconds: parseInt(parsed.data.DISCORD_ERROR_RATE_LIMIT_SECONDS, 10),
+  discordErrorEnabled: parsed.data.DISCORD_ERROR_ENABLED !== 'false',
 }
 
 export type Env = typeof env

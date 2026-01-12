@@ -2,7 +2,8 @@
 
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { useAdminAuth, useAdminStore } from '../_stores/adminStore'
+import { usePrivy } from '@privy-io/react-auth'
+import { useAdminStore } from '../_stores/adminStore'
 import { adminQueryKeys } from '../_lib/queryClient'
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -81,7 +82,7 @@ export function useWebSocket(options: UseWebSocketOptions = {}): UseWebSocketRes
     maxReconnectAttempts = 10,
   } = options
 
-  const { publicKey, signature, message, isAuthenticated } = useAdminAuth()
+  const { authenticated, getAccessToken } = usePrivy()
   const setWsConnected = useAdminStore((s) => s.setWsConnected)
   const queryClient = useQueryClient()
 
@@ -169,8 +170,8 @@ export function useWebSocket(options: UseWebSocketOptions = {}): UseWebSocketRes
   }, [queryClient, setWsConnected])
 
   // Connect to WebSocket
-  const connect = useCallback(() => {
-    if (!isAuthenticated || !publicKey || !signature || !message) {
+  const connect = useCallback(async () => {
+    if (!authenticated) {
       return
     }
 
@@ -182,17 +183,21 @@ export function useWebSocket(options: UseWebSocketOptions = {}): UseWebSocketRes
     setError(null)
 
     try {
-      const ws = new WebSocket(WS_URL)
+      // Get Privy access token for authentication
+      const token = await getAccessToken()
+      if (!token) {
+        setError('Failed to get authentication token')
+        setConnecting(false)
+        return
+      }
+
+      // Connect with token in query parameter
+      const ws = new WebSocket(`${WS_URL}?token=${token}`)
       wsRef.current = ws
 
       ws.onopen = () => {
-        // Authenticate immediately
-        ws.send(JSON.stringify({
-          type: 'auth',
-          publicKey,
-          signature,
-          message,
-        }))
+        // Authentication is handled via query param token
+        // Server will validate and send auth_success/auth_error
       }
 
       ws.onmessage = handleMessage
@@ -218,7 +223,7 @@ export function useWebSocket(options: UseWebSocketOptions = {}): UseWebSocketRes
       setError('Failed to create WebSocket connection')
       setConnecting(false)
     }
-  }, [isAuthenticated, publicKey, signature, message, handleMessage, autoReconnect, reconnectInterval, maxReconnectAttempts, setWsConnected])
+  }, [authenticated, getAccessToken, handleMessage, autoReconnect, reconnectInterval, maxReconnectAttempts, setWsConnected])
 
   // Subscribe to channels
   const subscribe = useCallback((newChannels: WsChannel[]) => {
@@ -252,7 +257,7 @@ export function useWebSocket(options: UseWebSocketOptions = {}): UseWebSocketRes
 
   // Connect when authenticated
   useEffect(() => {
-    if (isAuthenticated) {
+    if (authenticated) {
       connect()
     }
 
@@ -264,7 +269,7 @@ export function useWebSocket(options: UseWebSocketOptions = {}): UseWebSocketRes
         wsRef.current.close()
       }
     }
-  }, [isAuthenticated, connect])
+  }, [authenticated, connect])
 
   // Subscribe to initial channels when connected
   useEffect(() => {

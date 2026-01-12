@@ -1,30 +1,36 @@
 'use client'
 
 import { useQuery } from '@tanstack/react-query'
-import { motion } from 'framer-motion'
 import { useAdminAuth } from '../../_stores/adminStore'
 import { adminQueryKeys } from '../../_lib/queryClient'
 import { fetchPlatformStats, fetchTelegramStats } from '../../_lib/adminApi'
 import { DataCard, DataCardGrid } from '../shared/DataCard'
 import { StatsGridSkeleton } from '../shared/LoadingSkeleton'
-import type { PlatformStats, TelegramLaunchStats } from '../../_types/admin.types'
 
 export function OverviewStats() {
-  const { publicKey, signature, message } = useAdminAuth()
+  const { isAuthenticated, getToken } = useAdminAuth()
 
   // Fetch platform stats
   const { data: platformStats, isLoading: isPlatformLoading } = useQuery({
     queryKey: adminQueryKeys.platformStats(),
-    queryFn: () => fetchPlatformStats(publicKey!, signature!, message!),
-    enabled: Boolean(publicKey && signature && message),
+    queryFn: async () => {
+      const token = await getToken()
+      if (!token) return null
+      return fetchPlatformStats(token)
+    },
+    enabled: isAuthenticated,
     staleTime: 10000, // 10 seconds
   })
 
   // Fetch telegram stats
   const { data: telegramStats, isLoading: isTelegramLoading } = useQuery({
     queryKey: adminQueryKeys.telegramStats(),
-    queryFn: () => fetchTelegramStats(publicKey!, signature!, message!),
-    enabled: Boolean(publicKey && signature && message),
+    queryFn: async () => {
+      const token = await getToken()
+      if (!token) return null
+      return fetchTelegramStats(token)
+    },
+    enabled: isAuthenticated,
     staleTime: 10000,
   })
 
@@ -115,12 +121,16 @@ export function OverviewStats() {
  * Compact version for sidebar or small spaces
  */
 export function OverviewStatsCompact() {
-  const { publicKey, signature, message } = useAdminAuth()
+  const { isAuthenticated, getToken } = useAdminAuth()
 
   const { data: platformStats } = useQuery({
     queryKey: adminQueryKeys.platformStats(),
-    queryFn: () => fetchPlatformStats(publicKey!, signature!, message!),
-    enabled: Boolean(publicKey && signature && message),
+    queryFn: async () => {
+      const token = await getToken()
+      if (!token) return null
+      return fetchPlatformStats(token)
+    },
+    enabled: isAuthenticated,
     staleTime: 10000,
   })
 

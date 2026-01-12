@@ -4,7 +4,6 @@ import { useState, useEffect, useCallback, ClipboardEvent } from 'react'
 import { useWallet } from '@solana/wallet-adapter-react'
 import { WalletMultiButton } from '@solana/wallet-adapter-react-ui'
 import { motion } from 'framer-motion'
-import { supabase } from '@/lib/supabase'
 import { fetchTokenMetadata, isValidSolanaAddress } from '@/lib/token-metadata'
 import {
   fetchAdminNonce,
@@ -568,37 +567,22 @@ export default function AdminContent() {
     return () => clearInterval(interval)
   }, [isAuthorized, loadSystemStatus])
 
-  // Load config from Supabase
+  // Load config from API (migrated from Supabase)
   async function loadConfig() {
     try {
-      const { data, error } = await supabase
-        .from('config')
-        .select('*')
-        .eq('id', 'main')
-        .single()
+      // Fetch config from environment and API status
+      // Note: Token-specific configs are now per-user in PrivyTokenConfig
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3002'}/api/status/system`)
+      const json = await response.json()
 
-      if (data) {
-        setConfig({
-          token_mint_address: data.token_mint_address || '',
-          token_symbol: data.token_symbol || 'CLAUDE',
-          token_decimals: data.token_decimals ?? 6,
-          flywheel_active: data.flywheel_active ?? false,
-          market_making_enabled: data.market_making_enabled ?? false,
-          fee_collection_enabled: data.fee_collection_enabled ?? true,
-          ops_wallet_address: data.ops_wallet_address || '',
-          fee_threshold_sol: data.fee_threshold_sol ?? 0.1,
-          fee_percentage: data.fee_percentage ?? 100,
-          min_buy_amount_sol: data.min_buy_amount_sol ?? 0.01,
-          max_buy_amount_sol: data.max_buy_amount_sol ?? 0.1,
-          buy_interval_minutes: data.buy_interval_minutes ?? 60,
-          slippage_bps: data.slippage_bps ?? 500,
-          algorithm_mode: data.algorithm_mode ?? 'simple',
-          target_sol_allocation: data.target_sol_allocation ?? 30,
-          target_token_allocation: data.target_token_allocation ?? 70,
-          rebalance_threshold: data.rebalance_threshold ?? 10,
-          use_twap: data.use_twap ?? true,
-          twap_threshold_usd: data.twap_threshold_usd ?? 50,
-        })
+      if (json.success && json.data?.environment) {
+        const env = json.data.environment
+        setConfig(prev => ({
+          ...prev,
+          market_making_enabled: env.marketMakingEnabled ?? false,
+          fee_threshold_sol: env.minFeeThresholdSol ?? 0.1,
+          max_buy_amount_sol: env.maxBuyAmountSol ?? 0.1,
+        }))
       }
     } catch (error) {
       console.log('Config not found, using defaults')

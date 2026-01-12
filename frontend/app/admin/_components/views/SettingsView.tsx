@@ -16,7 +16,7 @@ import { StatusBadge } from '../shared/StatusBadge'
 import { PanelSkeleton } from '../shared/LoadingSkeleton'
 
 export function SettingsView() {
-  const { publicKey, signature, message } = useAdminAuth()
+  const { isAuthenticated, getToken } = useAdminAuth()
   const queryClient = useQueryClient()
 
   // Local state for form
@@ -28,8 +28,12 @@ export function SettingsView() {
   // Fetch settings
   const { data: settings, isLoading } = useQuery({
     queryKey: adminQueryKeys.settings(),
-    queryFn: () => fetchPlatformSettings(publicKey!, signature!, message!),
-    enabled: Boolean(publicKey && signature && message),
+    queryFn: async () => {
+      const token = await getToken()
+      if (!token) return null
+      return fetchPlatformSettings(token)
+    },
+    enabled: isAuthenticated,
     staleTime: 30000,
   })
 
@@ -42,8 +46,11 @@ export function SettingsView() {
 
   // Update settings mutation
   const updateMutation = useMutation({
-    mutationFn: (newSettings: Partial<PlatformSettings>) =>
-      updatePlatformSettings(publicKey!, signature!, message!, newSettings),
+    mutationFn: async (newSettings: Partial<PlatformSettings>) => {
+      const token = await getToken()
+      if (!token) throw new Error('Not authenticated')
+      return updatePlatformSettings(token, newSettings)
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: adminQueryKeys.settings() })
       setHasChanges(false)
@@ -52,8 +59,11 @@ export function SettingsView() {
 
   // Emergency stop mutation
   const emergencyMutation = useMutation({
-    mutationFn: (reason: string) =>
-      emergencyStopAll(publicKey!, signature!, message!, reason),
+    mutationFn: async (reason: string) => {
+      const token = await getToken()
+      if (!token) throw new Error('Not authenticated')
+      return emergencyStopAll(token, reason)
+    },
     onSuccess: () => {
       queryClient.invalidateQueries()
       setShowEmergencyConfirm(false)
@@ -63,7 +73,11 @@ export function SettingsView() {
 
   // Clear caches mutation
   const clearCachesMutation = useMutation({
-    mutationFn: () => clearAllCaches(publicKey!, signature!, message!),
+    mutationFn: async () => {
+      const token = await getToken()
+      if (!token) throw new Error('Not authenticated')
+      return clearAllCaches(token)
+    },
     onSuccess: () => {
       queryClient.invalidateQueries()
     },

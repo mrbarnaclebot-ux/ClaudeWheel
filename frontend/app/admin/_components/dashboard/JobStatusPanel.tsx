@@ -19,7 +19,7 @@ interface JobInfo {
   key: string
   icon: string
   description: string
-  trigger: (pk: string, sig: string, msg: string) => Promise<{ success: boolean; message?: string; error?: string }>
+  trigger: (token: string) => Promise<{ success: boolean; message?: string; error?: string }>
 }
 
 const jobs: JobInfo[] = [
@@ -47,22 +47,27 @@ const jobs: JobInfo[] = [
 ]
 
 export function JobStatusPanel() {
-  const { publicKey, signature, message } = useAdminAuth()
+  const { isAuthenticated, getToken } = useAdminAuth()
   const queryClient = useQueryClient()
 
   // Fetch platform stats which includes job status
   const { data: platformStats, isLoading } = useQuery({
     queryKey: adminQueryKeys.platformStats(),
-    queryFn: () => fetchPlatformStats(publicKey!, signature!, message!),
-    enabled: Boolean(publicKey && signature && message),
+    queryFn: async () => {
+      const token = await getToken()
+      if (!token) return null
+      return fetchPlatformStats(token)
+    },
+    enabled: isAuthenticated,
     staleTime: 5000, // 5 seconds for job status
   })
 
   // Trigger job mutation
   const triggerMutation = useMutation({
     mutationFn: async (job: JobInfo) => {
-      if (!publicKey || !signature || !message) throw new Error('Not authenticated')
-      return job.trigger(publicKey, signature, message)
+      const token = await getToken()
+      if (!token) throw new Error('Not authenticated')
+      return job.trigger(token)
     },
     onSuccess: () => {
       // Refetch stats after triggering
@@ -174,12 +179,16 @@ export function JobStatusPanel() {
  * Compact job status for header or inline use
  */
 export function JobStatusCompact() {
-  const { publicKey, signature, message } = useAdminAuth()
+  const { isAuthenticated, getToken } = useAdminAuth()
 
   const { data: platformStats } = useQuery({
     queryKey: adminQueryKeys.platformStats(),
-    queryFn: () => fetchPlatformStats(publicKey!, signature!, message!),
-    enabled: Boolean(publicKey && signature && message),
+    queryFn: async () => {
+      const token = await getToken()
+      if (!token) return null
+      return fetchPlatformStats(token)
+    },
+    enabled: isAuthenticated,
     staleTime: 5000,
   })
 

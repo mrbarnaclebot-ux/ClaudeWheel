@@ -1,6 +1,7 @@
 /**
  * Admin API Client with AbortController Support
  * Provides cancellable requests and consistent error handling
+ * Uses Privy JWT Bearer token authentication
  */
 
 import type {
@@ -51,20 +52,12 @@ function cleanupRequest(requestKey: string) {
 }
 
 /**
- * Create admin authentication headers
+ * Create authentication headers with Privy Bearer token
  */
-function createAdminHeaders(
-  publicKey: string,
-  signature: string,
-  message: string
-): HeadersInit {
-  const encodedMessage = btoa(unescape(encodeURIComponent(message)))
+function createAuthHeaders(token: string): HeadersInit {
   return {
     'Content-Type': 'application/json',
-    'x-wallet-pubkey': publicKey,
-    'x-wallet-signature': signature,
-    'x-wallet-message': encodedMessage,
-    'x-message-encoding': 'base64',
+    'Authorization': `Bearer ${token}`,
   }
 }
 
@@ -108,29 +101,11 @@ async function adminFetch<T>(
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// AUTHENTICATION
-// ═══════════════════════════════════════════════════════════════════════════
-
-export async function fetchAdminAuthNonce(): Promise<{
-  message: string
-  timestamp: number
-  nonce: string
-} | null> {
-  const result = await adminFetch<{ message: string; timestamp: number; nonce: string }>(
-    `${API_BASE_URL}/api/admin/auth/nonce`,
-    { method: 'POST', headers: { 'Content-Type': 'application/json' } }
-  )
-  return result.success ? result.data ?? null : null
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
 // PLATFORM STATUS
 // ═══════════════════════════════════════════════════════════════════════════
 
 export async function fetchPlatformStats(
-  publicKey: string,
-  signature: string,
-  message: string,
+  token: string,
   signal?: AbortSignal
 ): Promise<PlatformStats | null> {
   const requestKey = 'platformStats'
@@ -139,7 +114,7 @@ export async function fetchPlatformStats(
   const result = await adminFetch<PlatformStats>(
     `${API_BASE_URL}/api/admin/platform-stats`,
     {
-      headers: createAdminHeaders(publicKey, signature, message),
+      headers: createAuthHeaders(token),
       signal: signal ?? controller?.signal,
       requestKey,
     }
@@ -215,9 +190,7 @@ export interface FetchTokensParams {
 }
 
 export async function fetchAdminTokens(
-  publicKey: string,
-  signature: string,
-  message: string,
+  token: string,
   params?: FetchTokensParams,
   signal?: AbortSignal
 ): Promise<{ tokens: UserToken[]; total: number } | null> {
@@ -236,7 +209,7 @@ export async function fetchAdminTokens(
   const result = await adminFetch<{ tokens: UserToken[]; total: number }>(
     `${API_BASE_URL}/api/admin/tokens?${searchParams}`,
     {
-      headers: createAdminHeaders(publicKey, signature, message),
+      headers: createAuthHeaders(token),
       signal: signal ?? controller?.signal,
       requestKey,
     }
@@ -245,9 +218,7 @@ export async function fetchAdminTokens(
 }
 
 export async function fetchTokenDetail(
-  publicKey: string,
-  signature: string,
-  message: string,
+  token: string,
   tokenId: string,
   signal?: AbortSignal
 ): Promise<UserToken | null> {
@@ -257,7 +228,7 @@ export async function fetchTokenDetail(
   const result = await adminFetch<UserToken>(
     `${API_BASE_URL}/api/admin/tokens/${tokenId}`,
     {
-      headers: createAdminHeaders(publicKey, signature, message),
+      headers: createAuthHeaders(token),
       signal: signal ?? controller?.signal,
       requestKey,
     }
@@ -266,25 +237,21 @@ export async function fetchTokenDetail(
 }
 
 export async function verifyToken(
-  publicKey: string,
-  signature: string,
-  message: string,
+  token: string,
   tokenId: string
 ): Promise<boolean> {
   const result = await adminFetch<{ verified: boolean }>(
     `${API_BASE_URL}/api/admin/tokens/${tokenId}/verify`,
     {
       method: 'POST',
-      headers: createAdminHeaders(publicKey, signature, message),
+      headers: createAuthHeaders(token),
     }
   )
   return result.success
 }
 
 export async function suspendToken(
-  publicKey: string,
-  signature: string,
-  message: string,
+  token: string,
   tokenId: string,
   reason: string
 ): Promise<boolean> {
@@ -292,7 +259,7 @@ export async function suspendToken(
     `${API_BASE_URL}/api/admin/tokens/${tokenId}/suspend`,
     {
       method: 'POST',
-      headers: createAdminHeaders(publicKey, signature, message),
+      headers: createAuthHeaders(token),
       body: JSON.stringify({ reason }),
     }
   )
@@ -300,32 +267,28 @@ export async function suspendToken(
 }
 
 export async function unsuspendToken(
-  publicKey: string,
-  signature: string,
-  message: string,
+  token: string,
   tokenId: string
 ): Promise<boolean> {
   const result = await adminFetch<{ unsuspended: boolean }>(
     `${API_BASE_URL}/api/admin/tokens/${tokenId}/unsuspend`,
     {
       method: 'POST',
-      headers: createAdminHeaders(publicKey, signature, message),
+      headers: createAuthHeaders(token),
     }
   )
   return result.success
 }
 
 export async function bulkSuspendTokens(
-  publicKey: string,
-  signature: string,
-  message: string,
+  token: string,
   reason: string
 ): Promise<{ suspended: number; skipped: number } | null> {
   const result = await adminFetch<{ suspendedCount: number; skippedCount: number }>(
     `${API_BASE_URL}/api/admin/tokens/suspend-all`,
     {
       method: 'POST',
-      headers: createAdminHeaders(publicKey, signature, message),
+      headers: createAuthHeaders(token),
       body: JSON.stringify({ reason }),
     }
   )
@@ -335,15 +298,13 @@ export async function bulkSuspendTokens(
 }
 
 export async function bulkUnsuspendTokens(
-  publicKey: string,
-  signature: string,
-  message: string
+  token: string
 ): Promise<{ unsuspended: number } | null> {
   const result = await adminFetch<{ unsuspendedCount: number }>(
     `${API_BASE_URL}/api/admin/tokens/unsuspend-all`,
     {
       method: 'POST',
-      headers: createAdminHeaders(publicKey, signature, message),
+      headers: createAuthHeaders(token),
     }
   )
   return result.success && result.data ? { unsuspended: result.data.unsuspendedCount } : null
@@ -361,9 +322,7 @@ export interface FetchLaunchesParams {
 }
 
 export async function fetchTelegramStats(
-  publicKey: string,
-  signature: string,
-  message: string,
+  token: string,
   signal?: AbortSignal
 ): Promise<TelegramLaunchStats | null> {
   const requestKey = 'telegramStats'
@@ -372,7 +331,7 @@ export async function fetchTelegramStats(
   const result = await adminFetch<TelegramLaunchStats>(
     `${API_BASE_URL}/api/admin/telegram/stats`,
     {
-      headers: createAdminHeaders(publicKey, signature, message),
+      headers: createAuthHeaders(token),
       signal: signal ?? controller?.signal,
       requestKey,
     }
@@ -381,9 +340,7 @@ export async function fetchTelegramStats(
 }
 
 export async function fetchTelegramLaunches(
-  publicKey: string,
-  signature: string,
-  message: string,
+  token: string,
   params?: FetchLaunchesParams,
   signal?: AbortSignal
 ): Promise<{ launches: TelegramLaunch[]; total: number } | null> {
@@ -399,7 +356,7 @@ export async function fetchTelegramLaunches(
   const result = await adminFetch<{ launches: TelegramLaunch[]; total: number }>(
     `${API_BASE_URL}/api/admin/telegram/launches/search?${searchParams}`,
     {
-      headers: createAdminHeaders(publicKey, signature, message),
+      headers: createAuthHeaders(token),
       signal: signal ?? controller?.signal,
       requestKey,
     }
@@ -408,9 +365,7 @@ export async function fetchTelegramLaunches(
 }
 
 export async function fetchBotHealth(
-  publicKey: string,
-  signature: string,
-  message: string,
+  token: string,
   signal?: AbortSignal
 ): Promise<BotHealth | null> {
   const requestKey = 'botHealth'
@@ -419,7 +374,7 @@ export async function fetchBotHealth(
   const result = await adminFetch<BotHealth>(
     `${API_BASE_URL}/api/admin/telegram/bot-health`,
     {
-      headers: createAdminHeaders(publicKey, signature, message),
+      headers: createAuthHeaders(token),
       signal: signal ?? controller?.signal,
       requestKey,
     }
@@ -428,9 +383,7 @@ export async function fetchBotHealth(
 }
 
 export async function executeRefund(
-  publicKey: string,
-  signature: string,
-  message: string,
+  token: string,
   launchId: string,
   refundAddress: string
 ): Promise<RefundResult> {
@@ -438,7 +391,7 @@ export async function executeRefund(
     `${API_BASE_URL}/api/admin/telegram/refund/${launchId}`,
     {
       method: 'POST',
-      headers: createAdminHeaders(publicKey, signature, message),
+      headers: createAuthHeaders(token),
       body: JSON.stringify({ refundAddress }),
     }
   )
@@ -454,9 +407,7 @@ export async function executeRefund(
 }
 
 export async function cancelLaunch(
-  publicKey: string,
-  signature: string,
-  message: string,
+  token: string,
   launchId: string,
   reason?: string
 ): Promise<boolean> {
@@ -464,7 +415,7 @@ export async function cancelLaunch(
     `${API_BASE_URL}/api/admin/telegram/launch/${launchId}/cancel`,
     {
       method: 'POST',
-      headers: createAdminHeaders(publicKey, signature, message),
+      headers: createAuthHeaders(token),
       body: JSON.stringify({ reason }),
     }
   )
@@ -500,9 +451,7 @@ export async function fetchSystemLogs(
 }
 
 export async function fetchAuditLogs(
-  publicKey: string,
-  signature: string,
-  message: string,
+  token: string,
   params?: FetchLogsParams,
   signal?: AbortSignal
 ): Promise<{ logs: AuditLogEntry[]; total: number } | null> {
@@ -516,7 +465,7 @@ export async function fetchAuditLogs(
   const result = await adminFetch<{ logs: AuditLogEntry[]; total: number }>(
     `${API_BASE_URL}/api/admin/telegram/logs?${searchParams}`,
     {
-      headers: createAdminHeaders(publicKey, signature, message),
+      headers: createAuthHeaders(token),
       signal: signal ?? controller?.signal,
       requestKey,
     }
@@ -529,16 +478,14 @@ export async function fetchAuditLogs(
 // ═══════════════════════════════════════════════════════════════════════════
 
 export async function triggerFlywheelCycle(
-  publicKey: string,
-  signature: string,
-  message: string,
+  token: string,
   maxTrades?: number
 ): Promise<{ success: boolean; message?: string; error?: string }> {
   const result = await adminFetch<{ message: string }>(
     `${API_BASE_URL}/api/admin/flywheel/trigger`,
     {
       method: 'POST',
-      headers: createAdminHeaders(publicKey, signature, message),
+      headers: createAuthHeaders(token),
       body: JSON.stringify({ maxTrades }),
     }
   )
@@ -550,15 +497,13 @@ export async function triggerFlywheelCycle(
 }
 
 export async function triggerFastClaim(
-  publicKey: string,
-  signature: string,
-  message: string
+  token: string
 ): Promise<{ success: boolean; message?: string; error?: string }> {
   const result = await adminFetch<{ message: string }>(
     `${API_BASE_URL}/api/admin/fast-claim/trigger`,
     {
       method: 'POST',
-      headers: createAdminHeaders(publicKey, signature, message),
+      headers: createAuthHeaders(token),
     }
   )
   return {
@@ -569,15 +514,13 @@ export async function triggerFastClaim(
 }
 
 export async function triggerBalanceUpdate(
-  publicKey: string,
-  signature: string,
-  message: string
+  token: string
 ): Promise<{ success: boolean; message?: string; error?: string }> {
   const result = await adminFetch<{ message: string }>(
     `${API_BASE_URL}/api/admin/balance-update/trigger`,
     {
       method: 'POST',
-      headers: createAdminHeaders(publicKey, signature, message),
+      headers: createAuthHeaders(token),
     }
   )
   return {
@@ -592,9 +535,7 @@ export async function triggerBalanceUpdate(
 // ═══════════════════════════════════════════════════════════════════════════
 
 export async function previewTokenRefund(
-  publicKey: string,
-  signature: string,
-  message: string,
+  token: string,
   tokenId: string,
   signal?: AbortSignal
 ): Promise<RefundPreview | null> {
@@ -604,7 +545,7 @@ export async function previewTokenRefund(
   const result = await adminFetch<RefundPreview>(
     `${API_BASE_URL}/api/admin/tokens/${tokenId}/refund-preview`,
     {
-      headers: createAdminHeaders(publicKey, signature, message),
+      headers: createAuthHeaders(token),
       signal: signal ?? controller?.signal,
       requestKey,
     }
@@ -613,9 +554,7 @@ export async function previewTokenRefund(
 }
 
 export async function stopFlywheelAndRefund(
-  publicKey: string,
-  signature: string,
-  message: string,
+  token: string,
   tokenId: string,
   refundAddress?: string
 ): Promise<{
@@ -632,7 +571,7 @@ export async function stopFlywheelAndRefund(
     `${API_BASE_URL}/api/admin/tokens/${tokenId}/stop-and-refund`,
     {
       method: 'POST',
-      headers: createAdminHeaders(publicKey, signature, message),
+      headers: createAuthHeaders(token),
       body: JSON.stringify({ refundAddress }),
     }
   )
@@ -652,9 +591,7 @@ export async function stopFlywheelAndRefund(
 // ═══════════════════════════════════════════════════════════════════════════
 
 export async function migrateOrphanedLaunches(
-  publicKey: string,
-  signature: string,
-  message: string
+  token: string
 ): Promise<{
   success: boolean
   migrated?: number
@@ -665,7 +602,7 @@ export async function migrateOrphanedLaunches(
     `${API_BASE_URL}/api/admin/migrate-orphaned-launches`,
     {
       method: 'POST',
-      headers: createAdminHeaders(publicKey, signature, message),
+      headers: createAuthHeaders(token),
     }
   )
 
@@ -684,9 +621,7 @@ export async function migrateOrphanedLaunches(
 // ═══════════════════════════════════════════════════════════════════════════
 
 export async function enableMaintenanceMode(
-  publicKey: string,
-  signature: string,
-  message: string,
+  token: string,
   reason: string,
   estimatedEndTime?: string,
   notifyUsers: boolean = true
@@ -695,7 +630,7 @@ export async function enableMaintenanceMode(
     `${API_BASE_URL}/api/admin/telegram/maintenance/enable`,
     {
       method: 'POST',
-      headers: createAdminHeaders(publicKey, signature, message),
+      headers: createAuthHeaders(token),
       body: JSON.stringify({ reason, estimatedEndTime, notifyUsers }),
     }
   )
@@ -708,16 +643,14 @@ export async function enableMaintenanceMode(
 }
 
 export async function disableMaintenanceMode(
-  publicKey: string,
-  signature: string,
-  message: string,
+  token: string,
   notifyUsers: boolean = true
 ): Promise<{ success: boolean; notifiedUsers?: number; error?: string }> {
   const result = await adminFetch<{ notifiedUsers: number }>(
     `${API_BASE_URL}/api/admin/telegram/maintenance/disable`,
     {
       method: 'POST',
-      headers: createAdminHeaders(publicKey, signature, message),
+      headers: createAuthHeaders(token),
       body: JSON.stringify({ notifyUsers }),
     }
   )
@@ -730,9 +663,7 @@ export async function disableMaintenanceMode(
 }
 
 export async function sendBroadcast(
-  publicKey: string,
-  signature: string,
-  message: string,
+  token: string,
   title: string,
   body: string
 ): Promise<{
@@ -746,7 +677,7 @@ export async function sendBroadcast(
     `${API_BASE_URL}/api/admin/telegram/broadcast`,
     {
       method: 'POST',
-      headers: createAdminHeaders(publicKey, signature, message),
+      headers: createAuthHeaders(token),
       body: JSON.stringify({ title, body }),
     }
   )
@@ -830,9 +761,7 @@ export interface WheelData {
 }
 
 export async function fetchWheelData(
-  publicKey: string,
-  signature: string,
-  message: string,
+  token: string,
   signal?: AbortSignal
 ): Promise<WheelData | null> {
   const requestKey = 'wheelData'
@@ -841,7 +770,7 @@ export async function fetchWheelData(
   const result = await adminFetch<WheelData>(
     `${API_BASE_URL}/api/admin/wheel`,
     {
-      headers: createAdminHeaders(publicKey, signature, message),
+      headers: createAuthHeaders(token),
       signal: signal ?? controller?.signal,
       requestKey,
     }
@@ -850,16 +779,14 @@ export async function fetchWheelData(
 }
 
 export async function executeWheelSell(
-  publicKey: string,
-  signature: string,
-  message: string,
+  token: string,
   percentage: number
 ): Promise<{ success: boolean; message?: string; error?: string }> {
   const result = await adminFetch<{ message: string }>(
     `${API_BASE_URL}/api/admin/wheel/sell`,
     {
       method: 'POST',
-      headers: createAdminHeaders(publicKey, signature, message),
+      headers: createAuthHeaders(token),
       body: JSON.stringify({ percentage }),
     }
   )
@@ -890,9 +817,7 @@ export interface PlatformSettings {
 }
 
 export async function fetchPlatformSettings(
-  publicKey: string,
-  signature: string,
-  message: string,
+  token: string,
   signal?: AbortSignal
 ): Promise<PlatformSettings | null> {
   const requestKey = 'settings'
@@ -901,7 +826,7 @@ export async function fetchPlatformSettings(
   const result = await adminFetch<PlatformSettings>(
     `${API_BASE_URL}/api/admin/settings`,
     {
-      headers: createAdminHeaders(publicKey, signature, message),
+      headers: createAuthHeaders(token),
       signal: signal ?? controller?.signal,
       requestKey,
     }
@@ -910,16 +835,14 @@ export async function fetchPlatformSettings(
 }
 
 export async function updatePlatformSettings(
-  publicKey: string,
-  signature: string,
-  message: string,
+  token: string,
   settings: Partial<PlatformSettings>
 ): Promise<{ success: boolean; message?: string; error?: string }> {
   const result = await adminFetch<{ message: string }>(
     `${API_BASE_URL}/api/admin/settings`,
     {
       method: 'POST',
-      headers: createAdminHeaders(publicKey, signature, message),
+      headers: createAuthHeaders(token),
       body: JSON.stringify(settings),
     }
   )
@@ -931,16 +854,14 @@ export async function updatePlatformSettings(
 }
 
 export async function emergencyStopAll(
-  publicKey: string,
-  signature: string,
-  message: string,
+  token: string,
   reason: string
 ): Promise<{ success: boolean; actions?: string[]; error?: string }> {
   const result = await adminFetch<{ actions: string[] }>(
     `${API_BASE_URL}/api/admin/emergency-stop`,
     {
       method: 'POST',
-      headers: createAdminHeaders(publicKey, signature, message),
+      headers: createAuthHeaders(token),
       body: JSON.stringify({ reason }),
     }
   )
@@ -952,15 +873,13 @@ export async function emergencyStopAll(
 }
 
 export async function clearAllCaches(
-  publicKey: string,
-  signature: string,
-  message: string
+  token: string
 ): Promise<{ success: boolean; message?: string; error?: string }> {
   const result = await adminFetch<{ message: string }>(
     `${API_BASE_URL}/api/admin/clear-caches`,
     {
       method: 'POST',
-      headers: createAdminHeaders(publicKey, signature, message),
+      headers: createAuthHeaders(token),
     }
   )
   return {

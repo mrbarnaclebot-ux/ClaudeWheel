@@ -1,17 +1,20 @@
 /**
  * Admin Dashboard Zustand Store
  * Manages UI state and authentication
+ * Updated to use Privy JWT tokens instead of wallet signatures
  */
 
 import { create } from 'zustand'
 import { persist, createJSONStorage } from 'zustand/middleware'
 import { useShallow } from 'zustand/react/shallow'
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useCallback } from 'react'
+import { usePrivy } from '@privy-io/react-auth'
 import type { AdminTab, TokenFilters, LogFilters } from '../_types/admin.types'
 
 interface AdminState {
-  // Authentication
+  // Authentication - now uses Privy tokens
   isAuthenticated: boolean
+  // Legacy fields kept for backwards compatibility during migration
   publicKey: string | null
   signature: string | null
   message: string | null
@@ -31,8 +34,9 @@ interface AdminState {
   tokenFilters: TokenFilters
   logFilters: LogFilters
 
-  // Actions
+  // Actions - setAuth now takes optional params for backwards compatibility
   setAuth: (publicKey: string, signature: string, message: string) => void
+  setAuthenticated: (isAuthenticated: boolean) => void
   clearAuth: () => void
   setActiveTab: (tab: AdminTab) => void
   toggleSidebar: () => void
@@ -86,6 +90,9 @@ export const useAdminStore = create<AdminState>()(
           signature,
           message,
         }),
+
+      setAuthenticated: (isAuthenticated) =>
+        set({ isAuthenticated }),
 
       clearAuth: () =>
         set({
@@ -164,17 +171,51 @@ export function useHydrateStore() {
 
 // Selector hooks for common patterns
 // Using useShallow to prevent infinite re-renders when returning objects
-export const useAdminAuth = () =>
-  useAdminStore(
-    useShallow((state) => ({
-      isAuthenticated: state.isAuthenticated,
-      publicKey: state.publicKey,
-      signature: state.signature,
-      message: state.message,
-      setAuth: state.setAuth,
-      clearAuth: state.clearAuth,
-    }))
-  )
+
+/**
+ * Hook for admin authentication using Privy
+ * Provides getToken function to get JWT for API calls
+ */
+export function useAdminAuth() {
+  const { authenticated, ready, getAccessToken, logout } = usePrivy()
+  const setAuthenticated = useAdminStore((state) => state.setAuthenticated)
+  const clearAuth = useAdminStore((state) => state.clearAuth)
+  const isAuthenticated = useAdminStore((state) => state.isAuthenticated)
+
+  // Sync Privy auth state with store
+  useEffect(() => {
+    if (ready) {
+      setAuthenticated(authenticated)
+    }
+  }, [ready, authenticated, setAuthenticated])
+
+  // Get token for API calls
+  const getToken = useCallback(async (): Promise<string | null> => {
+    if (!authenticated) return null
+    try {
+      return await getAccessToken()
+    } catch (error) {
+      console.error('Failed to get access token:', error)
+      return null
+    }
+  }, [authenticated, getAccessToken])
+
+  const handleLogout = useCallback(async () => {
+    await logout()
+    clearAuth()
+  }, [logout, clearAuth])
+
+  return {
+    isAuthenticated: authenticated && ready,
+    ready,
+    getToken,
+    logout: handleLogout,
+    // Legacy fields for backwards compatibility during migration
+    publicKey: null as string | null,
+    signature: null as string | null,
+    message: null as string | null,
+  }
+}
 
 export const useAdminUI = () =>
   useAdminStore(

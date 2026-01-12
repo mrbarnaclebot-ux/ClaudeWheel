@@ -19,7 +19,7 @@ interface ActionResult {
 }
 
 export function QuickActions() {
-  const { publicKey, signature, message } = useAdminAuth()
+  const { isAuthenticated, getToken } = useAdminAuth()
   const queryClient = useQueryClient()
 
   const [confirmAction, setConfirmAction] = useState<string | null>(null)
@@ -27,12 +27,13 @@ export function QuickActions() {
   const [maintenanceReason, setMaintenanceReason] = useState('')
   const [result, setResult] = useState<ActionResult | null>(null)
 
-  const auth = { publicKey: publicKey!, signature: signature!, message: message! }
-  const isAuthed = Boolean(publicKey && signature && message)
-
   // Bulk suspend mutation
   const suspendMutation = useMutation({
-    mutationFn: () => bulkSuspendTokens(auth.publicKey, auth.signature, auth.message, suspendReason),
+    mutationFn: async () => {
+      const token = await getToken()
+      if (!token) throw new Error('Not authenticated')
+      return bulkSuspendTokens(token, suspendReason)
+    },
     onSuccess: (data) => {
       if (data) {
         setResult({ type: 'success', message: `Suspended ${data.suspended} tokens (${data.skipped} skipped)` })
@@ -50,7 +51,11 @@ export function QuickActions() {
 
   // Bulk unsuspend mutation
   const unsuspendMutation = useMutation({
-    mutationFn: () => bulkUnsuspendTokens(auth.publicKey, auth.signature, auth.message),
+    mutationFn: async () => {
+      const token = await getToken()
+      if (!token) throw new Error('Not authenticated')
+      return bulkUnsuspendTokens(token)
+    },
     onSuccess: (data) => {
       if (data) {
         setResult({ type: 'success', message: `Unsuspended ${data.unsuspended} tokens` })
@@ -67,7 +72,11 @@ export function QuickActions() {
 
   // Migrate orphaned launches mutation
   const migrateMutation = useMutation({
-    mutationFn: () => migrateOrphanedLaunches(auth.publicKey, auth.signature, auth.message),
+    mutationFn: async () => {
+      const token = await getToken()
+      if (!token) throw new Error('Not authenticated')
+      return migrateOrphanedLaunches(token)
+    },
     onSuccess: (data) => {
       if (data.success) {
         setResult({ type: 'success', message: `Migrated ${data.migrated} launches (${data.failed} failed)` })
@@ -84,7 +93,11 @@ export function QuickActions() {
 
   // Maintenance mode mutations
   const enableMaintenanceMutation = useMutation({
-    mutationFn: () => enableMaintenanceMode(auth.publicKey, auth.signature, auth.message, maintenanceReason),
+    mutationFn: async () => {
+      const token = await getToken()
+      if (!token) throw new Error('Not authenticated')
+      return enableMaintenanceMode(token, maintenanceReason)
+    },
     onSuccess: (data) => {
       if (data.success) {
         setResult({ type: 'success', message: `Maintenance mode enabled. Notified ${data.notifiedUsers} users.` })
@@ -100,7 +113,11 @@ export function QuickActions() {
   })
 
   const disableMaintenanceMutation = useMutation({
-    mutationFn: () => disableMaintenanceMode(auth.publicKey, auth.signature, auth.message),
+    mutationFn: async () => {
+      const token = await getToken()
+      if (!token) throw new Error('Not authenticated')
+      return disableMaintenanceMode(token)
+    },
     onSuccess: (data) => {
       if (data.success) {
         setResult({ type: 'success', message: `Maintenance mode disabled. Notified ${data.notifiedUsers} users.` })
@@ -204,7 +221,7 @@ export function QuickActions() {
           <button
             key={action.id}
             onClick={() => setConfirmAction(action.id)}
-            disabled={!isAuthed || isPending}
+            disabled={!isAuthenticated || isPending}
             className={`
               w-full flex items-center gap-3 px-3 py-2 rounded-lg border transition-colors
               ${getButtonClasses(action.variant)}

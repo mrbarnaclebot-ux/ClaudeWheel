@@ -1,12 +1,14 @@
 /**
  * Admin WebSocket Server
  * Real-time updates for the admin dashboard
+ * Uses Privy JWT authentication instead of wallet signatures
  */
 
 import { WebSocketServer, WebSocket } from 'ws'
-import { Server } from 'http'
-import { verifySignature, isMessageRecent } from '../utils/signature-verify'
-import { env } from '../config/env'
+import { Server, IncomingMessage } from 'http'
+import { URL } from 'url'
+import { privyService } from '../services/privy.service'
+import { prisma } from '../config/prisma'
 
 // ═══════════════════════════════════════════════════════════════════════════
 // TYPES
@@ -25,9 +27,7 @@ export interface WsMessage {
   type: 'subscribe' | 'unsubscribe' | 'auth' | 'ping'
   channel?: WsChannel
   channels?: WsChannel[]
-  publicKey?: string
-  signature?: string
-  message?: string
+  token?: string // Privy JWT token for auth message
 }
 
 export interface WsEvent {
@@ -39,7 +39,8 @@ export interface WsEvent {
 
 interface AuthenticatedClient {
   ws: WebSocket
-  publicKey: string
+  privyUserId: string
+  isAdmin: boolean
   subscribedChannels: Set<WsChannel>
   lastPing: number
 }
@@ -64,8 +65,25 @@ class AdminWebSocketServer {
 
     this.wss = new WebSocketServer({ server, path: '/ws/admin' })
 
-    this.wss.on('connection', (ws: WebSocket) => {
+    this.wss.on('connection', async (ws: WebSocket, req: IncomingMessage) => {
       console.log('[WS] New connection')
+
+      // Try to authenticate via query parameter token
+      const token = this.extractTokenFromUrl(req.url)
+      if (token) {
+        const authenticated = await this.authenticateWithToken(ws, token)
+        if (!authenticated) {
+          ws.send(JSON.stringify({ type: 'auth_error', error: 'Invalid token' }))
+          ws.close(1008, 'Invalid token')
+          return
+        }
+      } else {
+        // Send welcome message if no token in query param (client can auth via message)
+        ws.send(JSON.stringify({
+          type: 'connected',
+          message: 'Connected to admin WebSocket. Please authenticate.',
+        }))
+      }
 
       ws.on('message', (data: Buffer) => {
         try {
@@ -86,12 +104,6 @@ class AdminWebSocketServer {
         console.error('[WS] Client error:', err)
         this.clients.delete(ws)
       })
-
-      // Send welcome message
-      ws.send(JSON.stringify({
-        type: 'connected',
-        message: 'Connected to admin WebSocket. Please authenticate.',
-      }))
     })
 
     // Start ping interval to keep connections alive
@@ -100,6 +112,68 @@ class AdminWebSocketServer {
     }, 30000)
 
     console.log('[WS] Admin WebSocket server initialized on /ws/admin')
+  }
+
+  /**
+   * Extract token from URL query parameters
+   */
+  private extractTokenFromUrl(url: string | undefined): string | null {
+    if (!url) return null
+    try {
+      const parsedUrl = new URL(url, 'http://localhost')
+      return parsedUrl.searchParams.get('token')
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * Authenticate client with Privy JWT token
+   */
+  private async authenticateWithToken(ws: WebSocket, token: string): Promise<boolean> {
+    try {
+      // Verify the Privy JWT token
+      const { valid, userId } = await privyService.verifyAuthToken(token)
+
+      if (!valid || !userId) {
+        console.log('[WS] Invalid Privy token')
+        return false
+      }
+
+      // Check if user has admin role
+      let isAdmin = false
+      try {
+        const adminRole = await prisma.adminRole.findUnique({
+          where: { privyUserId: userId },
+        })
+        isAdmin = !!adminRole
+      } catch (error) {
+        // AdminRole table might not exist yet during migration
+        console.warn('[WS] Could not check admin role:', error)
+      }
+
+      // Store authenticated client
+      this.clients.set(ws, {
+        ws,
+        privyUserId: userId,
+        isAdmin,
+        subscribedChannels: new Set(),
+        lastPing: Date.now(),
+      })
+
+      ws.send(JSON.stringify({
+        type: 'auth_success',
+        message: 'Authentication successful',
+        userId,
+        isAdmin,
+      }))
+
+      console.log(`[WS] Client authenticated: ${userId.slice(0, 20)}... (admin: ${isAdmin})`)
+      return true
+    } catch (error) {
+      console.error('[WS] Authentication error:', error)
+      return false
+    }
   }
 
   /**
@@ -125,49 +199,20 @@ class AdminWebSocketServer {
   }
 
   /**
-   * Authenticate a WebSocket client
+   * Authenticate a WebSocket client via message
    */
-  private handleAuth(ws: WebSocket, message: WsMessage): void {
-    const { publicKey, signature, message: signedMessage } = message
+  private async handleAuth(ws: WebSocket, message: WsMessage): Promise<void> {
+    const { token } = message
 
-    if (!publicKey || !signature || !signedMessage) {
-      ws.send(JSON.stringify({ type: 'auth_error', error: 'Missing auth credentials' }))
+    if (!token) {
+      ws.send(JSON.stringify({ type: 'auth_error', error: 'Missing auth token' }))
       return
     }
 
-    // Verify public key matches dev wallet
-    if (publicKey !== env.devWalletAddress) {
-      ws.send(JSON.stringify({ type: 'auth_error', error: 'Unauthorized wallet' }))
-      return
+    const authenticated = await this.authenticateWithToken(ws, token)
+    if (!authenticated) {
+      ws.send(JSON.stringify({ type: 'auth_error', error: 'Invalid token' }))
     }
-
-    // Verify message is recent (5 minute window for WebSocket)
-    if (!isMessageRecent(signedMessage, 5 * 60 * 1000)) {
-      ws.send(JSON.stringify({ type: 'auth_error', error: 'Auth message expired' }))
-      return
-    }
-
-    // Verify signature
-    const result = verifySignature(signedMessage, signature, publicKey)
-    if (!result.valid) {
-      ws.send(JSON.stringify({ type: 'auth_error', error: 'Invalid signature' }))
-      return
-    }
-
-    // Store authenticated client
-    this.clients.set(ws, {
-      ws,
-      publicKey,
-      subscribedChannels: new Set(),
-      lastPing: Date.now(),
-    })
-
-    ws.send(JSON.stringify({
-      type: 'auth_success',
-      message: 'Authentication successful',
-    }))
-
-    console.log(`[WS] Client authenticated: ${publicKey.slice(0, 8)}...`)
   }
 
   /**
@@ -269,10 +314,69 @@ class AdminWebSocketServer {
   }
 
   /**
+   * Broadcast event to admin users only
+   */
+  broadcastToAdmins(channel: WsChannel, event: string, data: unknown): void {
+    const message: WsEvent = {
+      channel,
+      event,
+      data,
+      timestamp: new Date().toISOString(),
+    }
+
+    const messageStr = JSON.stringify(message)
+
+    this.clients.forEach((client) => {
+      if (
+        client.isAdmin &&
+        client.subscribedChannels.has(channel) &&
+        client.ws.readyState === WebSocket.OPEN
+      ) {
+        client.ws.send(messageStr)
+      }
+    })
+  }
+
+  /**
+   * Broadcast event to a specific user by Privy user ID
+   */
+  broadcastToUser(privyUserId: string, channel: WsChannel, event: string, data: unknown): void {
+    const message: WsEvent = {
+      channel,
+      event,
+      data,
+      timestamp: new Date().toISOString(),
+    }
+
+    const messageStr = JSON.stringify(message)
+
+    this.clients.forEach((client) => {
+      if (
+        client.privyUserId === privyUserId &&
+        client.subscribedChannels.has(channel) &&
+        client.ws.readyState === WebSocket.OPEN
+      ) {
+        client.ws.send(messageStr)
+      }
+    })
+  }
+
+  /**
    * Get count of connected clients
    */
   getClientCount(): number {
     return this.clients.size
+  }
+
+  /**
+   * Get count of admin clients
+   */
+  getAdminClientCount(): number {
+    let count = 0
+    this.clients.forEach((client) => {
+      if (client.isAdmin) count++
+    })
+    return count
   }
 
   /**

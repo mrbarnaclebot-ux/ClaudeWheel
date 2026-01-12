@@ -1,9 +1,8 @@
-import { Router, Request, Response } from 'express'
+import { Router, Response } from 'express'
 import { z } from 'zod'
 import { PublicKey, Transaction, SystemProgram, LAMPORTS_PER_SOL } from '@solana/web3.js'
-import { verifySignature, isMessageRecent, hashConfig, extractConfigHash, generateSecureNonceMessage } from '../utils/signature-verify'
 import { supabase } from '../config/database'
-import { env } from '../config/env'
+import { requireAdmin, requirePermission, AdminRequest } from '../services/admin-auth.service'
 import { connection, getBalance, getDevWallet, getOpsWallet, getTokenBalance } from '../config/solana'
 import { getKeypairFromEncrypted } from '../services/wallet-generator'
 import { bagsFmService } from '../services/bags-fm'
@@ -19,6 +18,7 @@ import { getDepositMonitorStatus } from '../jobs/deposit-monitor.job'
 import { triggerFlywheelCycle } from '../jobs/multi-flywheel.job'
 import { loggers } from '../utils/logger'
 import { wheelMMService } from '../services/wheel-mm.service'
+import { platformConfigService } from '../services/platform-config.service'
 
 // Legacy function stubs for backwards compatibility - these jobs have been removed
 // Returns deprecated status to inform API consumers these are no longer active
@@ -56,7 +56,7 @@ const PLATFORM_TOKEN_MINT = '8JLGQ7RqhsvhsDhvjMuJUeeuaQ53GTJqSHNaBWf4BAGS'
 
 // ═══════════════════════════════════════════════════════════════════════════
 // ADMIN ROUTES
-// Protected endpoints requiring wallet signature verification
+// Protected endpoints requiring Privy JWT authentication with admin role
 // ═══════════════════════════════════════════════════════════════════════════
 
 const router = Router()
@@ -98,43 +98,34 @@ interface AdminToken {
   } | null
 }
 
-// Schema for config update request
+// Schema for config update request (simplified for Privy JWT auth)
 const ConfigUpdateSchema = z.object({
-  // The message that was signed (must include timestamp for replay protection)
-  message: z.string().min(1),
-  // Base58-encoded signature
-  signature: z.string().min(1),
-  // Public key of the signer (must match DEV_WALLET)
-  publicKey: z.string().min(32).max(44),
-  // The config data to update
-  config: z.object({
-    token_mint_address: z.string().optional(),
-    token_symbol: z.string().max(10).optional(),
-    token_decimals: z.number().min(0).max(18).optional(),
-    flywheel_active: z.boolean().optional(),
-    market_making_enabled: z.boolean().optional(),
-    fee_collection_enabled: z.boolean().optional(),
-    ops_wallet_address: z.string().optional(),
-    fee_threshold_sol: z.number().min(0).optional(),
-    fee_percentage: z.number().min(0).max(100).optional(),
-    min_buy_amount_sol: z.number().min(0).optional(),
-    max_buy_amount_sol: z.number().min(0).optional(),
-    buy_interval_minutes: z.number().min(1).optional(),
-    slippage_bps: z.number().min(1).max(5000).optional(),
-    algorithm_mode: z.enum(['simple', 'smart', 'rebalance']).optional(),
-    target_sol_allocation: z.number().min(0).max(100).optional(),
-    target_token_allocation: z.number().min(0).max(100).optional(),
-    rebalance_threshold: z.number().min(1).max(50).optional(),
-    use_twap: z.boolean().optional(),
-    twap_threshold_usd: z.number().min(1).optional(),
-  }),
+  token_mint_address: z.string().optional(),
+  token_symbol: z.string().max(10).optional(),
+  token_decimals: z.number().min(0).max(18).optional(),
+  flywheel_active: z.boolean().optional(),
+  market_making_enabled: z.boolean().optional(),
+  fee_collection_enabled: z.boolean().optional(),
+  ops_wallet_address: z.string().optional(),
+  fee_threshold_sol: z.number().min(0).optional(),
+  fee_percentage: z.number().min(0).max(100).optional(),
+  min_buy_amount_sol: z.number().min(0).optional(),
+  max_buy_amount_sol: z.number().min(0).optional(),
+  buy_interval_minutes: z.number().min(1).optional(),
+  slippage_bps: z.number().min(1).max(5000).optional(),
+  algorithm_mode: z.enum(['simple', 'smart', 'rebalance']).optional(),
+  target_sol_allocation: z.number().min(0).max(100).optional(),
+  target_token_allocation: z.number().min(0).max(100).optional(),
+  rebalance_threshold: z.number().min(1).max(50).optional(),
+  use_twap: z.boolean().optional(),
+  twap_threshold_usd: z.number().min(1).optional(),
 })
 
 /**
  * POST /api/admin/config
- * Update flywheel configuration (requires wallet signature)
+ * Update flywheel configuration (requires Privy JWT admin auth)
  */
-router.post('/config', async (req: Request, res: Response) => {
+router.post('/config', requireAdmin, requirePermission('update_config'), async (req: AdminRequest, res: Response) => {
   try {
     // Validate request body
     const parseResult = ConfigUpdateSchema.safeParse(req.body)
@@ -145,46 +136,9 @@ router.post('/config', async (req: Request, res: Response) => {
       })
     }
 
-    const { message, signature, publicKey, config } = parseResult.data
+    const config = parseResult.data
 
-    // Step 1: Verify the public key matches the authorized dev wallet
-    const authorizedWallet = env.devWalletAddress
-    if (!authorizedWallet) {
-      loggers.server.error('DEV_WALLET_ADDRESS not configured')
-      return res.status(500).json({ error: 'Server configuration error' })
-    }
-
-    if (publicKey !== authorizedWallet) {
-      loggers.server.warn({ publicKey }, 'Unauthorized config update attempt')
-      return res.status(403).json({ error: 'Unauthorized: wallet not authorized for admin actions' })
-    }
-
-    // Step 2: Verify the message is recent (prevent replay attacks)
-    if (!isMessageRecent(message, 2 * 60 * 1000)) { // 2 minute window (reduced for security)
-      return res.status(400).json({ error: 'Message expired. Please sign a new message.' })
-    }
-
-    // Step 3: Verify the signature
-    const verificationResult = verifySignature(message, signature, publicKey)
-    if (!verificationResult.valid) {
-      loggers.server.warn({ publicKey, error: verificationResult.error }, 'Invalid signature')
-      return res.status(401).json({ error: `Signature verification failed: ${verificationResult.error}` })
-    }
-
-    // Step 4: Verify the config hash matches the signed message
-    // This prevents replay attacks with different config values
-    const signedConfigHash = extractConfigHash(message)
-    if (!signedConfigHash) {
-      return res.status(400).json({ error: 'Message must include config hash. Please use the updated signing flow.' })
-    }
-
-    const submittedConfigHash = hashConfig(config)
-    if (signedConfigHash !== submittedConfigHash) {
-      loggers.server.warn({ signedHash: signedConfigHash.slice(0, 16), submittedHash: submittedConfigHash.slice(0, 16) }, 'Config hash mismatch')
-      return res.status(400).json({ error: 'Config data does not match signed message. Please sign the current config.' })
-    }
-
-    // Step 5: Update config in database (using service key)
+    // Update config in database (using service key)
     if (!supabase) {
       return res.status(500).json({ error: 'Database not configured' })
     }
@@ -213,7 +167,7 @@ router.post('/config', async (req: Request, res: Response) => {
       }
     }
 
-    loggers.server.info({ publicKey: publicKey.slice(0, 8) }, 'Config updated by authorized wallet')
+    loggers.server.info({ privyUserId: req.privyUserId }, 'Config updated by admin')
 
     return res.json({
       success: true,
@@ -226,72 +180,17 @@ router.post('/config', async (req: Request, res: Response) => {
   }
 })
 
-// Schema for nonce request (includes config to hash)
-const NonceRequestSchema = z.object({
-  config: z.object({
-    token_mint_address: z.string().optional(),
-    token_symbol: z.string().max(10).optional(),
-    token_decimals: z.number().min(0).max(18).optional(),
-    flywheel_active: z.boolean().optional(),
-    market_making_enabled: z.boolean().optional(),
-    fee_collection_enabled: z.boolean().optional(),
-    ops_wallet_address: z.string().optional(),
-    fee_threshold_sol: z.number().min(0).optional(),
-    fee_percentage: z.number().min(0).max(100).optional(),
-    min_buy_amount_sol: z.number().min(0).optional(),
-    max_buy_amount_sol: z.number().min(0).optional(),
-    buy_interval_minutes: z.number().min(1).optional(),
-    slippage_bps: z.number().min(1).max(5000).optional(),
-    algorithm_mode: z.enum(['simple', 'smart', 'rebalance']).optional(),
-    target_sol_allocation: z.number().min(0).max(100).optional(),
-    target_token_allocation: z.number().min(0).max(100).optional(),
-    rebalance_threshold: z.number().min(1).max(50).optional(),
-    use_twap: z.boolean().optional(),
-    twap_threshold_usd: z.number().min(1).optional(),
-  }),
-})
 
-/**
- * POST /api/admin/nonce
- * Generate a nonce message for the client to sign
- * The message includes a hash of the config to prevent replay attacks with different config values
- */
-router.post('/nonce', (req: Request, res: Response) => {
-  // Validate request body
-  const parseResult = NonceRequestSchema.safeParse(req.body)
-  if (!parseResult.success) {
-    return res.status(400).json({
-      error: 'Invalid request body - config object required',
-      details: parseResult.error.errors,
-    })
-  }
-
-  const { config } = parseResult.data
-
-  // Generate config hash and create secure message
-  const configHash = hashConfig(config)
-  const { message, timestamp, nonce } = generateSecureNonceMessage('update_config', configHash)
-
-  res.json({ message, timestamp, nonce, configHash })
-})
-
-// Schema for manual sell request
+// Schema for manual sell request (simplified for Privy JWT auth)
 const ManualSellSchema = z.object({
-  // The message that was signed (must include timestamp for replay protection)
-  message: z.string().min(1),
-  // Base58-encoded signature
-  signature: z.string().min(1),
-  // Public key of the signer (must match DEV_WALLET)
-  publicKey: z.string().min(32).max(44),
-  // Sell percentage (25, 50, or 100)
   percentage: z.number().min(1).max(100),
 })
 
 /**
  * POST /api/admin/manual-sell
- * Execute a manual sell of tokens (requires wallet signature)
+ * Execute a manual sell of tokens (requires Privy JWT admin auth)
  */
-router.post('/manual-sell', async (req: Request, res: Response) => {
+router.post('/manual-sell', requireAdmin, requirePermission('trigger_jobs'), async (req: AdminRequest, res: Response) => {
   try {
     // Validate request body
     const parseResult = ManualSellSchema.safeParse(req.body)
@@ -302,55 +201,26 @@ router.post('/manual-sell', async (req: Request, res: Response) => {
       })
     }
 
-    const { message, signature, publicKey, percentage } = parseResult.data
+    const { percentage } = parseResult.data
 
-    // Step 1: Verify the public key matches the authorized dev wallet
-    const authorizedWallet = env.devWalletAddress
-    if (!authorizedWallet) {
-      loggers.server.error('DEV_WALLET_ADDRESS not configured')
-      return res.status(500).json({ error: 'Server configuration error' })
-    }
-
-    if (publicKey !== authorizedWallet) {
-      loggers.server.warn({ publicKey }, 'Unauthorized manual sell attempt')
-      return res.status(403).json({ error: 'Unauthorized: wallet not authorized for admin actions' })
-    }
-
-    // Step 2: Verify the message is recent (prevent replay attacks)
-    if (!isMessageRecent(message, 2 * 60 * 1000)) { // 2 minute window (reduced for security)
-      return res.status(400).json({ error: 'Message expired. Please sign a new message.' })
-    }
-
-    // Step 3: Verify the signature
-    const verificationResult = verifySignature(message, signature, publicKey)
-    if (!verificationResult.valid) {
-      loggers.server.warn({ publicKey, error: verificationResult.error }, 'Invalid signature')
-      return res.status(401).json({ error: `Signature verification failed: ${verificationResult.error}` })
-    }
-
-    // Step 4: Verify the message contains the correct action and percentage
-    if (!message.includes('manual_sell') || !message.includes(`${percentage}%`)) {
-      return res.status(400).json({ error: 'Message does not match requested action' })
-    }
-
-    // Step 5: Get current token balance
+    // Get current token balance
     const balances = await walletMonitor.getOpsWalletBalance()
     if (!balances || balances.token_balance <= 0) {
       return res.status(400).json({ error: 'No tokens available to sell' })
     }
 
-    // Step 6: Calculate amount to sell
+    // Calculate amount to sell
     const tokenAmount = balances.token_balance * (percentage / 100)
 
-    loggers.server.info({ percentage, tokenAmount }, 'Manual sell initiated')
+    loggers.server.info({ percentage, tokenAmount, privyUserId: req.privyUserId }, 'Manual sell initiated by admin')
 
-    // Step 7: Temporarily enable market making for this operation
+    // Temporarily enable market making for this operation
     const wasEnabled = marketMaker.getStats().isEnabled
     if (!wasEnabled) {
       marketMaker.enable()
     }
 
-    // Step 8: Execute the sell (bypass cap for manual sells - user explicitly requested this amount)
+    // Execute the sell (bypass cap for manual sells - admin explicitly requested this amount)
     const result = await marketMaker.executeSell(tokenAmount, { bypassCap: true })
 
     // Restore previous state
@@ -379,81 +249,16 @@ router.post('/manual-sell', async (req: Request, res: Response) => {
   }
 })
 
-/**
- * POST /api/admin/manual-sell/nonce
- * Generate a nonce message for manual sell signature
- */
-router.post('/manual-sell/nonce', (req: Request, res: Response) => {
-  const { percentage } = req.body
-
-  if (!percentage || ![25, 50, 100].includes(percentage)) {
-    return res.status(400).json({
-      error: 'Invalid percentage. Must be 25, 50, or 100.',
-    })
-  }
-
-  const { message, timestamp, nonce } = generateSecureNonceMessage('manual_sell', `${percentage}%`)
-
-  res.json({ message, timestamp, nonce, percentage })
-})
-
 // ═══════════════════════════════════════════════════════════════════════════
 // ADMIN TOKEN MANAGEMENT
 // View and manage all registered tokens across all users
 // ═══════════════════════════════════════════════════════════════════════════
 
 /**
- * Middleware to verify admin authorization via wallet signature
- */
-async function verifyAdminAuth(req: Request, res: Response, next: Function) {
-  try {
-    const signature = req.headers['x-wallet-signature'] as string
-    let message = req.headers['x-wallet-message'] as string
-    const publicKey = req.headers['x-wallet-pubkey'] as string
-    const messageEncoding = req.headers['x-message-encoding'] as string
-
-    if (!signature || !message || !publicKey) {
-      return res.status(401).json({ error: 'Missing authentication headers' })
-    }
-
-    // Decode base64 message if encoding header is present
-    if (message && messageEncoding === 'base64') {
-      try {
-        message = decodeURIComponent(escape(Buffer.from(message, 'base64').toString('utf8')))
-      } catch (e) {
-        return res.status(400).json({ error: 'Invalid base64 message encoding' })
-      }
-    }
-
-    // Verify the public key matches the authorized dev wallet
-    const authorizedWallet = env.devWalletAddress
-    if (!authorizedWallet || publicKey !== authorizedWallet) {
-      return res.status(403).json({ error: 'Unauthorized: wallet not authorized for admin actions' })
-    }
-
-    // Verify the message is recent
-    if (!isMessageRecent(message, 5 * 60 * 1000)) { // 5 minute window for browsing (reduced from 10 min)
-      return res.status(400).json({ error: 'Session expired. Please re-authenticate.' })
-    }
-
-    // Verify the signature
-    const verificationResult = verifySignature(message, signature, publicKey)
-    if (!verificationResult.valid) {
-      return res.status(401).json({ error: 'Invalid signature' })
-    }
-
-    next()
-  } catch (error) {
-    loggers.server.error({ error: String(error) }, 'Admin auth error')
-    return res.status(500).json({ error: 'Authentication failed' })
-  }
-}
-
-/**
  * GET /api/admin/tokens
  * List all registered tokens with their status (admin only)
  */
-router.get('/tokens', verifyAdminAuth, async (req: Request, res: Response) => {
+router.get('/tokens', requireAdmin, async (req: AdminRequest, res: Response) => {
   try {
     if (!supabase) {
       return res.status(500).json({ error: 'Database not configured' })
@@ -564,7 +369,7 @@ router.get('/tokens', verifyAdminAuth, async (req: Request, res: Response) => {
  * GET /api/admin/tokens/:id
  * Get detailed info for a specific token (admin only)
  */
-router.get('/tokens/:id', verifyAdminAuth, async (req: Request, res: Response) => {
+router.get('/tokens/:id', requireAdmin, async (req: AdminRequest, res: Response) => {
   try {
     if (!supabase) {
       return res.status(500).json({ error: 'Database not configured' })
@@ -619,7 +424,7 @@ router.get('/tokens/:id', verifyAdminAuth, async (req: Request, res: Response) =
  * POST /api/admin/tokens/:id/verify
  * Mark a token as verified (admin only)
  */
-router.post('/tokens/:id/verify', verifyAdminAuth, async (req: Request, res: Response) => {
+router.post('/tokens/:id/verify', requireAdmin, async (req: AdminRequest, res: Response) => {
   try {
     if (!supabase) {
       return res.status(500).json({ error: 'Database not configured' })
@@ -653,7 +458,7 @@ router.post('/tokens/:id/verify', verifyAdminAuth, async (req: Request, res: Res
  * POST /api/admin/tokens/:id/suspend
  * Suspend a token (admin only)
  */
-router.post('/tokens/:id/suspend', verifyAdminAuth, async (req: Request, res: Response) => {
+router.post('/tokens/:id/suspend', requireAdmin, async (req: AdminRequest, res: Response) => {
   try {
     if (!supabase) {
       return res.status(500).json({ error: 'Database not configured' })
@@ -711,7 +516,7 @@ router.post('/tokens/:id/suspend', verifyAdminAuth, async (req: Request, res: Re
  * POST /api/admin/tokens/:id/unsuspend
  * Remove suspension from a token (admin only)
  */
-router.post('/tokens/:id/unsuspend', verifyAdminAuth, async (req: Request, res: Response) => {
+router.post('/tokens/:id/unsuspend', requireAdmin, async (req: AdminRequest, res: Response) => {
   try {
     if (!supabase) {
       return res.status(500).json({ error: 'Database not configured' })
@@ -748,7 +553,7 @@ router.post('/tokens/:id/unsuspend', verifyAdminAuth, async (req: Request, res: 
  * PUT /api/admin/tokens/:id/limits
  * Update trading limits for a token (admin only)
  */
-router.put('/tokens/:id/limits', verifyAdminAuth, async (req: Request, res: Response) => {
+router.put('/tokens/:id/limits', requireAdmin, async (req: AdminRequest, res: Response) => {
   try {
     if (!supabase) {
       return res.status(500).json({ error: 'Database not configured' })
@@ -818,7 +623,7 @@ router.put('/tokens/:id/limits', verifyAdminAuth, async (req: Request, res: Resp
  * GET /api/admin/platform-stats
  * Get platform-wide statistics (admin only)
  */
-router.get('/platform-stats', verifyAdminAuth, async (req: Request, res: Response) => {
+router.get('/platform-stats', requireAdmin, async (req: AdminRequest, res: Response) => {
   try {
     if (!supabase) {
       return res.status(500).json({ error: 'Database not configured' })
@@ -871,19 +676,10 @@ router.get('/platform-stats', verifyAdminAuth, async (req: Request, res: Respons
 })
 
 /**
- * POST /api/admin/auth/nonce
- * Generate a nonce for admin authentication
- */
-router.post('/auth/nonce', (req: Request, res: Response) => {
-  const { message, timestamp, nonce } = generateSecureNonceMessage('admin_auth', 'access')
-  res.json({ message, timestamp, nonce })
-})
-
-/**
  * POST /api/admin/tokens/suspend-all
  * Suspend all user tokens except the platform's own token (admin only)
  */
-router.post('/tokens/suspend-all', verifyAdminAuth, async (req: Request, res: Response) => {
+router.post('/tokens/suspend-all', requireAdmin, async (req: AdminRequest, res: Response) => {
   try {
     if (!supabase) {
       return res.status(500).json({ error: 'Database not configured' })
@@ -959,7 +755,7 @@ router.post('/tokens/suspend-all', verifyAdminAuth, async (req: Request, res: Re
  * POST /api/admin/tokens/unsuspend-all
  * Unsuspend all user tokens (admin only)
  */
-router.post('/tokens/unsuspend-all', verifyAdminAuth, async (req: Request, res: Response) => {
+router.post('/tokens/unsuspend-all', requireAdmin, async (req: AdminRequest, res: Response) => {
   try {
     if (!supabase) {
       return res.status(500).json({ error: 'Database not configured' })
@@ -1016,7 +812,7 @@ router.post('/tokens/unsuspend-all', verifyAdminAuth, async (req: Request, res: 
  * PUT /api/admin/platform-settings
  * Update platform job settings (claim interval, max trades) (admin only)
  */
-router.put('/platform-settings', verifyAdminAuth, async (req: Request, res: Response) => {
+router.put('/platform-settings', requireAdmin, async (req: AdminRequest, res: Response) => {
   try {
     const { claimIntervalMinutes, flywheelIntervalMinutes, maxTradesPerMinute } = req.body
 
@@ -1070,7 +866,7 @@ router.put('/platform-settings', verifyAdminAuth, async (req: Request, res: Resp
  * GET /api/admin/platform-settings
  * Get current platform job settings (admin only)
  */
-router.get('/platform-settings', verifyAdminAuth, async (req: Request, res: Response) => {
+router.get('/platform-settings', requireAdmin, async (req: AdminRequest, res: Response) => {
   try {
     return res.json({
       success: true,
@@ -1097,7 +893,7 @@ router.get('/platform-settings', verifyAdminAuth, async (req: Request, res: Resp
  * GET /api/admin/fast-claim/status
  * Get fast claim job status (admin only)
  */
-router.get('/fast-claim/status', verifyAdminAuth, async (req: Request, res: Response) => {
+router.get('/fast-claim/status', requireAdmin, async (req: AdminRequest, res: Response) => {
   try {
     const status = getFastClaimJobStatus()
 
@@ -1122,7 +918,7 @@ router.get('/fast-claim/status', verifyAdminAuth, async (req: Request, res: Resp
  * POST /api/admin/fast-claim/trigger
  * Manually trigger a fast claim cycle (admin only)
  */
-router.post('/fast-claim/trigger', verifyAdminAuth, async (req: Request, res: Response) => {
+router.post('/fast-claim/trigger', requireAdmin, requirePermission('trigger_jobs'), async (req: AdminRequest, res: Response) => {
   try {
     loggers.server.info('Admin triggered manual fast claim cycle')
 
@@ -1145,7 +941,7 @@ router.post('/fast-claim/trigger', verifyAdminAuth, async (req: Request, res: Re
  * POST /api/admin/fast-claim/restart
  * Restart fast claim job with optional new interval (admin only)
  */
-router.post('/fast-claim/restart', verifyAdminAuth, async (req: Request, res: Response) => {
+router.post('/fast-claim/restart', requireAdmin, requirePermission('trigger_jobs'), async (req: AdminRequest, res: Response) => {
   try {
     const { intervalSeconds } = req.body
 
@@ -1182,7 +978,7 @@ router.post('/fast-claim/restart', verifyAdminAuth, async (req: Request, res: Re
  * GET /api/admin/balance-update/status
  * Get balance update job status (admin only)
  */
-router.get('/balance-update/status', verifyAdminAuth, async (req: Request, res: Response) => {
+router.get('/balance-update/status', requireAdmin, async (req: AdminRequest, res: Response) => {
   try {
     const status = getBalanceUpdateJobStatus()
 
@@ -1204,7 +1000,7 @@ router.get('/balance-update/status', verifyAdminAuth, async (req: Request, res: 
  * POST /api/admin/balance-update/trigger
  * Manually trigger a balance update cycle (admin only)
  */
-router.post('/balance-update/trigger', verifyAdminAuth, async (req: Request, res: Response) => {
+router.post('/balance-update/trigger', requireAdmin, requirePermission('trigger_jobs'), async (req: AdminRequest, res: Response) => {
   try {
     loggers.server.info('Admin triggered manual balance update cycle')
 
@@ -1227,7 +1023,7 @@ router.post('/balance-update/trigger', verifyAdminAuth, async (req: Request, res
  * POST /api/admin/balance-update/restart
  * Restart balance update job with optional new interval (admin only)
  */
-router.post('/balance-update/restart', verifyAdminAuth, async (req: Request, res: Response) => {
+router.post('/balance-update/restart', requireAdmin, requirePermission('trigger_jobs'), async (req: AdminRequest, res: Response) => {
   try {
     const { intervalSeconds } = req.body
 
@@ -1259,7 +1055,7 @@ router.post('/balance-update/restart', verifyAdminAuth, async (req: Request, res
  * GET /api/admin/flywheel-status
  * Get current flywheel status including algorithm mode (admin only)
  */
-router.get('/flywheel-status', verifyAdminAuth, async (req: Request, res: Response) => {
+router.get('/flywheel-status', requireAdmin, async (req: AdminRequest, res: Response) => {
   try {
     const cachedConfig = getCachedConfig()
     const currentMode = getCurrentAlgorithmMode()
@@ -1285,7 +1081,7 @@ router.get('/flywheel-status', verifyAdminAuth, async (req: Request, res: Respon
  * POST /api/admin/config/reload
  * Manually trigger a config reload (admin only)
  */
-router.post('/config/reload', verifyAdminAuth, async (req: Request, res: Response) => {
+router.post('/config/reload', requireAdmin, requirePermission('update_config'), async (req: AdminRequest, res: Response) => {
   try {
     requestConfigReload()
 
@@ -1309,7 +1105,7 @@ router.post('/config/reload', verifyAdminAuth, async (req: Request, res: Respons
  * GET /api/admin/telegram/stats
  * Get launch statistics (admin only)
  */
-router.get('/telegram/stats', verifyAdminAuth, async (req: Request, res: Response) => {
+router.get('/telegram/stats', requireAdmin, async (req: AdminRequest, res: Response) => {
   try {
     const stats = await getLaunchStats()
 
@@ -1327,7 +1123,7 @@ router.get('/telegram/stats', verifyAdminAuth, async (req: Request, res: Respons
  * GET /api/admin/telegram/launches
  * List all pending launches with refund info (admin only)
  */
-router.get('/telegram/launches', verifyAdminAuth, async (req: Request, res: Response) => {
+router.get('/telegram/launches', requireAdmin, async (req: AdminRequest, res: Response) => {
   try {
     if (!supabase) {
       return res.status(500).json({ error: 'Database not configured' })
@@ -1380,7 +1176,7 @@ router.get('/telegram/launches', verifyAdminAuth, async (req: Request, res: Resp
  * GET /api/admin/telegram/refunds
  * Get launches that need refunds (failed/expired with balance) (admin only)
  */
-router.get('/telegram/refunds', verifyAdminAuth, async (req: Request, res: Response) => {
+router.get('/telegram/refunds', requireAdmin, async (req: AdminRequest, res: Response) => {
   try {
     const pendingRefunds = await getPendingRefunds()
 
@@ -1401,7 +1197,7 @@ router.get('/telegram/refunds', verifyAdminAuth, async (req: Request, res: Respo
  * POST /api/admin/telegram/refund/:id
  * Execute a refund for a failed/expired launch (admin only)
  */
-router.post('/telegram/refund/:id', verifyAdminAuth, async (req: Request, res: Response) => {
+router.post('/telegram/refund/:id', requireAdmin, async (req: AdminRequest, res: Response) => {
   try {
     const { id } = req.params
     const { refundAddress } = req.body
@@ -1439,7 +1235,7 @@ router.post('/telegram/refund/:id', verifyAdminAuth, async (req: Request, res: R
  * GET /api/admin/telegram/logs
  * Get Telegram audit logs (admin only)
  */
-router.get('/telegram/logs', verifyAdminAuth, async (req: Request, res: Response) => {
+router.get('/telegram/logs', requireAdmin, async (req: AdminRequest, res: Response) => {
   try {
     const { limit = 100, event_type } = req.query
 
@@ -1482,7 +1278,7 @@ router.get('/telegram/logs', verifyAdminAuth, async (req: Request, res: Response
  * GET /api/admin/telegram/launch/:id
  * Get detailed info for a specific launch (admin only)
  */
-router.get('/telegram/launch/:id', verifyAdminAuth, async (req: Request, res: Response) => {
+router.get('/telegram/launch/:id', requireAdmin, async (req: AdminRequest, res: Response) => {
   try {
     if (!supabase) {
       return res.status(500).json({ error: 'Database not configured' })
@@ -1527,7 +1323,7 @@ router.get('/telegram/launch/:id', verifyAdminAuth, async (req: Request, res: Re
  * POST /api/admin/telegram/launch/:id/cancel
  * Cancel a pending launch (admin only)
  */
-router.post('/telegram/launch/:id/cancel', verifyAdminAuth, async (req: Request, res: Response) => {
+router.post('/telegram/launch/:id/cancel', requireAdmin, async (req: AdminRequest, res: Response) => {
   try {
     if (!supabase) {
       return res.status(500).json({ error: 'Database not configured' })
@@ -1605,7 +1401,7 @@ router.post('/telegram/launch/:id/cancel', verifyAdminAuth, async (req: Request,
  * GET /api/admin/telegram/bot-health
  * Get bot and deposit monitor health status (admin only)
  */
-router.get('/telegram/bot-health', verifyAdminAuth, async (req: Request, res: Response) => {
+router.get('/telegram/bot-health', requireAdmin, async (req: AdminRequest, res: Response) => {
   try {
     if (!supabase) {
       return res.status(500).json({ error: 'Database not configured' })
@@ -1668,7 +1464,7 @@ router.get('/telegram/bot-health', verifyAdminAuth, async (req: Request, res: Re
  * GET /api/admin/telegram/financial-metrics
  * Get financial metrics for Telegram launches (admin only)
  */
-router.get('/telegram/financial-metrics', verifyAdminAuth, async (req: Request, res: Response) => {
+router.get('/telegram/financial-metrics', requireAdmin, async (req: AdminRequest, res: Response) => {
   try {
     if (!supabase) {
       return res.status(500).json({ error: 'Database not configured' })
@@ -1747,7 +1543,7 @@ router.get('/telegram/financial-metrics', verifyAdminAuth, async (req: Request, 
  * GET /api/admin/telegram/users
  * Get list of Telegram users with their launch counts (admin only)
  */
-router.get('/telegram/users', verifyAdminAuth, async (req: Request, res: Response) => {
+router.get('/telegram/users', requireAdmin, async (req: AdminRequest, res: Response) => {
   try {
     if (!supabase) {
       return res.status(500).json({ error: 'Database not configured' })
@@ -1812,7 +1608,7 @@ router.get('/telegram/users', verifyAdminAuth, async (req: Request, res: Respons
  * POST /api/admin/telegram/bulk-refund
  * Execute refunds for multiple launches (admin only)
  */
-router.post('/telegram/bulk-refund', verifyAdminAuth, async (req: Request, res: Response) => {
+router.post('/telegram/bulk-refund', requireAdmin, async (req: AdminRequest, res: Response) => {
   try {
     const { launchIds } = req.body
 
@@ -1896,7 +1692,7 @@ router.post('/telegram/bulk-refund', verifyAdminAuth, async (req: Request, res: 
  * GET /api/admin/telegram/launches/search
  * Search launches with advanced filters (admin only)
  */
-router.get('/telegram/launches/search', verifyAdminAuth, async (req: Request, res: Response) => {
+router.get('/telegram/launches/search', requireAdmin, async (req: AdminRequest, res: Response) => {
   try {
     if (!supabase) {
       return res.status(500).json({ error: 'Database not configured' })
@@ -1988,7 +1784,7 @@ router.get('/telegram/launches/search', verifyAdminAuth, async (req: Request, re
  * GET /api/admin/telegram/export
  * Export launches data as JSON (admin only)
  */
-router.get('/telegram/export', verifyAdminAuth, async (req: Request, res: Response) => {
+router.get('/telegram/export', requireAdmin, async (req: AdminRequest, res: Response) => {
   try {
     if (!supabase) {
       return res.status(500).json({ error: 'Database not configured' })
@@ -2069,7 +1865,7 @@ router.get('/telegram/export', verifyAdminAuth, async (req: Request, res: Respon
  * GET /api/admin/telegram/chart-data
  * Get time-series data for charts (admin only)
  */
-router.get('/telegram/chart-data', verifyAdminAuth, async (req: Request, res: Response) => {
+router.get('/telegram/chart-data', requireAdmin, async (req: AdminRequest, res: Response) => {
   try {
     if (!supabase) {
       return res.status(500).json({ error: 'Database not configured' })
@@ -2235,7 +2031,7 @@ router.get('/telegram/chart-data', verifyAdminAuth, async (req: Request, res: Re
  * GET /api/admin/telegram/alerts/status
  * Get bot status and subscriber count (admin only)
  */
-router.get('/telegram/alerts/status', verifyAdminAuth, async (req: Request, res: Response) => {
+router.get('/telegram/alerts/status', requireAdmin, async (req: AdminRequest, res: Response) => {
   try {
     const {
       getBotStatus,
@@ -2271,7 +2067,7 @@ router.get('/telegram/alerts/status', verifyAdminAuth, async (req: Request, res:
  * POST /api/admin/telegram/maintenance/enable
  * Enable maintenance mode and notify subscribers (admin only)
  */
-router.post('/telegram/maintenance/enable', verifyAdminAuth, async (req: Request, res: Response) => {
+router.post('/telegram/maintenance/enable', requireAdmin, async (req: AdminRequest, res: Response) => {
   try {
     const { reason, estimatedEndTime, notifyUsers = true } = req.body
 
@@ -2310,7 +2106,7 @@ router.post('/telegram/maintenance/enable', verifyAdminAuth, async (req: Request
  * POST /api/admin/telegram/maintenance/disable
  * Disable maintenance mode and notify subscribers (admin only)
  */
-router.post('/telegram/maintenance/disable', verifyAdminAuth, async (req: Request, res: Response) => {
+router.post('/telegram/maintenance/disable', requireAdmin, async (req: AdminRequest, res: Response) => {
   try {
     const { notifyUsers = true } = req.body
 
@@ -2341,7 +2137,7 @@ router.post('/telegram/maintenance/disable', verifyAdminAuth, async (req: Reques
  * POST /api/admin/telegram/broadcast
  * Send a broadcast message to all alert subscribers (admin only)
  */
-router.post('/telegram/broadcast', verifyAdminAuth, async (req: Request, res: Response) => {
+router.post('/telegram/broadcast', requireAdmin, async (req: AdminRequest, res: Response) => {
   try {
     const { title, body } = req.body
 
@@ -2386,7 +2182,7 @@ router.post('/telegram/broadcast', verifyAdminAuth, async (req: Request, res: Re
  * POST /api/admin/telegram/broadcast/preview
  * Preview a broadcast message (admin only)
  */
-router.post('/telegram/broadcast/preview', verifyAdminAuth, async (req: Request, res: Response) => {
+router.post('/telegram/broadcast/preview', requireAdmin, async (req: AdminRequest, res: Response) => {
   try {
     const { title, body } = req.body
 
@@ -2427,7 +2223,7 @@ _Use /alerts to manage your subscription._`
  * POST /api/admin/flywheel/trigger
  * Manually trigger a multi-user flywheel cycle (admin only)
  */
-router.post('/flywheel/trigger', verifyAdminAuth, async (req: Request, res: Response) => {
+router.post('/flywheel/trigger', requireAdmin, requirePermission('trigger_jobs'), async (req: AdminRequest, res: Response) => {
   try {
     const { maxTrades } = req.body
 
@@ -2458,7 +2254,7 @@ router.post('/flywheel/trigger', verifyAdminAuth, async (req: Request, res: Resp
  * POST /api/admin/migrate-orphaned-launches
  * Find and migrate completed launches without user_tokens records (admin only)
  */
-router.post('/migrate-orphaned-launches', verifyAdminAuth, async (req: Request, res: Response) => {
+router.post('/migrate-orphaned-launches', requireAdmin, async (req: AdminRequest, res: Response) => {
   try {
     if (!supabase) {
       return res.status(500).json({ error: 'Database not configured' })
@@ -2663,7 +2459,7 @@ router.post('/migrate-orphaned-launches', verifyAdminAuth, async (req: Request, 
  * GET /api/admin/orphaned-launches
  * Get list of orphaned launches that need migration (admin only)
  */
-router.get('/orphaned-launches', verifyAdminAuth, async (req: Request, res: Response) => {
+router.get('/orphaned-launches', requireAdmin, async (req: AdminRequest, res: Response) => {
   try {
     if (!supabase) {
       return res.status(500).json({ error: 'Database not configured' })
@@ -2716,7 +2512,7 @@ const RENT_RESERVE_SOL = 0.001
  * POST /api/admin/tokens/:id/stop-and-refund
  * Stop flywheel for a token and refund remaining SOL to original funder (admin only)
  */
-router.post('/tokens/:id/stop-and-refund', verifyAdminAuth, async (req: Request, res: Response) => {
+router.post('/tokens/:id/stop-and-refund', requireAdmin, async (req: AdminRequest, res: Response) => {
   try {
     if (!supabase) {
       return res.status(500).json({ error: 'Database not configured' })
@@ -3010,7 +2806,7 @@ Use /launch to start a new token!`
  * GET /api/admin/tokens/:id/refund-preview
  * Preview what would be refunded for a token (admin only)
  */
-router.get('/tokens/:id/refund-preview', verifyAdminAuth, async (req: Request, res: Response) => {
+router.get('/tokens/:id/refund-preview', requireAdmin, async (req: AdminRequest, res: Response) => {
   try {
     if (!supabase) {
       return res.status(500).json({ error: 'Database not configured' })
@@ -3105,7 +2901,7 @@ router.get('/tokens/:id/refund-preview', verifyAdminAuth, async (req: Request, r
  * GET /api/admin/wheel
  * Get $WHEEL platform token data (admin only)
  */
-router.get('/wheel', verifyAdminAuth, async (req: Request, res: Response) => {
+router.get('/wheel', requireAdmin, async (req: AdminRequest, res: Response) => {
   try {
     if (!supabase) {
       return res.status(500).json({ error: 'Database not configured' })
@@ -3278,7 +3074,7 @@ router.get('/wheel', verifyAdminAuth, async (req: Request, res: Response) => {
  * POST /api/admin/wheel/sell
  * Execute manual sell for platform token (admin only)
  */
-router.post('/wheel/sell', verifyAdminAuth, async (req: Request, res: Response) => {
+router.post('/wheel/sell', requireAdmin, requirePermission('trigger_jobs'), async (req: AdminRequest, res: Response) => {
   try {
     const { percentage } = req.body
 
@@ -3311,7 +3107,7 @@ router.post('/wheel/sell', verifyAdminAuth, async (req: Request, res: Response) 
  * GET /api/admin/wheel/claimable
  * Check claimable fees for WHEEL token (for debugging)
  */
-router.get('/wheel/claimable', verifyAdminAuth, async (_req: Request, res: Response) => {
+router.get('/wheel/claimable', requireAdmin, async (_req: AdminRequest, res: Response) => {
   try {
     const devWallet = getDevWallet()
 
@@ -3349,7 +3145,7 @@ router.get('/wheel/claimable', verifyAdminAuth, async (_req: Request, res: Respo
  * POST /api/admin/wheel/claim
  * Manually trigger WHEEL claim (for debugging)
  */
-router.post('/wheel/claim', verifyAdminAuth, async (_req: Request, res: Response) => {
+router.post('/wheel/claim', requireAdmin, requirePermission('trigger_jobs'), async (_req: AdminRequest, res: Response) => {
   try {
     const { wheelClaimService } = await import('../services/wheel-claim.service')
 
@@ -3407,36 +3203,20 @@ router.post('/wheel/claim', verifyAdminAuth, async (_req: Request, res: Response
  * GET /api/admin/settings
  * Get platform settings (admin only)
  */
-router.get('/settings', verifyAdminAuth, async (_req: Request, res: Response) => {
+router.get('/settings', requireAdmin, async (_req: AdminRequest, res: Response) => {
   try {
     // Get job status intervals from environment
     const claimJobStatus = getClaimJobStatus()
     const flywheelJobStatus = getMultiUserFlywheelJobStatus()
     const fastClaimJobStatus = getFastClaimJobStatus()
 
-    // Get WHEEL config from database
-    let wheelConfig = {
-      wheelMinBuySol: 0.01,
-      wheelMaxBuySol: 0.1,
-      wheelMinSellSol: 0.01,
-      wheelMaxSellSol: 0.1,
-    }
-
-    if (supabase) {
-      const { data: config } = await supabase
-        .from('config')
-        .select('min_buy_amount_sol, max_buy_amount_sol, min_sell_amount_sol, max_sell_amount_sol')
-        .eq('id', 'main')
-        .single()
-
-      if (config) {
-        wheelConfig = {
-          wheelMinBuySol: Number(config.min_buy_amount_sol) || 0.01,
-          wheelMaxBuySol: Number(config.max_buy_amount_sol) || 0.1,
-          wheelMinSellSol: Number(config.min_sell_amount_sol) || 0.01,
-          wheelMaxSellSol: Number(config.max_sell_amount_sol) || 0.1,
-        }
-      }
+    // Get WHEEL config from Prisma PlatformConfig
+    const platformConfig = await platformConfigService.getConfig()
+    const wheelConfig = {
+      wheelMinBuySol: platformConfig.wheelMinBuySol,
+      wheelMaxBuySol: platformConfig.wheelMaxBuySol,
+      wheelMinSellSol: platformConfig.wheelMinSellSol,
+      wheelMaxSellSol: platformConfig.wheelMaxSellSol,
     }
 
     return res.json({
@@ -3462,7 +3242,7 @@ router.get('/settings', verifyAdminAuth, async (_req: Request, res: Response) =>
  * POST /api/admin/settings
  * Update platform settings (admin only)
  */
-router.post('/settings', verifyAdminAuth, async (req: Request, res: Response) => {
+router.post('/settings', requireAdmin, requirePermission('update_config'), async (req: AdminRequest, res: Response) => {
   try {
     const {
       claimJobIntervalMinutes,
@@ -3577,7 +3357,7 @@ router.post('/settings', verifyAdminAuth, async (req: Request, res: Response) =>
  * POST /api/admin/emergency-stop
  * Emergency stop all automation (admin only)
  */
-router.post('/emergency-stop', verifyAdminAuth, async (req: Request, res: Response) => {
+router.post('/emergency-stop', requireAdmin, async (req: AdminRequest, res: Response) => {
   try {
     const { reason } = req.body
 
@@ -3636,7 +3416,7 @@ router.post('/emergency-stop', verifyAdminAuth, async (req: Request, res: Respon
  * POST /api/admin/clear-caches
  * Clear all caches (admin only)
  */
-router.post('/clear-caches', verifyAdminAuth, async (req: Request, res: Response) => {
+router.post('/clear-caches', requireAdmin, async (req: AdminRequest, res: Response) => {
   try {
     // Clear any in-memory caches
     // This is mainly a placeholder for future cache implementations
@@ -3651,6 +3431,65 @@ router.post('/clear-caches', verifyAdminAuth, async (req: Request, res: Response
     })
   } catch (error) {
     console.error('Error clearing caches:', error)
+    return res.status(500).json({ error: 'Internal server error' })
+  }
+})
+
+// ═══════════════════════════════════════════════════════════════════════════
+// DISCORD ERROR REPORTING
+// ═══════════════════════════════════════════════════════════════════════════
+
+import { discordErrorService } from '../services/discord-error.service'
+
+/**
+ * GET /api/admin/discord/stats
+ * Get Discord error reporting stats
+ */
+router.get('/discord/stats', requireAdmin, async (_req: AdminRequest, res: Response) => {
+  try {
+    const stats = discordErrorService.getStats()
+    return res.json({
+      success: true,
+      data: stats,
+    })
+  } catch (error) {
+    console.error('Error getting Discord stats:', error)
+    return res.status(500).json({ error: 'Internal server error' })
+  }
+})
+
+/**
+ * POST /api/admin/discord/test
+ * Send a test error to Discord webhook
+ */
+router.post('/discord/test', requireAdmin, async (req: AdminRequest, res: Response) => {
+  try {
+    const stats = discordErrorService.getStats()
+
+    if (!stats.webhookConfigured) {
+      return res.status(400).json({
+        success: false,
+        error: 'Discord webhook not configured. Set DISCORD_ERROR_WEBHOOK_URL in environment.',
+      })
+    }
+
+    if (!stats.enabled) {
+      return res.status(400).json({
+        success: false,
+        error: 'Discord error reporting is disabled. Set DISCORD_ERROR_ENABLED=true in environment.',
+      })
+    }
+
+    const sent = await discordErrorService.sendTestError()
+
+    return res.json({
+      success: sent,
+      message: sent
+        ? 'Test error sent to Discord successfully'
+        : 'Failed to send test error to Discord',
+    })
+  } catch (error) {
+    console.error('Error sending Discord test:', error)
     return res.status(500).json({ error: 'Internal server error' })
   }
 })

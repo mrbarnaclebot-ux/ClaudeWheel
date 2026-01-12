@@ -14,7 +14,7 @@ import type { TelegramLaunch } from '../../_types/admin.types'
 const PAGE_SIZE = 20
 
 export function TelegramView() {
-  const { publicKey, signature, message } = useAdminAuth()
+  const { isAuthenticated, getToken } = useAdminAuth()
   const [statusFilter, setStatusFilter] = useState<string>('all')
   const [searchQuery, setSearchQuery] = useState('')
   const [currentPage, setCurrentPage] = useState(1)
@@ -22,16 +22,24 @@ export function TelegramView() {
   // Fetch stats
   const { data: stats, isLoading: isStatsLoading } = useQuery({
     queryKey: adminQueryKeys.telegramStats(),
-    queryFn: () => fetchTelegramStats(publicKey!, signature!, message!),
-    enabled: Boolean(publicKey && signature && message),
+    queryFn: async () => {
+      const token = await getToken()
+      if (!token) return null
+      return fetchTelegramStats(token)
+    },
+    enabled: isAuthenticated,
     staleTime: 10000,
   })
 
   // Fetch bot health
   const { data: botHealth } = useQuery({
     queryKey: adminQueryKeys.telegramHealth(),
-    queryFn: () => fetchBotHealth(publicKey!, signature!, message!),
-    enabled: Boolean(publicKey && signature && message),
+    queryFn: async () => {
+      const token = await getToken()
+      if (!token) return null
+      return fetchBotHealth(token)
+    },
+    enabled: isAuthenticated,
     staleTime: 10000,
   })
 
@@ -42,14 +50,17 @@ export function TelegramView() {
       search: searchQuery,
       page: currentPage,
     }),
-    queryFn: () =>
-      fetchTelegramLaunches(publicKey!, signature!, message!, {
+    queryFn: async () => {
+      const token = await getToken()
+      if (!token) return null
+      return fetchTelegramLaunches(token, {
         status: statusFilter !== 'all' ? statusFilter : undefined,
         search: searchQuery || undefined,
         limit: PAGE_SIZE,
         offset: (currentPage - 1) * PAGE_SIZE,
-      }),
-    enabled: Boolean(publicKey && signature && message),
+      })
+    },
+    enabled: isAuthenticated,
     staleTime: 30000,
   })
 

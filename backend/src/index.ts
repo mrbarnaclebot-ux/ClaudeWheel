@@ -1,7 +1,8 @@
 import express from 'express'
 import cors from 'cors'
 import { env } from './config/env'
-import { loggers } from './utils/logger'
+import { loggers, logFatalWithDiscord } from './utils/logger'
+import { discordErrorService } from './services/discord-error.service'
 import { startMultiUserFlywheelJob } from './jobs/multi-flywheel.job'
 import { startFastClaimJob, stopFastClaimJob } from './jobs/fast-claim.job'
 import { startBalanceUpdateJob, stopBalanceUpdateJob } from './jobs/balance-update.job'
@@ -197,9 +198,51 @@ const server = app.listen(env.port, async () => {
   await initializeServices()
 })
 
-// Graceful shutdown
+// ═══════════════════════════════════════════════════════════════════════════
+// GLOBAL ERROR HANDLERS
+// Catch uncaught exceptions and unhandled rejections, report to Discord
+// ═══════════════════════════════════════════════════════════════════════════
+
+process.on('uncaughtException', async (error: Error, origin: string) => {
+  // Log and report to Discord
+  await logFatalWithDiscord(loggers.server, error, 'Uncaught Exception', {
+    module: 'process',
+    operation: 'uncaughtException',
+    additionalInfo: { origin },
+  })
+
+  // Also use the dedicated method for critical errors
+  await discordErrorService.reportUncaughtException(error, origin)
+
+  // Give Discord time to send before exiting
+  setTimeout(() => {
+    process.exit(1)
+  }, 2000)
+})
+
+process.on('unhandledRejection', async (reason: unknown, promise: Promise<unknown>) => {
+  const error = reason instanceof Error ? reason : new Error(String(reason))
+
+  // Log and report to Discord
+  await logFatalWithDiscord(loggers.server, error, 'Unhandled Promise Rejection', {
+    module: 'process',
+    operation: 'unhandledRejection',
+  })
+
+  // Also use the dedicated method
+  await discordErrorService.reportUnhandledRejection(reason, promise)
+
+  // Don't exit for unhandled rejections - log and continue
+  loggers.server.warn('Continuing after unhandled rejection...')
+})
+
+// ═══════════════════════════════════════════════════════════════════════════
+// GRACEFUL SHUTDOWN
+// ═══════════════════════════════════════════════════════════════════════════
+
 process.on('SIGTERM', () => {
   loggers.server.info('Shutting down gracefully...')
+  discordErrorService.shutdown()
   adminWs.shutdown()
   stopTelegramBot()
   stopDepositMonitorJob()
@@ -213,6 +256,7 @@ process.on('SIGTERM', () => {
 
 process.on('SIGINT', () => {
   loggers.server.info('Shutting down gracefully...')
+  discordErrorService.shutdown()
   adminWs.shutdown()
   stopTelegramBot()
   stopDepositMonitorJob()

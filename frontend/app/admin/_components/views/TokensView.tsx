@@ -23,7 +23,7 @@ import type { UserToken, TokenFilters } from '../../_types/admin.types'
 const PAGE_SIZE = 20
 
 export function TokensView() {
-  const { publicKey, signature, message } = useAdminAuth()
+  const { isAuthenticated, getToken } = useAdminAuth()
   const { tokenFilters, setTokenFilters } = useAdminFilters()
   const [currentPage, setCurrentPage] = useState(1)
   const [selectedToken, setSelectedToken] = useState<UserToken | null>(null)
@@ -31,13 +31,16 @@ export function TokensView() {
   // Fetch tokens
   const { data, isLoading, error } = useQuery({
     queryKey: adminQueryKeys.tokenList({ ...tokenFilters, page: currentPage }),
-    queryFn: () =>
-      fetchAdminTokens(publicKey!, signature!, message!, {
+    queryFn: async () => {
+      const token = await getToken()
+      if (!token) return null
+      return fetchAdminTokens(token, {
         ...tokenFilters,
         limit: PAGE_SIZE,
         offset: (currentPage - 1) * PAGE_SIZE,
-      }),
-    enabled: Boolean(publicKey && signature && message),
+      })
+    },
+    enabled: isAuthenticated,
     staleTime: 30000,
   })
 

@@ -1,7 +1,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 // WHEEL TOKEN MARKET MAKING SERVICE
 // Dedicated flywheel for the platform WHEEL token
-// Uses environment wallet keys and old flywheel_state table
+// Supports Privy delegated signing (preferred) with fallback to env keypairs
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { PublicKey, Connection, Keypair } from '@solana/web3.js'
@@ -11,6 +11,8 @@ import { env } from '../config/env'
 import { loggers } from '../utils/logger'
 import { loadFlywheelState, saveFlywheelState, FlywheelState } from '../config/database'
 import { BagsSDK, signAndSendTransaction } from '@bagsfm/bags-sdk'
+import { privyService } from './privy.service'
+import { prisma, isPrismaConfigured } from '../config/prisma'
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CONSTANTS
@@ -40,6 +42,14 @@ export interface WheelTradeResult {
   error?: string
 }
 
+interface PlatformTokenInfo {
+  tokenId: string
+  devWalletAddress: string
+  devWalletPrivyId: string
+  opsWalletAddress: string
+  opsWalletPrivyId: string
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // SERVICE
 // ═══════════════════════════════════════════════════════════════════════════
@@ -48,6 +58,9 @@ class WheelMMService {
   private isRunning = false
   private lastRunAt: Date | null = null
   private sdk: BagsSDK | null = null
+  private platformTokenCache: PlatformTokenInfo | null = null
+  private platformTokenCacheTime: Date | null = null
+  private readonly CACHE_TTL_MS = 5 * 60 * 1000 // 5 minute cache
 
   constructor() {
     this.initSdk()
@@ -67,8 +80,66 @@ class WheelMMService {
   }
 
   /**
+   * Get the platform WHEEL token from Prisma database
+   * The WHEEL token is registered as a PrivyUserToken with tokenSource='platform'
+   * Returns null if not found (will fall back to keypair signing)
+   */
+  private async getPlatformToken(): Promise<PlatformTokenInfo | null> {
+    // Return cached if still valid
+    if (this.platformTokenCache && this.platformTokenCacheTime) {
+      const cacheAge = Date.now() - this.platformTokenCacheTime.getTime()
+      if (cacheAge < this.CACHE_TTL_MS) {
+        return this.platformTokenCache
+      }
+    }
+
+    if (!isPrismaConfigured()) {
+      loggers.flywheel.debug('WHEEL: Prisma not configured, will use legacy keypair signing')
+      return null
+    }
+
+    try {
+      const token = await prisma.privyUserToken.findFirst({
+        where: {
+          tokenSource: 'platform',
+          tokenMintAddress: WHEEL_TOKEN_MINT,
+        },
+        include: {
+          devWallet: true,
+          opsWallet: true,
+        },
+      })
+
+      if (!token) {
+        loggers.flywheel.debug('WHEEL: Platform token not found in Prisma, will use legacy keypair signing')
+        return null
+      }
+
+      this.platformTokenCache = {
+        tokenId: token.id,
+        devWalletAddress: token.devWallet.walletAddress,
+        devWalletPrivyId: token.devWallet.privyWalletId,
+        opsWalletAddress: token.opsWallet.walletAddress,
+        opsWalletPrivyId: token.opsWallet.privyWalletId,
+      }
+      this.platformTokenCacheTime = new Date()
+
+      loggers.flywheel.info({
+        tokenId: token.id,
+        devWallet: token.devWallet.walletAddress,
+        opsWallet: token.opsWallet.walletAddress,
+      }, 'WHEEL: Platform token loaded from Prisma')
+
+      return this.platformTokenCache
+    } catch (error) {
+      loggers.flywheel.warn({ error: String(error) }, 'WHEEL: Failed to load platform token, will use legacy keypair')
+      return null
+    }
+  }
+
+  /**
    * Run a single flywheel cycle for the WHEEL token
-   * Uses Bags SDK for trading
+   * Tries Privy delegated signing first, falls back to keypair signing
    */
   async runFlywheelCycle(): Promise<WheelTradeResult | null> {
     if (this.isRunning) {
@@ -88,13 +159,6 @@ class WheelMMService {
         return null
       }
 
-      // Get wallets from environment
-      const opsWallet = getOpsWallet()
-      if (!opsWallet) {
-        loggers.flywheel.error('WHEEL ops wallet not configured')
-        return null
-      }
-
       const connection = getConnection()
 
       // Load flywheel state
@@ -105,8 +169,24 @@ class WheelMMService {
         sellCount: state.sell_count,
       }, 'WHEEL flywheel state')
 
-      // Execute trade based on current phase
-      const result = await this.executeTrade(state, opsWallet, connection)
+      // Try Privy delegated signing first
+      const platformToken = await this.getPlatformToken()
+
+      let result: WheelTradeResult | null
+      if (platformToken && privyService.canSignTransactions()) {
+        // Use Privy delegated signing
+        loggers.flywheel.debug('WHEEL: Using Privy delegated signing')
+        result = await this.executeTradeWithPrivy(state, platformToken, connection)
+      } else {
+        // Fallback to legacy keypair signing
+        const opsWallet = getOpsWallet()
+        if (!opsWallet) {
+          loggers.flywheel.error('WHEEL: Neither Privy nor keypair signing available')
+          return null
+        }
+        loggers.flywheel.debug('WHEEL: Using legacy keypair signing')
+        result = await this.executeTradeWithKeypair(state, opsWallet, connection)
+      }
 
       this.lastRunAt = new Date()
       loggers.flywheel.info({
@@ -125,9 +205,173 @@ class WheelMMService {
   }
 
   /**
-   * Execute a trade based on current flywheel state
+   * Execute a trade using Privy delegated signing
    */
-  private async executeTrade(
+  private async executeTradeWithPrivy(
+    state: FlywheelState,
+    platformToken: PlatformTokenInfo,
+    connection: Connection
+  ): Promise<WheelTradeResult | null> {
+    const tokenMint = new PublicKey(WHEEL_TOKEN_MINT)
+    const walletPubkey = new PublicKey(platformToken.opsWalletAddress)
+
+    if (state.cycle_phase === 'buy') {
+      // Check SOL balance
+      const solBalance = await getBalance(walletPubkey)
+      const minRequired = MIN_BUY_AMOUNT_SOL + 0.01 // reserve for fees
+
+      if (solBalance < minRequired) {
+        loggers.flywheel.info({ solBalance, minRequired }, 'WHEEL: Insufficient SOL for buy')
+        return null
+      }
+
+      // Random amount within bounds
+      const buyAmount = this.randomBetween(MIN_BUY_AMOUNT_SOL, MAX_BUY_AMOUNT_SOL)
+      const lamports = Math.floor(buyAmount * 1e9)
+
+      loggers.flywheel.info({
+        buyAmount,
+        buyCount: state.buy_count,
+        maxBuys: BUYS_PER_CYCLE,
+        signingMethod: 'privy',
+      }, 'WHEEL: Executing BUY via Bags SDK with Privy signing')
+
+      // Get quote from Bags SDK
+      const quote = await this.sdk!.trade.getQuote({
+        inputMint: new PublicKey(SOL_MINT),
+        outputMint: new PublicKey(WHEEL_TOKEN_MINT),
+        amount: lamports,
+        slippageMode: 'manual',
+        slippageBps: SLIPPAGE_BPS,
+      })
+
+      if (!quote) {
+        loggers.flywheel.error('WHEEL: Failed to get Bags SDK quote for buy')
+        return { success: false, tradeType: 'buy', amount: buyAmount, error: 'Failed to get quote' }
+      }
+
+      // Execute swap via Privy delegated signing
+      const signature = await this.executeSwapWithPrivy(connection, platformToken.opsWalletAddress, quote)
+
+      if (!signature) {
+        return { success: false, tradeType: 'buy', amount: buyAmount, error: 'Swap failed' }
+      }
+
+      // Update state
+      const newBuyCount = state.buy_count + 1
+      if (newBuyCount >= BUYS_PER_CYCLE) {
+        // Switch to sell phase
+        const tokenBalance = await getTokenBalance(walletPubkey, tokenMint)
+        await saveFlywheelState({
+          cycle_phase: 'sell',
+          buy_count: 0,
+          sell_count: 0,
+          sell_phase_token_snapshot: tokenBalance,
+          sell_amount_per_tx: tokenBalance / SELLS_PER_CYCLE,
+        })
+        loggers.flywheel.info({ tokenBalance }, 'WHEEL: Completed buy phase, switching to sell')
+      } else {
+        await saveFlywheelState({
+          ...state,
+          buy_count: newBuyCount,
+        })
+      }
+
+      await this.recordTransaction('buy', buyAmount, signature)
+      return { success: true, tradeType: 'buy', amount: buyAmount, signature }
+
+    } else {
+      // SELL PHASE
+      const tokenBalance = await getTokenBalance(walletPubkey, tokenMint)
+
+      if (tokenBalance < 1) {
+        loggers.flywheel.info('WHEEL: No tokens to sell, switching to buy phase')
+        await saveFlywheelState({
+          cycle_phase: 'buy',
+          buy_count: 0,
+          sell_count: 0,
+          sell_phase_token_snapshot: 0,
+          sell_amount_per_tx: 0,
+        })
+        return null
+      }
+
+      // Calculate sell amount
+      const sellAmount = Math.min(
+        state.sell_amount_per_tx || tokenBalance / SELLS_PER_CYCLE,
+        tokenBalance * 0.3 // Max 30% per trade
+      )
+
+      if (sellAmount < 1) {
+        loggers.flywheel.info('WHEEL: Sell amount too small, switching to buy phase')
+        await saveFlywheelState({
+          cycle_phase: 'buy',
+          buy_count: 0,
+          sell_count: 0,
+          sell_phase_token_snapshot: 0,
+          sell_amount_per_tx: 0,
+        })
+        return null
+      }
+
+      const tokenUnits = Math.floor(sellAmount * Math.pow(10, WHEEL_TOKEN_DECIMALS))
+
+      loggers.flywheel.info({
+        sellAmount,
+        sellCount: state.sell_count,
+        maxSells: SELLS_PER_CYCLE,
+        signingMethod: 'privy',
+      }, 'WHEEL: Executing SELL via Bags SDK with Privy signing')
+
+      // Get quote from Bags SDK
+      const quote = await this.sdk!.trade.getQuote({
+        inputMint: new PublicKey(WHEEL_TOKEN_MINT),
+        outputMint: new PublicKey(SOL_MINT),
+        amount: tokenUnits,
+        slippageMode: 'manual',
+        slippageBps: SLIPPAGE_BPS,
+      })
+
+      if (!quote) {
+        loggers.flywheel.error('WHEEL: Failed to get Bags SDK quote for sell')
+        return { success: false, tradeType: 'sell', amount: sellAmount, error: 'Failed to get quote' }
+      }
+
+      // Execute swap via Privy delegated signing
+      const signature = await this.executeSwapWithPrivy(connection, platformToken.opsWalletAddress, quote)
+
+      if (!signature) {
+        return { success: false, tradeType: 'sell', amount: sellAmount, error: 'Swap failed' }
+      }
+
+      // Update state
+      const newSellCount = state.sell_count + 1
+      if (newSellCount >= SELLS_PER_CYCLE) {
+        // Switch back to buy phase
+        await saveFlywheelState({
+          cycle_phase: 'buy',
+          buy_count: 0,
+          sell_count: 0,
+          sell_phase_token_snapshot: 0,
+          sell_amount_per_tx: 0,
+        })
+        loggers.flywheel.info('WHEEL: Completed sell phase, switching to buy')
+      } else {
+        await saveFlywheelState({
+          ...state,
+          sell_count: newSellCount,
+        })
+      }
+
+      await this.recordTransaction('sell', sellAmount, signature)
+      return { success: true, tradeType: 'sell', amount: sellAmount, signature }
+    }
+  }
+
+  /**
+   * Execute a trade using legacy keypair signing (fallback)
+   */
+  private async executeTradeWithKeypair(
     state: FlywheelState,
     wallet: ReturnType<typeof getOpsWallet>,
     connection: Connection
@@ -154,7 +398,8 @@ class WheelMMService {
         buyAmount,
         buyCount: state.buy_count,
         maxBuys: BUYS_PER_CYCLE,
-      }, 'WHEEL: Executing BUY via Bags SDK')
+        signingMethod: 'keypair',
+      }, 'WHEEL: Executing BUY via Bags SDK with keypair signing')
 
       // Get quote from Bags SDK
       const quote = await this.sdk!.trade.getQuote({
@@ -170,8 +415,8 @@ class WheelMMService {
         return { success: false, tradeType: 'buy', amount: buyAmount, error: 'Failed to get quote' }
       }
 
-      // Execute swap via Bags SDK
-      const signature = await this.executeSwap(connection, wallet, quote)
+      // Execute swap via Bags SDK with keypair
+      const signature = await this.executeSwapWithKeypair(connection, wallet, quote)
 
       if (!signature) {
         return { success: false, tradeType: 'buy', amount: buyAmount, error: 'Swap failed' }
@@ -240,7 +485,8 @@ class WheelMMService {
         sellAmount,
         sellCount: state.sell_count,
         maxSells: SELLS_PER_CYCLE,
-      }, 'WHEEL: Executing SELL via Bags SDK')
+        signingMethod: 'keypair',
+      }, 'WHEEL: Executing SELL via Bags SDK with keypair signing')
 
       // Get quote from Bags SDK
       const quote = await this.sdk!.trade.getQuote({
@@ -256,8 +502,8 @@ class WheelMMService {
         return { success: false, tradeType: 'sell', amount: sellAmount, error: 'Failed to get quote' }
       }
 
-      // Execute swap via Bags SDK
-      const signature = await this.executeSwap(connection, wallet, quote)
+      // Execute swap via Bags SDK with keypair
+      const signature = await this.executeSwapWithKeypair(connection, wallet, quote)
 
       if (!signature) {
         return { success: false, tradeType: 'sell', amount: sellAmount, error: 'Swap failed' }
@@ -288,10 +534,59 @@ class WheelMMService {
   }
 
   /**
-   * Execute a swap using Bags SDK
+   * Execute a swap using Privy delegated signing
+   * Creates transaction with Bags SDK, signs and sends via Privy
+   */
+  private async executeSwapWithPrivy(
+    connection: Connection,
+    walletAddress: string,
+    quoteResponse: any
+  ): Promise<string | null> {
+    if (!this.sdk) return null
+
+    try {
+      const walletPubkey = new PublicKey(walletAddress)
+
+      // Create swap transaction using SDK
+      const swapResult = await this.sdk.trade.createSwapTransaction({
+        quoteResponse,
+        userPublicKey: walletPubkey,
+      })
+
+      if (!swapResult || !swapResult.transaction) {
+        loggers.flywheel.error('WHEEL: Failed to create swap transaction via SDK')
+        return null
+      }
+
+      loggers.flywheel.debug({
+        computeUnitLimit: swapResult.computeUnitLimit,
+        lastValidBlockHeight: swapResult.lastValidBlockHeight,
+      }, 'WHEEL: Swap transaction created, signing with Privy')
+
+      // Use Privy delegated signing
+      const signature = await privyService.signAndSendSolanaTransaction(
+        walletAddress,
+        swapResult.transaction
+      )
+
+      if (!signature) {
+        loggers.flywheel.error('WHEEL: Privy signing returned no signature')
+        return null
+      }
+
+      loggers.flywheel.info({ signature }, 'WHEEL: Swap confirmed via Privy')
+      return signature
+    } catch (error) {
+      loggers.flywheel.error({ error: String(error) }, 'WHEEL: Privy swap failed')
+      return null
+    }
+  }
+
+  /**
+   * Execute a swap using legacy keypair signing (fallback)
    * Uses SDK's signAndSendTransaction for reliable transaction handling
    */
-  private async executeSwap(
+  private async executeSwapWithKeypair(
     connection: Connection,
     wallet: Keypair,
     quoteResponse: any
@@ -333,6 +628,7 @@ class WheelMMService {
 
   /**
    * Execute a manual sell of WHEEL tokens
+   * Tries Privy delegated signing first, falls back to keypair signing
    * @param percentage - Percentage of current balance to sell (1-100)
    */
   async executeManualSell(percentage: number): Promise<{ success: boolean; signature?: string; amount?: number; error?: string }> {
@@ -340,16 +636,30 @@ class WheelMMService {
       return { success: false, error: 'Bags SDK not available' }
     }
 
-    const opsWallet = getOpsWallet()
-    if (!opsWallet) {
-      return { success: false, error: 'Ops wallet not configured' }
-    }
-
     const connection = getConnection()
     const tokenMint = new PublicKey(WHEEL_TOKEN_MINT)
 
+    // Try Privy first, then fall back to keypair
+    const platformToken = await this.getPlatformToken()
+    const usePrivy = platformToken && privyService.canSignTransactions()
+
+    let walletPubkey: PublicKey
+    let opsWallet: Keypair | null = null
+
+    if (usePrivy) {
+      walletPubkey = new PublicKey(platformToken.opsWalletAddress)
+      loggers.flywheel.debug('WHEEL: Manual sell will use Privy signing')
+    } else {
+      opsWallet = getOpsWallet()
+      if (!opsWallet) {
+        return { success: false, error: 'Neither Privy nor keypair signing available' }
+      }
+      walletPubkey = opsWallet.publicKey
+      loggers.flywheel.debug('WHEEL: Manual sell will use keypair signing')
+    }
+
     // Get current token balance
-    const tokenBalance = await getTokenBalance(opsWallet.publicKey, tokenMint)
+    const tokenBalance = await getTokenBalance(walletPubkey, tokenMint)
 
     if (tokenBalance < 1) {
       return { success: false, error: 'No tokens to sell' }
@@ -364,6 +674,7 @@ class WheelMMService {
       tokenBalance,
       sellAmount,
       tokenUnits,
+      signingMethod: usePrivy ? 'privy' : 'keypair',
     }, 'WHEEL: Executing manual sell')
 
     try {
@@ -380,8 +691,15 @@ class WheelMMService {
         return { success: false, error: 'Failed to get quote' }
       }
 
-      // Execute swap
-      const signature = await this.executeSwap(connection, opsWallet, quote)
+      // Execute swap with appropriate signing method
+      let signature: string | null
+      if (usePrivy && platformToken) {
+        signature = await this.executeSwapWithPrivy(connection, platformToken.opsWalletAddress, quote)
+      } else if (opsWallet) {
+        signature = await this.executeSwapWithKeypair(connection, opsWallet, quote)
+      } else {
+        return { success: false, error: 'No signing method available' }
+      }
 
       if (!signature) {
         return { success: false, error: 'Swap execution failed' }

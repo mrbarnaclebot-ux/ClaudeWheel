@@ -3,7 +3,7 @@
 // Manages user subscriptions for downtime alerts and broadcasts
 // ═══════════════════════════════════════════════════════════════════════════
 
-import { supabase } from '../config/database'
+import { prisma } from '../config/prisma'
 import { getBot } from '../telegram/bot'
 import { loggers } from '../utils/logger'
 
@@ -46,46 +46,37 @@ export async function subscribeToAlerts(
   telegramUsername?: string
 ): Promise<{ success: boolean; alreadySubscribed?: boolean; error?: string }> {
   try {
-    if (!supabase) {
-      return { success: false, error: 'Database not configured' }
-    }
-
     // Check if already subscribed
-    const { data: existing } = await supabase
-      .from('telegram_alert_subscribers')
-      .select('id, is_active')
-      .eq('telegram_id', telegramId)
-      .single()
+    const existing = await prisma.telegramAlertSubscriber.findUnique({
+      where: { telegramId: BigInt(telegramId) },
+      select: { id: true, isActive: true },
+    })
 
     if (existing) {
-      if (existing.is_active) {
+      if (existing.isActive) {
         return { success: true, alreadySubscribed: true }
       }
 
       // Reactivate subscription
-      await supabase
-        .from('telegram_alert_subscribers')
-        .update({
-          is_active: true,
-          telegram_username: telegramUsername,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', existing.id)
+      await prisma.telegramAlertSubscriber.update({
+        where: { id: existing.id },
+        data: {
+          isActive: true,
+          telegramUsername: telegramUsername,
+        },
+      })
 
       return { success: true }
     }
 
     // Create new subscription
-    const { error } = await supabase.from('telegram_alert_subscribers').insert({
-      telegram_id: telegramId,
-      telegram_username: telegramUsername,
-      is_active: true,
+    await prisma.telegramAlertSubscriber.create({
+      data: {
+        telegramId: BigInt(telegramId),
+        telegramUsername: telegramUsername,
+        isActive: true,
+      },
     })
-
-    if (error) {
-      loggers.alerts.error({ error: String(error), telegramId }, 'Error subscribing to alerts')
-      return { success: false, error: 'Failed to subscribe' }
-    }
 
     return { success: true }
   } catch (error: any) {
@@ -101,27 +92,21 @@ export async function unsubscribeFromAlerts(
   telegramId: number
 ): Promise<{ success: boolean; wasSubscribed?: boolean; error?: string }> {
   try {
-    if (!supabase) {
-      return { success: false, error: 'Database not configured' }
-    }
+    const existing = await prisma.telegramAlertSubscriber.findUnique({
+      where: { telegramId: BigInt(telegramId) },
+      select: { id: true, isActive: true },
+    })
 
-    const { data: existing } = await supabase
-      .from('telegram_alert_subscribers')
-      .select('id, is_active')
-      .eq('telegram_id', telegramId)
-      .single()
-
-    if (!existing || !existing.is_active) {
+    if (!existing || !existing.isActive) {
       return { success: true, wasSubscribed: false }
     }
 
-    await supabase
-      .from('telegram_alert_subscribers')
-      .update({
-        is_active: false,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', existing.id)
+    await prisma.telegramAlertSubscriber.update({
+      where: { id: existing.id },
+      data: {
+        isActive: false,
+      },
+    })
 
     return { success: true, wasSubscribed: true }
   } catch (error: any) {
@@ -135,15 +120,12 @@ export async function unsubscribeFromAlerts(
  */
 export async function isSubscribed(telegramId: number): Promise<boolean> {
   try {
-    if (!supabase) return false
+    const subscriber = await prisma.telegramAlertSubscriber.findUnique({
+      where: { telegramId: BigInt(telegramId) },
+      select: { isActive: true },
+    })
 
-    const { data } = await supabase
-      .from('telegram_alert_subscribers')
-      .select('is_active')
-      .eq('telegram_id', telegramId)
-      .single()
-
-    return data?.is_active || false
+    return subscriber?.isActive || false
   } catch {
     return false
   }
@@ -154,19 +136,23 @@ export async function isSubscribed(telegramId: number): Promise<boolean> {
  */
 export async function getActiveSubscribers(): Promise<AlertSubscription[]> {
   try {
-    if (!supabase) return []
+    const subscribers = await prisma.telegramAlertSubscriber.findMany({
+      where: { isActive: true },
+      select: {
+        id: true,
+        telegramId: true,
+        telegramUsername: true,
+        createdAt: true,
+        isActive: true,
+      },
+    })
 
-    const { data } = await supabase
-      .from('telegram_alert_subscribers')
-      .select('id, telegram_id, telegram_username, created_at, is_active')
-      .eq('is_active', true)
-
-    return (data || []).map(sub => ({
+    return subscribers.map(sub => ({
       id: sub.id,
-      telegramId: sub.telegram_id,
-      telegramUsername: sub.telegram_username,
-      subscribedAt: sub.created_at,
-      isActive: sub.is_active,
+      telegramId: Number(sub.telegramId),
+      telegramUsername: sub.telegramUsername || undefined,
+      subscribedAt: sub.createdAt.toISOString(),
+      isActive: sub.isActive,
     }))
   } catch {
     return []
@@ -178,14 +164,11 @@ export async function getActiveSubscribers(): Promise<AlertSubscription[]> {
  */
 export async function getSubscriberCount(): Promise<number> {
   try {
-    if (!supabase) return 0
+    const count = await prisma.telegramAlertSubscriber.count({
+      where: { isActive: true },
+    })
 
-    const { count } = await supabase
-      .from('telegram_alert_subscribers')
-      .select('*', { count: 'exact', head: true })
-      .eq('is_active', true)
-
-    return count || 0
+    return count
   } catch {
     return 0
   }
@@ -200,20 +183,11 @@ export async function getSubscriberCount(): Promise<number> {
  */
 export async function getBotStatus(): Promise<BotStatus> {
   try {
-    if (!supabase) {
-      return {
-        isMaintenanceMode: false,
-        lastUpdated: new Date().toISOString(),
-      }
-    }
+    const status = await prisma.botStatus.findUnique({
+      where: { id: 'main' },
+    })
 
-    const { data } = await supabase
-      .from('bot_status')
-      .select('*')
-      .eq('id', 'main')
-      .single()
-
-    if (!data) {
+    if (!status) {
       return {
         isMaintenanceMode: false,
         lastUpdated: new Date().toISOString(),
@@ -221,11 +195,11 @@ export async function getBotStatus(): Promise<BotStatus> {
     }
 
     return {
-      isMaintenanceMode: data.is_maintenance_mode || false,
-      maintenanceReason: data.maintenance_reason,
-      maintenanceStartedAt: data.maintenance_started_at,
-      estimatedEndTime: data.estimated_end_time,
-      lastUpdated: data.updated_at,
+      isMaintenanceMode: status.isMaintenanceMode || false,
+      maintenanceReason: status.maintenanceReason || undefined,
+      maintenanceStartedAt: status.maintenanceStartedAt?.toISOString(),
+      estimatedEndTime: status.estimatedEndTime?.toISOString(),
+      lastUpdated: status.updatedAt.toISOString(),
     }
   } catch {
     return {
@@ -244,20 +218,24 @@ export async function enableMaintenanceMode(
   notifyUsers: boolean = true
 ): Promise<{ success: boolean; notifiedCount?: number; error?: string }> {
   try {
-    if (!supabase) {
-      return { success: false, error: 'Database not configured' }
-    }
-
-    const now = new Date().toISOString()
+    const now = new Date()
 
     // Update or create bot status
-    await supabase.from('bot_status').upsert({
-      id: 'main',
-      is_maintenance_mode: true,
-      maintenance_reason: reason,
-      maintenance_started_at: now,
-      estimated_end_time: estimatedEndTime || null,
-      updated_at: now,
+    await prisma.botStatus.upsert({
+      where: { id: 'main' },
+      update: {
+        isMaintenanceMode: true,
+        maintenanceReason: reason,
+        maintenanceStartedAt: now,
+        estimatedEndTime: estimatedEndTime ? new Date(estimatedEndTime) : null,
+      },
+      create: {
+        id: 'main',
+        isMaintenanceMode: true,
+        maintenanceReason: reason,
+        maintenanceStartedAt: now,
+        estimatedEndTime: estimatedEndTime ? new Date(estimatedEndTime) : null,
+      },
     })
 
     loggers.alerts.info({ reason }, 'Maintenance mode ENABLED')
@@ -284,18 +262,22 @@ export async function disableMaintenanceMode(
   notifyUsers: boolean = true
 ): Promise<{ success: boolean; notifiedCount?: number; error?: string }> {
   try {
-    if (!supabase) {
-      return { success: false, error: 'Database not configured' }
-    }
-
     // Update bot status
-    await supabase.from('bot_status').upsert({
-      id: 'main',
-      is_maintenance_mode: false,
-      maintenance_reason: null,
-      maintenance_started_at: null,
-      estimated_end_time: null,
-      updated_at: new Date().toISOString(),
+    await prisma.botStatus.upsert({
+      where: { id: 'main' },
+      update: {
+        isMaintenanceMode: false,
+        maintenanceReason: null,
+        maintenanceStartedAt: null,
+        estimatedEndTime: null,
+      },
+      create: {
+        id: 'main',
+        isMaintenanceMode: false,
+        maintenanceReason: null,
+        maintenanceStartedAt: null,
+        estimatedEndTime: null,
+      },
     })
 
     loggers.alerts.info('Maintenance mode DISABLED')
@@ -410,18 +392,18 @@ export async function broadcastMessage(
       }
     }
 
-    // Log the broadcast
-    if (supabase) {
-      await supabase.from('audit_log').insert({
-        event_type: `broadcast_${eventType}`,
+    // Log the broadcast to audit log
+    await prisma.auditLog.create({
+      data: {
+        action: `broadcast_${eventType}`,
         details: {
           total: result.total,
           successful: result.successful,
           failed: result.failed,
           message: message.substring(0, 200),
         },
-      })
-    }
+      },
+    })
 
     loggers.alerts.info({
       successful: result.successful,

@@ -1,5 +1,6 @@
 import { Router, Request, Response, NextFunction } from 'express'
-import { Transaction, PublicKey, SystemProgram } from '@solana/web3.js'
+import { Transaction, PublicKey, SystemProgram, Keypair } from '@solana/web3.js'
+import bs58 from 'bs58'
 import { privyService } from '../services/privy.service'
 import { prisma, isPrismaConfigured } from '../config/prisma'
 import { bagsFmService } from '../services/bags-fm'
@@ -266,6 +267,232 @@ router.post('/', async (req: PrivyRequest, res: Response) => {
     })
   } catch (error) {
     loggers.privy.error({ error: String(error) }, 'Error registering token')
+    res.status(500).json({
+      success: false,
+      error: 'Failed to register token',
+    })
+  }
+})
+
+// Validation schema for token registration with imported dev wallet
+const registerWithImportSchema = z.object({
+  tokenMintAddress: z.string().min(32, 'Invalid token mint address'),
+  tokenSymbol: z.string().min(1, 'Token symbol required').max(20),
+  tokenName: z.string().max(100).optional(),
+  tokenImage: z.string().url().optional().or(z.literal('')),
+  tokenDecimals: z.number().int().min(0).max(18).optional().default(6),
+  devWalletPrivateKey: z.string().min(32, 'Invalid private key'), // Base58 encoded
+  tokenSource: z.enum(['registered', 'platform']).optional().default('registered'),
+})
+
+/**
+ * POST /api/privy/tokens/register-with-import
+ * Register a token by importing an existing dev wallet and generating an ops wallet
+ *
+ * This is used for:
+ * 1. WHEEL token (platform token) - imports existing dev wallet, generates ops via Privy
+ * 2. Users with existing tokens - same flow
+ */
+router.post('/register-with-import', async (req: PrivyRequest, res: Response) => {
+  try {
+    if (!isPrismaConfigured()) {
+      return res.status(503).json({
+        success: false,
+        error: 'Database not configured',
+      })
+    }
+
+    // Validate request body
+    const validation = registerWithImportSchema.safeParse(req.body)
+    if (!validation.success) {
+      return res.status(400).json({
+        success: false,
+        error: validation.error.errors[0].message,
+      })
+    }
+
+    const {
+      tokenMintAddress,
+      tokenSymbol,
+      tokenName,
+      tokenImage,
+      tokenDecimals,
+      devWalletPrivateKey,
+      tokenSource,
+    } = validation.data
+
+    // Validate the private key and derive the wallet address
+    let devWalletAddress: string
+    try {
+      const secretKey = bs58.decode(devWalletPrivateKey)
+      const keypair = Keypair.fromSecretKey(secretKey)
+      devWalletAddress = keypair.publicKey.toString()
+    } catch (e) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid private key format',
+      })
+    }
+
+    // Check if token already registered
+    const existing = await prisma.privyUserToken.findFirst({
+      where: {
+        privyUserId: req.privyUserId,
+        tokenMintAddress: tokenMintAddress,
+      },
+    })
+
+    if (existing) {
+      return res.status(400).json({
+        success: false,
+        error: 'Token already registered for this user',
+      })
+    }
+
+    // Check if dev wallet already exists for another user
+    const existingDevWallet = await prisma.privyWallet.findUnique({
+      where: { walletAddress: devWalletAddress },
+    })
+
+    if (existingDevWallet && existingDevWallet.privyUserId !== req.privyUserId) {
+      return res.status(400).json({
+        success: false,
+        error: 'Dev wallet already registered to another user',
+      })
+    }
+
+    // Get user's existing ops wallet (required - must complete onboarding first)
+    const opsWallet = await prisma.privyWallet.findFirst({
+      where: {
+        privyUserId: req.privyUserId,
+        walletType: 'ops',
+      },
+    })
+
+    if (!opsWallet) {
+      return res.status(400).json({
+        success: false,
+        error: 'No ops wallet found. Please complete onboarding in the TMA first to create your wallets.',
+      })
+    }
+
+    // Check if user has an existing dev wallet that will be replaced
+    const existingUserDevWallet = await prisma.privyWallet.findFirst({
+      where: {
+        privyUserId: req.privyUserId,
+        walletType: 'dev',
+      },
+    })
+
+    if (existingUserDevWallet && existingUserDevWallet.walletAddress !== devWalletAddress) {
+      loggers.privy.warn({
+        privyUserId: req.privyUserId,
+        oldDevWallet: existingUserDevWallet.walletAddress,
+        newDevWallet: devWalletAddress,
+      }, 'Replacing existing dev wallet with imported wallet')
+    }
+
+    // Import the dev wallet into Privy and store it in our database
+    // This imports the key INTO Privy so it uses delegated signing like all other wallets
+    const importResult = await privyService.importAndStoreWallet({
+      privyUserId: req.privyUserId!,
+      walletType: 'dev',
+      privateKey: devWalletPrivateKey,
+    })
+
+    if (!importResult) {
+      return res.status(500).json({
+        success: false,
+        error: 'Failed to import dev wallet into Privy',
+      })
+    }
+
+    // Get the dev wallet record
+    const devWallet = await prisma.privyWallet.findFirst({
+      where: {
+        privyUserId: req.privyUserId,
+        walletType: 'dev',
+      },
+    })
+
+    if (!devWallet) {
+      return res.status(500).json({
+        success: false,
+        error: 'Dev wallet not found after import',
+      })
+    }
+
+    // Verify token exists on Bags.fm and get additional info
+    let tokenInfo = null
+    try {
+      tokenInfo = await bagsFmService.getTokenCreatorInfo(tokenMintAddress)
+    } catch (e) {
+      loggers.privy.warn({ tokenMintAddress }, 'Could not fetch token info from Bags.fm')
+    }
+
+    // Create token record with config and flywheel state in a transaction
+    const token = await prisma.$transaction(async (tx) => {
+      // Create token record
+      const newToken = await tx.privyUserToken.create({
+        data: {
+          privyUserId: req.privyUserId!,
+          tokenMintAddress: tokenMintAddress,
+          tokenSymbol: tokenSymbol,
+          tokenName: tokenName || tokenInfo?.tokenName || null,
+          tokenImage: tokenImage || tokenInfo?.tokenImage || null,
+          tokenDecimals: tokenDecimals,
+          devWalletId: devWallet.id,
+          opsWalletId: opsWallet!.id,
+          tokenSource: tokenSource,
+          launchedViaTelegram: false,
+        },
+      })
+
+      // Create default config
+      await tx.privyTokenConfig.create({
+        data: {
+          privyTokenId: newToken.id,
+          flywheelActive: true,
+          marketMakingEnabled: true,
+        },
+      })
+
+      // Create flywheel state
+      await tx.privyFlywheelState.create({
+        data: {
+          privyTokenId: newToken.id,
+        },
+      })
+
+      return newToken
+    })
+
+    loggers.privy.info({
+      tokenId: token.id,
+      tokenSymbol,
+      tokenSource,
+      devWalletAddress,
+      opsWalletAddress: opsWallet.walletAddress,
+      privyUserId: req.privyUserId
+    }, 'Token registered with imported dev wallet')
+
+    res.status(201).json({
+      success: true,
+      data: {
+        token,
+        devWallet: {
+          address: devWalletAddress,
+          isImported: true,
+        },
+        opsWallet: {
+          address: opsWallet.walletAddress,
+          isImported: false,
+        },
+      },
+      message: 'Token registered successfully with imported dev wallet',
+    })
+  } catch (error) {
+    loggers.privy.error({ error: String(error) }, 'Error registering token with import')
     res.status(500).json({
       success: false,
       error: 'Failed to register token',
