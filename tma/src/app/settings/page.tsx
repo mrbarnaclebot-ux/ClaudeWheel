@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { usePrivy, useHeadlessDelegatedActions } from '@privy-io/react-auth';
+import { usePrivy, useSigners } from '@privy-io/react-auth';
 import { useWallets } from '@privy-io/react-auth/solana';
 import { useTelegram } from '@/components/TelegramProvider';
 import { api } from '@/lib/api';
@@ -26,7 +26,7 @@ interface PrivyWalletInfo {
 export default function SettingsPage() {
     const { getAccessToken, logout, user: privyUser, ready: privyReady, authenticated } = usePrivy();
     const { wallets } = useWallets();
-    const { delegateWallet } = useHeadlessDelegatedActions();
+    const { addSigners } = useSigners();
     const { user: telegramUser, hapticFeedback } = useTelegram();
     const [isDelegating, setIsDelegating] = useState(false);
     const [delegationResult, setDelegationResult] = useState<string | null>(null);
@@ -64,10 +64,20 @@ export default function SettingsPage() {
         },
     });
 
-    // Delegate all undelegated wallets
+    // Add signers to undelegated wallets (new Privy API)
+    // Signer ID is the authorization key ID from Privy dashboard
+    const SIGNER_ID = process.env.NEXT_PUBLIC_PRIVY_SIGNER_ID;
+
     const handleDelegateAll = async () => {
         console.log('[Settings] handleDelegateAll called');
         console.log('[Settings] undelegatedWallets:', undelegatedWallets);
+        console.log('[Settings] SIGNER_ID:', SIGNER_ID);
+
+        if (!SIGNER_ID) {
+            console.error('[Settings] NEXT_PUBLIC_PRIVY_SIGNER_ID not configured');
+            alert('Signer ID not configured. Please contact support.');
+            return;
+        }
 
         if (undelegatedWallets.length === 0) {
             console.log('[Settings] No undelegated wallets found');
@@ -77,7 +87,7 @@ export default function SettingsPage() {
 
         // Debug: show what we're about to delegate
         const walletsToDelegate = undelegatedWallets.map(w => w.address.slice(0, 8) + '...').join(', ');
-        console.log('[Settings] About to delegate:', walletsToDelegate);
+        console.log('[Settings] About to add signers to:', walletsToDelegate);
 
         setIsDelegating(true);
         setDelegationResult(null);
@@ -85,34 +95,35 @@ export default function SettingsPage() {
 
         try {
             for (const wallet of undelegatedWallets) {
-                console.log('[Settings] Delegating wallet:', wallet.address, 'imported:', wallet.imported);
-                console.log('[Settings] Calling delegateWallet...');
+                console.log('[Settings] Adding signer to wallet:', wallet.address, 'imported:', wallet.imported);
+                console.log('[Settings] Calling addSigners with signerId:', SIGNER_ID);
 
                 // Add timeout to detect if it hangs
                 const timeoutPromise = new Promise((_, reject) =>
-                    setTimeout(() => reject(new Error('Delegation timed out after 30s')), 30000)
+                    setTimeout(() => reject(new Error('Add signer timed out after 30s')), 30000)
                 );
 
-                const delegatePromise = delegateWallet({
+                // New Privy API: addSigners instead of delegateWallet
+                const addSignerPromise = addSigners({
                     address: wallet.address,
-                    chainType: 'solana',
+                    signers: [{ signerId: SIGNER_ID, policyIds: [] }],
                 });
 
-                const result = await Promise.race([delegatePromise, timeoutPromise]);
+                const result = await Promise.race([addSignerPromise, timeoutPromise]);
 
-                console.log('[Settings] delegateWallet returned:', result);
+                console.log('[Settings] addSigners returned:', result);
             }
-            console.log('[Settings] All wallets delegated successfully');
+            console.log('[Settings] All signers added successfully');
             setDelegationResult('success');
             hapticFeedback('heavy');
         } catch (error: any) {
-            console.error('[Settings] Delegation failed:', error);
+            console.error('[Settings] Add signer failed:', error);
             console.error('[Settings] Error message:', error?.message);
             console.error('[Settings] Error stack:', error?.stack);
             setDelegationResult('error');
             hapticFeedback('heavy');
         } finally {
-            console.log('[Settings] Delegation complete, setting isDelegating to false');
+            console.log('[Settings] Add signer complete, setting isDelegating to false');
             setIsDelegating(false);
         }
     };
