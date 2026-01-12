@@ -2,7 +2,7 @@
 
 import { useState, useCallback } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { usePrivy, useDelegatedActions } from '@privy-io/react-auth';
+import { usePrivy, useHeadlessDelegatedActions } from '@privy-io/react-auth';
 import { useTelegram } from '@/components/TelegramProvider';
 import { api } from '@/lib/api';
 import Link from 'next/link';
@@ -37,7 +37,7 @@ type Step = 'enter_mint' | 'validating' | 'enter_key' | 'registering' | 'success
 export default function RegisterPage() {
     const queryClient = useQueryClient();
     const { getAccessToken } = usePrivy();
-    const { delegateWallet } = useDelegatedActions();
+    const { delegateWallet } = useHeadlessDelegatedActions();
     const { hapticFeedback } = useTelegram();
 
     const [step, setStep] = useState<Step>('enter_mint');

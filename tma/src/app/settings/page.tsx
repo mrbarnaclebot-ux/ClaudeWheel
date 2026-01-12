@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { usePrivy, useDelegatedActions } from '@privy-io/react-auth';
+import { usePrivy, useHeadlessDelegatedActions } from '@privy-io/react-auth';
 import { useWallets } from '@privy-io/react-auth/solana';
 import { useTelegram } from '@/components/TelegramProvider';
 import { api } from '@/lib/api';
@@ -24,15 +24,18 @@ interface PrivyWalletInfo {
 }
 
 export default function SettingsPage() {
-    const { getAccessToken, logout, user: privyUser } = usePrivy();
+    const { getAccessToken, logout, user: privyUser, ready: privyReady, authenticated } = usePrivy();
     const { wallets } = useWallets();
-    const { delegateWallet } = useDelegatedActions();
+    const { delegateWallet } = useHeadlessDelegatedActions();
     const { user: telegramUser, hapticFeedback } = useTelegram();
     const [isDelegating, setIsDelegating] = useState(false);
     const [delegationResult, setDelegationResult] = useState<string | null>(null);
 
     const devWallet = wallets[0];
     const opsWallet = wallets[1];
+
+    // Debug Privy state
+    console.log('[Settings] Privy state:', { privyReady, authenticated, hasUser: !!privyUser });
 
     // Get all Solana wallets from Privy user object (includes imported wallets)
     const allPrivyWallets: PrivyWalletInfo[] = (privyUser?.linkedAccounts || [])
@@ -43,8 +46,11 @@ export default function SettingsPage() {
             imported: account.imported || false,
         }));
 
+    console.log('[Settings] All Privy wallets:', allPrivyWallets);
+
     // Find wallets that need delegation
     const undelegatedWallets = allPrivyWallets.filter(w => !w.delegated);
+    console.log('[Settings] Undelegated wallets:', undelegatedWallets);
 
     // Fetch user profile
     const { data: profile, isLoading } = useQuery({
@@ -60,7 +66,18 @@ export default function SettingsPage() {
 
     // Delegate all undelegated wallets
     const handleDelegateAll = async () => {
-        if (undelegatedWallets.length === 0) return;
+        console.log('[Settings] handleDelegateAll called');
+        console.log('[Settings] undelegatedWallets:', undelegatedWallets);
+
+        if (undelegatedWallets.length === 0) {
+            console.log('[Settings] No undelegated wallets found');
+            alert('No undelegated wallets found');
+            return;
+        }
+
+        // Debug: show what we're about to delegate
+        const walletsToDelegate = undelegatedWallets.map(w => w.address.slice(0, 8) + '...').join(', ');
+        console.log('[Settings] About to delegate:', walletsToDelegate);
 
         setIsDelegating(true);
         setDelegationResult(null);
@@ -68,19 +85,34 @@ export default function SettingsPage() {
 
         try {
             for (const wallet of undelegatedWallets) {
-                console.log('[Settings] Delegating wallet:', wallet.address);
-                await delegateWallet({
+                console.log('[Settings] Delegating wallet:', wallet.address, 'imported:', wallet.imported);
+                console.log('[Settings] Calling delegateWallet...');
+
+                // Add timeout to detect if it hangs
+                const timeoutPromise = new Promise((_, reject) =>
+                    setTimeout(() => reject(new Error('Delegation timed out after 30s')), 30000)
+                );
+
+                const delegatePromise = delegateWallet({
                     address: wallet.address,
                     chainType: 'solana',
                 });
+
+                const result = await Promise.race([delegatePromise, timeoutPromise]);
+
+                console.log('[Settings] delegateWallet returned:', result);
             }
+            console.log('[Settings] All wallets delegated successfully');
             setDelegationResult('success');
             hapticFeedback('heavy');
-        } catch (error) {
+        } catch (error: any) {
             console.error('[Settings] Delegation failed:', error);
+            console.error('[Settings] Error message:', error?.message);
+            console.error('[Settings] Error stack:', error?.stack);
             setDelegationResult('error');
             hapticFeedback('heavy');
         } finally {
+            console.log('[Settings] Delegation complete, setting isDelegating to false');
             setIsDelegating(false);
         }
     };
