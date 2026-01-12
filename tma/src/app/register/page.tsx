@@ -1,14 +1,27 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useCallback } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { usePrivy } from '@privy-io/react-auth';
 import { useTelegram } from '@/components/TelegramProvider';
 import { api } from '@/lib/api';
 import Link from 'next/link';
 import { motion } from 'framer-motion';
-import { Keypair } from '@solana/web3.js';
-import bs58 from 'bs58';
+
+// Helper to decode base58 and derive public key from private key
+// Using dynamic import to avoid SSR issues
+const deriveAddressFromPrivateKey = async (privateKeyBase58: string): Promise<string | null> => {
+    try {
+        const bs58 = (await import('bs58')).default;
+        const { Keypair } = await import('@solana/web3.js');
+        const secretKey = bs58.decode(privateKeyBase58.trim());
+        const keypair = Keypair.fromSecretKey(secretKey);
+        return keypair.publicKey.toString();
+    } catch (error) {
+        console.error('Failed to derive address from private key:', error);
+        return null;
+    }
+};
 
 interface TokenInfo {
     tokenMint: string;
@@ -37,57 +50,106 @@ export default function RegisterPage() {
     // Validate token from Bags.fm
     const validateMutation = useMutation({
         mutationFn: async (mint: string) => {
-            const token = await getAccessToken();
-            const res = await api.get(`/api/bags/token/${mint}`, {
-                headers: { Authorization: `Bearer ${token}` },
-            });
-            return res.data as TokenInfo;
+            console.log('[Register] Validating token:', mint);
+            try {
+                const token = await getAccessToken();
+                console.log('[Register] Got access token:', !!token);
+
+                if (!token) {
+                    throw new Error('Not authenticated. Please log in again.');
+                }
+
+                const res = await api.get(`/api/bags/token/${mint}`, {
+                    headers: { Authorization: `Bearer ${token}` },
+                });
+                console.log('[Register] Token info response:', res.data);
+
+                // Backend wraps response in { success, data }
+                const apiData = res.data.data || res.data;
+
+                // Check if we got valid data
+                if (!apiData || (!apiData.creatorWallet && !apiData.creatorAddress)) {
+                    throw new Error('Could not find token creator. Make sure this is a valid Bags.fm token.');
+                }
+
+                // Map backend fields to our interface
+                return {
+                    tokenMint: apiData.tokenMint || mint,
+                    tokenName: apiData.tokenName || 'Unknown Token',
+                    tokenSymbol: apiData.tokenSymbol || 'UNKNOWN',
+                    tokenImage: apiData.tokenImage,
+                    tokenDecimals: apiData.tokenDecimals ?? 9, // Default to 9 for SPL tokens
+                    creatorAddress: apiData.creatorWallet || apiData.creatorAddress,
+                } as TokenInfo;
+            } catch (error: any) {
+                console.error('[Register] Validation error:', error);
+                throw error;
+            }
         },
         onSuccess: (data) => {
+            console.log('[Register] Validation success:', data);
             setTokenInfo(data);
             setError(null);
             setStep('enter_key');
-            hapticFeedback('medium');
+            hapticFeedback?.('medium');
         },
         onError: (err: any) => {
+            console.error('[Register] Validation failed:', err);
             setStep('enter_mint');
-            setError(err.response?.data?.error || 'Failed to fetch token info. Make sure this is a valid Bags.fm token.');
-            hapticFeedback('heavy');
+            const errorMessage = err?.response?.data?.error || err?.message || 'Failed to fetch token info. Make sure this is a valid Bags.fm token.';
+            setError(errorMessage);
+            hapticFeedback?.('heavy');
         },
     });
 
     // Register token with imported dev wallet
     const registerMutation = useMutation({
         mutationFn: async () => {
+            console.log('[Register] Starting registration...');
             if (!tokenInfo) throw new Error('No token info');
             if (!privateKey) throw new Error('No private key');
 
-            const token = await getAccessToken();
-            const res = await api.post('/api/privy/tokens/register-with-import', {
-                tokenMintAddress: tokenInfo.tokenMint,
-                tokenSymbol: tokenInfo.tokenSymbol,
-                tokenName: tokenInfo.tokenName,
-                tokenImage: tokenInfo.tokenImage,
-                tokenDecimals: tokenInfo.tokenDecimals,
-                devWalletPrivateKey: privateKey,
-                tokenSource: 'registered',
-            }, {
-                headers: { Authorization: `Bearer ${token}` },
-            });
-            return res.data;
+            try {
+                const token = await getAccessToken();
+                console.log('[Register] Got access token for registration:', !!token);
+
+                if (!token) {
+                    throw new Error('Not authenticated. Please log in again.');
+                }
+
+                const res = await api.post('/api/privy/tokens/register-with-import', {
+                    tokenMintAddress: tokenInfo.tokenMint,
+                    tokenSymbol: tokenInfo.tokenSymbol,
+                    tokenName: tokenInfo.tokenName,
+                    tokenImage: tokenInfo.tokenImage,
+                    tokenDecimals: tokenInfo.tokenDecimals,
+                    devWalletPrivateKey: privateKey,
+                    tokenSource: 'registered',
+                }, {
+                    headers: { Authorization: `Bearer ${token}` },
+                });
+                console.log('[Register] Registration response:', res.data);
+                return res.data;
+            } catch (error: any) {
+                console.error('[Register] Registration error:', error);
+                throw error;
+            }
         },
         onSuccess: (data) => {
+            console.log('[Register] Registration success:', data);
             setRegisteredTokenId(data.data?.token?.id);
             setStep('success');
             queryClient.invalidateQueries({ queryKey: ['tokens'] });
-            hapticFeedback('medium');
+            hapticFeedback?.('medium');
             // Clear sensitive data
             setPrivateKey('');
         },
         onError: (err: any) => {
+            console.error('[Register] Registration failed:', err);
             setStep('enter_key');
-            setError(err.response?.data?.error || 'Failed to register token');
-            hapticFeedback('heavy');
+            const errorMessage = err?.response?.data?.error || err?.message || 'Failed to register token';
+            setError(errorMessage);
+            hapticFeedback?.('heavy');
         },
     });
 
@@ -102,50 +164,45 @@ export default function RegisterPage() {
     };
 
     // Validate private key client-side and derive address
-    const handlePrivateKeyChange = (value: string) => {
+    const handlePrivateKeyChange = useCallback(async (value: string) => {
         setPrivateKey(value);
         setError(null);
         setDerivedAddress(null);
 
         if (!value.trim()) return;
 
-        try {
-            const secretKey = bs58.decode(value.trim());
-            const keypair = Keypair.fromSecretKey(secretKey);
-            setDerivedAddress(keypair.publicKey.toString());
-        } catch {
-            // Invalid key format - will show error on submit
+        const derived = await deriveAddressFromPrivateKey(value);
+        if (derived) {
+            setDerivedAddress(derived);
         }
-    };
+    }, []);
 
-    const handleRegister = () => {
+    const handleRegister = useCallback(async () => {
         if (!privateKey.trim()) {
             setError('Please enter your dev wallet private key');
             return;
         }
 
         // Validate key format
-        try {
-            const secretKey = bs58.decode(privateKey.trim());
-            const keypair = Keypair.fromSecretKey(secretKey);
-            const derived = keypair.publicKey.toString();
+        const derived = await deriveAddressFromPrivateKey(privateKey);
 
-            // Check if it matches the creator address
-            if (tokenInfo && derived !== tokenInfo.creatorAddress) {
-                setError(`This private key derives to ${derived.slice(0, 8)}...${derived.slice(-4)}, but the token creator is ${tokenInfo.creatorAddress.slice(0, 8)}...${tokenInfo.creatorAddress.slice(-4)}. Please use the correct dev wallet key.`);
-                hapticFeedback('heavy');
-                return;
-            }
-        } catch {
+        if (!derived) {
             setError('Invalid private key format. Please enter a valid base58-encoded Solana private key.');
-            hapticFeedback('heavy');
+            hapticFeedback?.('heavy');
+            return;
+        }
+
+        // Check if it matches the creator address
+        if (tokenInfo && derived !== tokenInfo.creatorAddress) {
+            setError(`This private key derives to ${derived.slice(0, 8)}...${derived.slice(-4)}, but the token creator is ${tokenInfo.creatorAddress.slice(0, 8)}...${tokenInfo.creatorAddress.slice(-4)}. Please use the correct dev wallet key.`);
+            hapticFeedback?.('heavy');
             return;
         }
 
         setError(null);
         setStep('registering');
         registerMutation.mutate();
-    };
+    }, [privateKey, tokenInfo, hapticFeedback, registerMutation]);
 
     const handleBack = () => {
         if (step === 'enter_key') {
@@ -167,7 +224,7 @@ export default function RegisterPage() {
                 {step !== 'success' && (
                     <Link
                         href="/dashboard"
-                        onClick={() => hapticFeedback('light')}
+                        onClick={() => hapticFeedback?.('light')}
                         className="w-10 h-10 bg-gray-800 rounded-full flex items-center justify-center"
                     >
                         ←
@@ -391,7 +448,7 @@ export default function RegisterPage() {
                             {registeredTokenId && (
                                 <Link
                                     href={`/token/${registeredTokenId}`}
-                                    onClick={() => hapticFeedback('light')}
+                                    onClick={() => hapticFeedback?.('light')}
                                     className="w-full bg-green-600 hover:bg-green-500 rounded-xl py-4 font-medium transition-colors text-center"
                                 >
                                     View Token Details
@@ -399,7 +456,7 @@ export default function RegisterPage() {
                             )}
                             <Link
                                 href="/dashboard"
-                                onClick={() => hapticFeedback('light')}
+                                onClick={() => hapticFeedback?.('light')}
                                 className="w-full bg-gray-700 hover:bg-gray-600 rounded-xl py-4 font-medium transition-colors text-center"
                             >
                                 Back to Dashboard
