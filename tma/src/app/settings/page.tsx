@@ -17,8 +17,14 @@ interface UserProfile {
     created_at: string;
 }
 
+interface PrivyWalletInfo {
+    address: string;
+    delegated: boolean;
+    imported: boolean;
+}
+
 export default function SettingsPage() {
-    const { getAccessToken, logout } = usePrivy();
+    const { getAccessToken, logout, user: privyUser } = usePrivy();
     const { wallets } = useWallets();
     const { delegateWallet } = useDelegatedActions();
     const { user: telegramUser, hapticFeedback } = useTelegram();
@@ -28,8 +34,17 @@ export default function SettingsPage() {
     const devWallet = wallets[0];
     const opsWallet = wallets[1];
 
-    // Find wallets that need delegation (check for 'delegated' property)
-    const undelegatedWallets = wallets.filter(w => (w as any).delegated === false);
+    // Get all Solana wallets from Privy user object (includes imported wallets)
+    const allPrivyWallets: PrivyWalletInfo[] = (privyUser?.linkedAccounts || [])
+        .filter((account: any) => account.type === 'wallet' && account.chainType === 'solana')
+        .map((account: any) => ({
+            address: account.address,
+            delegated: account.delegated || false,
+            imported: account.imported || false,
+        }));
+
+    // Find wallets that need delegation
+    const undelegatedWallets = allPrivyWallets.filter(w => !w.delegated);
 
     // Fetch user profile
     const { data: profile, isLoading } = useQuery({
@@ -186,9 +201,17 @@ export default function SettingsPage() {
                     className="bg-warning/10 border border-warning/30 rounded-xl p-4 mb-6"
                 >
                     <h3 className="font-medium text-warning mb-2">⚠️ Wallet Delegation Required</h3>
-                    <p className="text-sm text-warning/80 mb-4">
-                        {undelegatedWallets.length} wallet(s) need delegation for auto-claiming to work.
+                    <p className="text-sm text-warning/80 mb-3">
+                        The following wallet(s) need delegation for auto-claiming to work:
                     </p>
+                    <div className="space-y-2 mb-4">
+                        {undelegatedWallets.map((w) => (
+                            <div key={w.address} className="bg-bg-void/50 rounded-lg p-2 text-xs font-mono text-warning/90">
+                                {w.address.slice(0, 8)}...{w.address.slice(-8)}
+                                {w.imported && <span className="ml-2 text-warning/60">(imported)</span>}
+                            </div>
+                        ))}
+                    </div>
                     <button
                         onClick={handleDelegateAll}
                         disabled={isDelegating}
