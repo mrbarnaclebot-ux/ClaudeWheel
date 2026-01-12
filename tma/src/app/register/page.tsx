@@ -2,7 +2,7 @@
 
 import { useState, useCallback } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { usePrivy } from '@privy-io/react-auth';
+import { usePrivy, useDelegatedActions } from '@privy-io/react-auth';
 import { useTelegram } from '@/components/TelegramProvider';
 import { api } from '@/lib/api';
 import Link from 'next/link';
@@ -37,6 +37,7 @@ type Step = 'enter_mint' | 'validating' | 'enter_key' | 'registering' | 'success
 export default function RegisterPage() {
     const queryClient = useQueryClient();
     const { getAccessToken } = usePrivy();
+    const { delegateWallet } = useDelegatedActions();
     const { hapticFeedback } = useTelegram();
 
     const [step, setStep] = useState<Step>('enter_mint');
@@ -46,6 +47,8 @@ export default function RegisterPage() {
     const [tokenInfo, setTokenInfo] = useState<TokenInfo | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [registeredTokenId, setRegisteredTokenId] = useState<string | null>(null);
+    const [opsWalletAddress, setOpsWalletAddress] = useState<string | null>(null);
+    const [copiedAddress, setCopiedAddress] = useState(false);
 
     // Validate token from Bags.fm
     const validateMutation = useMutation({
@@ -129,6 +132,23 @@ export default function RegisterPage() {
                     headers: { Authorization: `Bearer ${token}` },
                 });
                 console.log('[Register] Registration response:', res.data);
+
+                // After import, delegate the wallet for server-side signing
+                const importedWalletAddress = res.data.data?.devWallet?.address;
+                if (importedWalletAddress) {
+                    console.log('[Register] Delegating imported wallet:', importedWalletAddress);
+                    try {
+                        await delegateWallet({
+                            address: importedWalletAddress,
+                            chainType: 'solana',
+                        });
+                        console.log('[Register] Wallet delegation successful');
+                    } catch (delegateError) {
+                        console.error('[Register] Wallet delegation failed:', delegateError);
+                        // Don't throw - the import succeeded, delegation can be retried
+                    }
+                }
+
                 return res.data;
             } catch (error: any) {
                 console.error('[Register] Registration error:', error);
@@ -138,6 +158,7 @@ export default function RegisterPage() {
         onSuccess: (data) => {
             console.log('[Register] Registration success:', data);
             setRegisteredTokenId(data.data?.token?.id);
+            setOpsWalletAddress(data.data?.opsWallet?.address || null);
             setStep('success');
             queryClient.invalidateQueries({ queryKey: ['tokens'] });
             hapticFeedback?.('medium');
@@ -439,10 +460,33 @@ export default function RegisterPage() {
                             <p className="text-green-400 flex items-center gap-2">
                                 <span>✓</span> Auto-claim active
                             </p>
-                            <p className="text-gray-400 text-sm mt-2">
-                                Trading will begin automatically when the ops wallet has SOL.
-                            </p>
                         </div>
+
+                        {/* Ops Wallet Funding */}
+                        {opsWalletAddress && (
+                            <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-4 text-left">
+                                <p className="text-amber-400 font-medium mb-2">Fund your Ops Wallet (optional)</p>
+                                <p className="text-gray-400 text-sm mb-3">
+                                    Send SOL to your ops wallet to start market making. Claimed fees will also be deposited here.
+                                </p>
+                                <div className="flex items-center gap-2">
+                                    <code className="flex-1 bg-gray-900 rounded-lg px-3 py-2 text-xs font-mono text-green-400 truncate">
+                                        {opsWalletAddress}
+                                    </code>
+                                    <button
+                                        onClick={() => {
+                                            navigator.clipboard.writeText(opsWalletAddress);
+                                            setCopiedAddress(true);
+                                            hapticFeedback?.('light');
+                                            setTimeout(() => setCopiedAddress(false), 2000);
+                                        }}
+                                        className="bg-gray-700 hover:bg-gray-600 px-3 py-2 rounded-lg text-sm transition-colors whitespace-nowrap"
+                                    >
+                                        {copiedAddress ? '✓ Copied' : 'Copy'}
+                                    </button>
+                                </div>
+                            </div>
+                        )}
 
                         <div className="flex flex-col gap-3">
                             {registeredTokenId && (

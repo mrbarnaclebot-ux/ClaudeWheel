@@ -115,7 +115,8 @@ export default function TokenDetailPage() {
                     offset: transactionPage * TRANSACTIONS_PER_PAGE,
                 },
             });
-            return res.data as TransactionsResponse;
+            // Backend wraps response in { success, data }
+            return (res.data.data || res.data) as TransactionsResponse;
         },
         enabled: !!tokenId,
     });

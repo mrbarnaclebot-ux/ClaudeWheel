@@ -1,7 +1,8 @@
 'use client';
 
+import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { usePrivy } from '@privy-io/react-auth';
+import { usePrivy, useDelegatedActions } from '@privy-io/react-auth';
 import { useWallets } from '@privy-io/react-auth/solana';
 import { useTelegram } from '@/components/TelegramProvider';
 import { api } from '@/lib/api';
@@ -19,10 +20,16 @@ interface UserProfile {
 export default function SettingsPage() {
     const { getAccessToken, logout } = usePrivy();
     const { wallets } = useWallets();
+    const { delegateWallet } = useDelegatedActions();
     const { user: telegramUser, hapticFeedback } = useTelegram();
+    const [isDelegating, setIsDelegating] = useState(false);
+    const [delegationResult, setDelegationResult] = useState<string | null>(null);
 
     const devWallet = wallets[0];
     const opsWallet = wallets[1];
+
+    // Find wallets that need delegation (check for 'delegated' property)
+    const undelegatedWallets = wallets.filter(w => (w as any).delegated === false);
 
     // Fetch user profile
     const { data: profile, isLoading } = useQuery({
@@ -35,6 +42,33 @@ export default function SettingsPage() {
             return res.data as UserProfile;
         },
     });
+
+    // Delegate all undelegated wallets
+    const handleDelegateAll = async () => {
+        if (undelegatedWallets.length === 0) return;
+
+        setIsDelegating(true);
+        setDelegationResult(null);
+        hapticFeedback('medium');
+
+        try {
+            for (const wallet of undelegatedWallets) {
+                console.log('[Settings] Delegating wallet:', wallet.address);
+                await delegateWallet({
+                    address: wallet.address,
+                    chainType: 'solana',
+                });
+            }
+            setDelegationResult('success');
+            hapticFeedback('heavy');
+        } catch (error) {
+            console.error('[Settings] Delegation failed:', error);
+            setDelegationResult('error');
+            hapticFeedback('heavy');
+        } finally {
+            setIsDelegating(false);
+        }
+    };
 
     const copyToClipboard = (text: string) => {
         navigator.clipboard.writeText(text);
@@ -142,6 +176,34 @@ export default function SettingsPage() {
                     )}
                 </div>
             </motion.div>
+
+            {/* Wallet Delegation Repair */}
+            {undelegatedWallets.length > 0 && (
+                <motion.div
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: 0.15 }}
+                    className="bg-warning/10 border border-warning/30 rounded-xl p-4 mb-6"
+                >
+                    <h3 className="font-medium text-warning mb-2">⚠️ Wallet Delegation Required</h3>
+                    <p className="text-sm text-warning/80 mb-4">
+                        {undelegatedWallets.length} wallet(s) need delegation for auto-claiming to work.
+                    </p>
+                    <button
+                        onClick={handleDelegateAll}
+                        disabled={isDelegating}
+                        className="w-full bg-warning hover:bg-warning/90 disabled:bg-warning/50 text-bg-void rounded-xl py-3 font-medium transition-colors"
+                    >
+                        {isDelegating ? 'Delegating...' : 'Enable Delegation'}
+                    </button>
+                    {delegationResult === 'success' && (
+                        <p className="text-sm text-success mt-2 text-center">✓ Delegation successful!</p>
+                    )}
+                    {delegationResult === 'error' && (
+                        <p className="text-sm text-error mt-2 text-center">✗ Delegation failed. Please try again.</p>
+                    )}
+                </motion.div>
+            )}
 
             {/* Platform Info */}
             <motion.div

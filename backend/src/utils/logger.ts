@@ -4,13 +4,13 @@ import { discordErrorService, ErrorContext } from '../services/discord-error.ser
 // ═══════════════════════════════════════════════════════════════════════════
 // STRUCTURED LOGGING WITH PINO
 // Production-ready logging with JSON output and child loggers
-// Integrated with Discord error reporting
+// Integrated with Discord error reporting - ALL errors auto-sent to Discord
 // ═══════════════════════════════════════════════════════════════════════════
 
 const isDevelopment = process.env.NODE_ENV !== 'production'
 
 // Base logger configuration
-const logger = pino({
+const baseLogger = pino({
   level: process.env.LOG_LEVEL || (isDevelopment ? 'debug' : 'info'),
   transport: isDevelopment
     ? {
@@ -33,10 +33,122 @@ const logger = pino({
   timestamp: pino.stdTimeFunctions.isoTime,
 })
 
-// Child loggers for different modules
-export const createLogger = (module: string) => logger.child({ module })
+// ═══════════════════════════════════════════════════════════════════════════
+// DISCORD AUTO-HOOK
+// Wraps logger to automatically send error/fatal logs to Discord
+// ═══════════════════════════════════════════════════════════════════════════
 
-// Pre-configured child loggers for common modules
+/**
+ * Wrap a Pino logger to automatically send error/fatal logs to Discord
+ * This intercepts .error() and .fatal() calls and forwards them to Discord
+ */
+function wrapLoggerWithDiscord(logger: pino.Logger, moduleName: string): pino.Logger {
+  // Create a proxy that intercepts error and fatal calls
+  const handler: ProxyHandler<pino.Logger> = {
+    get(target, prop, receiver) {
+      const original = Reflect.get(target, prop, receiver)
+
+      // Intercept error method
+      if (prop === 'error') {
+        return function (objOrMsg: unknown, ...args: unknown[]) {
+          // Call original logger
+          if (typeof original === 'function') {
+            original.call(target, objOrMsg, ...args)
+          }
+
+          // Extract error info and send to Discord
+          try {
+            let errorMessage: string
+            let errorObj: Error
+            let context: Record<string, unknown> = {}
+
+            if (typeof objOrMsg === 'object' && objOrMsg !== null) {
+              // First arg is object with context
+              context = objOrMsg as Record<string, unknown>
+              errorMessage = typeof args[0] === 'string' ? args[0] : 'Error occurred'
+              const errorStr = context.error || context.err || errorMessage
+              errorObj = new Error(String(errorStr))
+            } else {
+              // First arg is the message
+              errorMessage = String(objOrMsg)
+              errorObj = new Error(errorMessage)
+            }
+
+            // Send to Discord (fire and forget)
+            discordErrorService
+              .reportError(errorObj, {
+                module: moduleName,
+                operation: errorMessage,
+                additionalInfo: context,
+              })
+              .catch(() => {
+                // Silently fail - already logged locally
+              })
+          } catch {
+            // Don't let Discord hook crash the logger
+          }
+        }
+      }
+
+      // Intercept fatal method
+      if (prop === 'fatal') {
+        return function (objOrMsg: unknown, ...args: unknown[]) {
+          // Call original logger
+          if (typeof original === 'function') {
+            original.call(target, objOrMsg, ...args)
+          }
+
+          // Extract error info and send to Discord with high priority
+          try {
+            let errorMessage: string
+            let errorObj: Error
+            let context: Record<string, unknown> = {}
+
+            if (typeof objOrMsg === 'object' && objOrMsg !== null) {
+              context = objOrMsg as Record<string, unknown>
+              errorMessage = typeof args[0] === 'string' ? args[0] : 'Fatal error occurred'
+              const errorStr = context.error || context.err || errorMessage
+              errorObj = new Error(String(errorStr))
+            } else {
+              errorMessage = String(objOrMsg)
+              errorObj = new Error(errorMessage)
+            }
+
+            // Send to Discord with fatal severity (bypasses rate limit)
+            discordErrorService
+              .reportError(
+                errorObj,
+                {
+                  module: moduleName,
+                  operation: errorMessage,
+                  additionalInfo: context,
+                },
+                { severity: 'fatal', force: true }
+              )
+              .catch(() => {
+                // Silently fail
+              })
+          } catch {
+            // Don't let Discord hook crash the logger
+          }
+        }
+      }
+
+      // Return original for all other methods
+      return original
+    },
+  }
+
+  return new Proxy(logger, handler)
+}
+
+// Child loggers for different modules - wrapped with Discord auto-hook
+export const createLogger = (module: string): pino.Logger => {
+  const childLogger = baseLogger.child({ module })
+  return wrapLoggerWithDiscord(childLogger, module)
+}
+
+// Pre-configured child loggers for common modules (all auto-send errors to Discord)
 export const loggers = {
   server: createLogger('server'),
   telegram: createLogger('telegram'),
@@ -101,13 +213,13 @@ export const withTiming = async <T>(
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// DISCORD ERROR INTEGRATION
-// Utilities for logging errors with automatic Discord notification
+// DISCORD ERROR INTEGRATION - EXPLICIT FUNCTIONS
+// Use these when you want more control over Discord notifications
 // ═══════════════════════════════════════════════════════════════════════════
 
 /**
- * Log an error and send it to Discord
- * Use this for errors that should trigger Discord notifications
+ * Log an error and send it to Discord with additional context
+ * Use this when you need to include extra context like userId, tokenMint, etc.
  */
 export const logErrorWithDiscord = async (
   logger: pino.Logger,
@@ -122,10 +234,11 @@ export const logErrorWithDiscord = async (
   // Convert to Error object if needed
   const errorObj = error instanceof Error ? error : new Error(String(error))
 
-  // Log locally first
-  logger.error({ error: String(error), ...context.additionalInfo }, message)
+  // Log locally first (this will also trigger the auto-hook, but with less context)
+  // So we skip the auto-hook by logging directly and sending to Discord ourselves
+  baseLogger.child({ module }).error({ error: String(error), ...context.additionalInfo }, message)
 
-  // Send to Discord (fire and forget - don't block on this)
+  // Send to Discord with full context
   discordErrorService
     .reportError(errorObj, {
       ...context,
@@ -151,8 +264,8 @@ export const logFatalWithDiscord = async (
   const module = context.module || bindings.module || 'unknown'
   const errorObj = error instanceof Error ? error : new Error(String(error))
 
-  // Log locally first at fatal level
-  logger.fatal({ error: String(error), ...context.additionalInfo }, message)
+  // Log locally first
+  baseLogger.child({ module }).fatal({ error: String(error), ...context.additionalInfo }, message)
 
   // Send to Discord with fatal severity (bypasses rate limit)
   discordErrorService
@@ -172,7 +285,7 @@ export const logFatalWithDiscord = async (
 
 /**
  * Utility for logging with timing and Discord error reporting
- * Like withTiming but also sends errors to Discord
+ * Like withTiming but also sends errors to Discord with context
  */
 export const withTimingAndDiscord = async <T>(
   logger: pino.Logger,
@@ -189,7 +302,7 @@ export const withTimingAndDiscord = async <T>(
     const durationMs = Date.now() - start
     logger.error({ operation, durationMs, error: String(error) }, `${operation} failed`)
 
-    // Send to Discord
+    // Send to Discord with additional context
     const errorObj = error instanceof Error ? error : new Error(String(error))
     const bindings = logger.bindings?.() || {}
     discordErrorService
@@ -228,4 +341,7 @@ export const reportToDiscord = (
 // Re-export the ErrorContext type for convenience
 export type { ErrorContext }
 
-export default logger
+// Export base logger for cases where Discord hook is not wanted
+export const rawLogger = baseLogger
+
+export default baseLogger
