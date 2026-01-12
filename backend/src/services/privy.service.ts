@@ -629,22 +629,17 @@ class PrivyService {
       const keypair = Keypair.fromSecretKey(secretKey)
       const walletAddress = keypair.publicKey.toString()
 
-      // Extract CUID2 from DID format (did:privy:cmk8cg1ld02ksjx0bsfeepzgn -> cmk8cg1ld02ksjx0bsfeepzgn)
-      // Privy's walletApi.importWallet expects the raw CUID2, not the full DID
-      const ownerId = privyUserId.startsWith('did:privy:')
-        ? privyUserId.replace('did:privy:', '')
-        : privyUserId
-
-      logger.info({ privyUserId, ownerId, walletAddress }, 'Importing wallet into Privy')
+      logger.info({ privyUserId, walletAddress }, 'Importing wallet into Privy')
 
       // Import the wallet into Privy
       // This makes it a Privy-managed wallet that uses delegated signing
+      // Note: Use `owner: { userId: ... }` for user ownership, NOT `ownerId` (which is for Key Quorum ID)
       const result = await this.client.walletApi.importWallet({
         chainType: 'solana',
         address: walletAddress,
         entropy: privateKey, // Base58 private key
         entropyType: 'private-key',
-        ownerId, // CUID2 owner ID (not the full DID)
+        owner: { userId: privyUserId }, // User ID that will own this wallet
       })
 
       logger.info({ privyUserId, walletAddress, walletId: result.id }, 'Successfully imported wallet into Privy')
