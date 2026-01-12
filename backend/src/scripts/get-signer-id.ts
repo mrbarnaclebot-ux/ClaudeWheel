@@ -34,7 +34,7 @@ async function main() {
     })
 
     if (walletResponse.ok) {
-      const wallet = await walletResponse.json()
+      const wallet = await walletResponse.json() as { owner_id?: string; additional_signers?: string[] }
       console.log('Wallet info:', JSON.stringify(wallet, null, 2))
       console.log('')
       console.log('Owner ID (this might be the signer ID):', wallet.owner_id)
