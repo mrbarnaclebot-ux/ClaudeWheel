@@ -6,19 +6,16 @@ import { discordErrorService } from './services/discord-error.service'
 import { startMultiUserFlywheelJob } from './jobs/multi-flywheel.job'
 import { startFastClaimJob, stopFastClaimJob } from './jobs/fast-claim.job'
 import { startBalanceUpdateJob, stopBalanceUpdateJob } from './jobs/balance-update.job'
-import { startWheelFlywheelJob } from './jobs/wheel-flywheel.job'
+// WHEEL token is now handled by regular Privy flywheel (no separate job needed)
 import statusRoutes from './routes/status.routes'
 import adminRoutes from './routes/admin.routes'
 import bagsRoutes from './routes/bags.routes'
-import authRoutes from './routes/auth.routes'
-import userTokenRoutes from './routes/user-token.routes'
 import privyAuthRoutes from './routes/privy-auth.routes'
 import privyTokensRoutes from './routes/privy-tokens.routes'
 import privyLaunchesRoutes from './routes/privy-launches.routes'
 import privyUsersRoutes from './routes/privy-users.routes'
 import privyMmRoutes from './routes/privy-mm.routes'
 import { bagsFmService } from './services/bags-fm'
-import { isEncryptionConfigured } from './services/encryption.service'
 import { startTelegramBot, stopTelegramBot, getTelegramWebhookMiddleware } from './telegram/bot'
 import { startDepositMonitorJob, stopDepositMonitorJob } from './jobs/deposit-monitor.job'
 import { adminWs } from './websocket/admin-ws'
@@ -38,8 +35,6 @@ app.use(express.json())
 app.use('/api/status', statusRoutes)
 app.use('/api/admin', adminRoutes)
 app.use('/api/bags', bagsRoutes)
-app.use('/api/auth', authRoutes)
-app.use('/api/user', userTokenRoutes)
 
 // Privy Routes (TMA & Web)
 app.use('/api/privy', privyAuthRoutes)
@@ -75,20 +70,6 @@ app.get('/', (_req, res) => {
         claimable: '/api/bags/claimable/:wallet',
         claimStats: '/api/bags/claim-stats/:wallet',
         dashboard: '/api/bags/dashboard',
-      },
-      auth: {
-        nonce: '/api/auth/nonce (POST)',
-        verify: '/api/auth/verify (POST)',
-        user: '/api/auth/user (GET)',
-      },
-      user: {
-        tokens: '/api/user/tokens (GET/POST)',
-        token: '/api/user/tokens/:tokenId (GET/DELETE)',
-        config: '/api/user/tokens/:tokenId/config (GET/PUT)',
-        claimable: '/api/user/tokens/:tokenId/claimable (GET)',
-        claim: '/api/user/tokens/:tokenId/claim (POST)',
-        claims: '/api/user/tokens/:tokenId/claims (GET)',
-        sell: '/api/user/tokens/:tokenId/sell (POST)',
       },
       telegram: {
         webhook: '/telegram/webhook (POST)',
@@ -129,56 +110,41 @@ async function initializeServices() {
     loggers.server.warn('Bags.fm API key not set (BAGS_FM_API_KEY)')
   }
 
-  // Check encryption configuration for multi-user support
-  const encryptionReady = isEncryptionConfigured()
-  if (encryptionReady) {
-    loggers.server.info('Encryption configured (multi-user mode available)')
-  } else {
-    loggers.server.warn('Encryption not configured - set ENCRYPTION_MASTER_KEY for multi-user mode')
-  }
-
   // Log configuration
   loggers.server.info({ rpc: env.solanaRpcUrl.slice(0, 30) + '...', minFeeThresholdSol: env.minFeeThresholdSol }, 'Configuration loaded')
 
-  // Start multi-user jobs if encryption is configured
-  if (encryptionReady) {
-    loggers.server.info('Starting multi-user automation...')
+  // Start automation jobs (Privy-based system - no encryption needed)
+  loggers.server.info('Starting automation jobs...')
 
-    // Start FAST claim job (every 30 seconds - claims when >= 0.15 SOL)
-    if (process.env.FAST_CLAIM_JOB_ENABLED !== 'false') {
-      startFastClaimJob()
-    } else {
-      loggers.server.info('Fast claim job disabled via FAST_CLAIM_JOB_ENABLED=false')
-    }
-
-    // Start multi-user flywheel job (every minute by default)
-    if (process.env.MULTI_USER_FLYWHEEL_ENABLED !== 'false') {
-      startMultiUserFlywheelJob()
-    } else {
-      loggers.server.info('Multi-user flywheel job disabled via MULTI_USER_FLYWHEEL_ENABLED=false')
-    }
-
-    // Start deposit monitor job for Telegram token launches
-    if (process.env.DEPOSIT_MONITOR_ENABLED !== 'false') {
-      startDepositMonitorJob()
-    } else {
-      loggers.server.info('Deposit monitor job disabled via DEPOSIT_MONITOR_ENABLED=false')
-    }
-
-    // Start balance update job (every 5 minutes by default)
-    if (process.env.BALANCE_UPDATE_JOB_ENABLED !== 'false') {
-      startBalanceUpdateJob()
-    } else {
-      loggers.server.info('Balance update job disabled via BALANCE_UPDATE_JOB_ENABLED=false')
-    }
-
-    // Start WHEEL token flywheel job (platform token - claims + market making)
-    if (process.env.WHEEL_FLYWHEEL_ENABLED !== 'false') {
-      startWheelFlywheelJob()
-    } else {
-      loggers.server.info('WHEEL flywheel job disabled via WHEEL_FLYWHEEL_ENABLED=false')
-    }
+  // Start FAST claim job (every 30 seconds - claims when >= 0.15 SOL)
+  if (process.env.FAST_CLAIM_JOB_ENABLED !== 'false') {
+    startFastClaimJob()
+  } else {
+    loggers.server.info('Fast claim job disabled via FAST_CLAIM_JOB_ENABLED=false')
   }
+
+  // Start multi-user flywheel job (every minute by default)
+  if (process.env.MULTI_USER_FLYWHEEL_ENABLED !== 'false') {
+    startMultiUserFlywheelJob()
+  } else {
+    loggers.server.info('Multi-user flywheel job disabled via MULTI_USER_FLYWHEEL_ENABLED=false')
+  }
+
+  // Start deposit monitor job for Telegram token launches
+  if (process.env.DEPOSIT_MONITOR_ENABLED !== 'false') {
+    startDepositMonitorJob()
+  } else {
+    loggers.server.info('Deposit monitor job disabled via DEPOSIT_MONITOR_ENABLED=false')
+  }
+
+  // Start balance update job (every 5 minutes by default)
+  if (process.env.BALANCE_UPDATE_JOB_ENABLED !== 'false') {
+    startBalanceUpdateJob()
+  } else {
+    loggers.server.info('Balance update job disabled via BALANCE_UPDATE_JOB_ENABLED=false')
+  }
+
+  // WHEEL token is processed by regular Privy flywheel (tokenSource='platform')
 
   // Start Telegram bot
   if (env.telegramBotToken) {

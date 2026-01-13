@@ -1,8 +1,10 @@
 import { Router, Request, Response, NextFunction } from 'express'
 import { privyService } from '../services/privy.service'
 import { prisma, isPrismaConfigured } from '../config/prisma'
-import { supabase } from '../config/database'
 import { loggers } from '../utils/logger'
+
+// Legacy Supabase removed - image upload will fail gracefully
+const supabase = null as any
 import { z } from 'zod'
 import multer from 'multer'
 

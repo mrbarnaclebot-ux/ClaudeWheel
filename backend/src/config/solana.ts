@@ -1,5 +1,4 @@
-import { Connection, Keypair, PublicKey, LAMPORTS_PER_SOL } from '@solana/web3.js'
-import bs58 from 'bs58'
+import { Connection, PublicKey, LAMPORTS_PER_SOL } from '@solana/web3.js'
 import { env } from './env'
 import { loggers } from '../utils/logger'
 
@@ -31,39 +30,8 @@ export function getConnection(): Connection {
   return connection
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// WALLET INITIALIZATION
-// ═══════════════════════════════════════════════════════════════════════════
-
-export function getDevWallet(): Keypair | null {
-  if (!env.devWalletPrivateKey) {
-    loggers.solana.warn('Dev wallet private key not configured')
-    return null
-  }
-
-  try {
-    const secretKey = bs58.decode(env.devWalletPrivateKey)
-    return Keypair.fromSecretKey(secretKey)
-  } catch (error) {
-    loggers.solana.error({ error: String(error) }, 'Failed to load dev wallet')
-    return null
-  }
-}
-
-export function getOpsWallet(): Keypair | null {
-  if (!env.opsWalletPrivateKey) {
-    loggers.solana.warn('Ops wallet private key not configured')
-    return null
-  }
-
-  try {
-    const secretKey = bs58.decode(env.opsWalletPrivateKey)
-    return Keypair.fromSecretKey(secretKey)
-  } catch (error) {
-    loggers.solana.error({ error: String(error) }, 'Failed to load ops wallet')
-    return null
-  }
-}
+// Wallet keypair functions removed - all wallets now use Privy delegated signing
+// WHEEL platform token is registered in Prisma with tokenSource='platform'
 
 // ═══════════════════════════════════════════════════════════════════════════
 // TOKEN MINT

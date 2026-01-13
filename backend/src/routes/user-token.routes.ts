@@ -1,22 +1,96 @@
+// ═══════════════════════════════════════════════════════════════════════════
+// DEPRECATED: This file contains legacy Supabase routes and is no longer mounted.
+// Use privy-tokens.routes.ts for Privy-based token management.
+// This file is kept for reference only.
+// ═══════════════════════════════════════════════════════════════════════════
+
 import { Router, Request, Response } from 'express'
-import { verifySignature, hashConfig, isMessageRecent } from '../utils/signature-verify'
-import { supabase } from '../config/database'
-import { getUserByWallet } from '../services/user.service'
-import {
-  registerToken,
-  getUserTokens,
-  getUserToken,
-  getTokenConfig,
-  updateTokenConfig,
-  deactivateToken,
-  getFlywheelState,
-} from '../services/user-token.service'
-import { isEncryptionConfigured } from '../services/encryption.service'
-import { multiUserClaimService } from '../services/multi-user-claim.service'
+// multiUserClaimService removed - legacy Supabase code deprecated
 import { bagsFmService } from '../services/bags-fm'
 import { balanceMonitorService } from '../services/balance-monitor.service'
 import crypto from 'crypto'
 import { loggers } from '../utils/logger'
+import { Keypair } from '@solana/web3.js'
+
+// ═══════════════════════════════════════════════════════════════════════════
+// LEGACY STUBS - These functions no longer exist, replaced by Privy equivalents
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Stub for supabase - legacy database no longer active
+const supabase = null as any
+
+// Stub for signature verification
+function verifySignature(_message: string, _signature: string, _publicKey: string): { valid: boolean; error?: string } {
+  return { valid: false, error: 'Legacy signature verification disabled' }
+}
+function hashConfig(_config: any): string { return '' }
+function isMessageRecent(_message: string): boolean { return false }
+
+// Stub for user service
+async function getUserByWallet(_walletAddress: string): Promise<any | null> {
+  return null
+}
+
+// Stub for encryption
+function isEncryptionConfigured(): boolean { return false }
+
+// Legacy token interfaces
+interface UserToken {
+  id: string
+  user_id: string
+  token_mint_address: string
+  token_symbol: string
+  token_name: string | null
+  token_image: string | null
+  token_decimals: number
+  dev_wallet_address: string
+  ops_wallet_address: string
+  is_active: boolean
+  is_graduated: boolean
+  created_at: string
+  updated_at: string
+}
+
+interface UserTokenConfig {
+  id: string
+  user_token_id: string
+  flywheel_active: boolean
+  market_making_enabled: boolean
+  auto_claim_enabled: boolean
+  fee_threshold_sol: number
+  slippage_bps: number
+  trading_route: 'bags' | 'jupiter' | 'auto'
+  updated_at: string
+  buy_percent: number
+  sell_percent: number
+}
+
+interface UserFlywheelState {
+  id: string
+  user_token_id: string
+  cycle_phase: 'buy' | 'sell'
+  buy_count: number
+  sell_count: number
+  last_trade_at: string | null
+  consecutive_failures: number
+  last_failure_reason: string | null
+  last_failure_at: string | null
+  paused_until: string | null
+  total_failures: number
+  last_checked_at: string | null
+  last_check_result: string | null
+  updated_at: string
+}
+
+// Stub functions
+async function registerToken(_params: any): Promise<UserToken | null> { return null }
+async function getUserTokens(_userId: string): Promise<UserToken[]> { return [] }
+async function getUserToken(_tokenId: string): Promise<UserToken | null> { return null }
+async function getTokenConfig(_tokenId: string): Promise<UserTokenConfig | null> { return null }
+async function updateTokenConfig(_tokenId: string, _updates: any): Promise<UserTokenConfig | null> { return null }
+async function deactivateToken(_tokenId: string): Promise<boolean> { return false }
+async function getFlywheelState(_tokenId: string): Promise<UserFlywheelState | null> { return null }
+async function getDecryptedOpsWallet(_tokenId: string): Promise<Keypair | null> { return null }
 
 const router = Router()
 
@@ -644,23 +718,11 @@ router.post('/tokens/:tokenId/claim', verifyWalletOwnership, async (req: Request
       })
     }
 
-    // Execute manual claim
-    const result = await multiUserClaimService.manualClaim(tokenId)
-
-    if (!result.success) {
-      return res.status(400).json({
-        success: false,
-        error: result.error || 'Claim failed',
-      })
-    }
-
-    res.json({
-      success: true,
-      data: {
-        amountClaimedSol: result.amountClaimedSol,
-        signature: result.signature,
-      },
-      message: `Successfully claimed ${result.amountClaimedSol.toFixed(4)} SOL`,
+    // Legacy claim service removed - this endpoint is deprecated
+    // Users should migrate to Privy TMA for token management
+    return res.status(410).json({
+      success: false,
+      error: 'This endpoint is deprecated. Legacy manual claims have been removed. Please use the Telegram Mini App for token management.',
     })
   } catch (error) {
     loggers.user.error({ error: String(error) }, 'Error executing claim')
@@ -976,7 +1038,7 @@ router.post('/tokens/:tokenId/sell', verifyWalletOwnership, async (req: Request,
     }
 
     // Get decrypted ops wallet for trading
-    const { getDecryptedOpsWallet, getTokenConfig } = await import('../services/user-token.service')
+    // Note: Using stub functions since legacy encryption is disabled
     const { getConnection, getTokenBalance } = await import('../config/solana')
     const { PublicKey, VersionedTransaction } = await import('@solana/web3.js')
     const bs58 = await import('bs58')

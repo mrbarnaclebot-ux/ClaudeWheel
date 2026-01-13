@@ -6,7 +6,7 @@ import { prisma, isPrismaConfigured } from '../config/prisma'
 import { bagsFmService } from '../services/bags-fm'
 import { loggers } from '../utils/logger'
 import { z } from 'zod'
-import { getConnection, getOpsWallet } from '../config/solana'
+import { getConnection } from '../config/solana'
 import { sendTransactionWithPrivySigning, sendSerializedTransactionWithPrivySigning } from '../utils/transaction'
 import { env } from '../config/env'
 
@@ -899,14 +899,25 @@ router.post('/:id/claim', async (req: PrivyRequest, res: Response) => {
         userReceivedSol = transferAmount - platformFeeSol
 
         const devPubkey = new PublicKey(devWalletAddress)
-        const platformOpsWallet = getOpsWallet()
+
+        // Get platform ops wallet address from Prisma
+        let platformOpsWalletAddress: string | null = null
+        try {
+          const platformToken = await prisma.privyUserToken.findFirst({
+            where: { tokenSource: 'platform' },
+            include: { opsWallet: true },
+          })
+          platformOpsWalletAddress = platformToken?.opsWallet?.walletAddress || null
+        } catch {
+          // Platform token not found - skip platform fee
+        }
 
         // Transfer platform fee (10%)
-        if (platformOpsWallet && platformFeeSol >= 0.001) {
+        if (platformOpsWalletAddress && platformFeeSol >= 0.001) {
           const platformTx = new Transaction().add(
             SystemProgram.transfer({
               fromPubkey: devPubkey,
-              toPubkey: platformOpsWallet.publicKey,
+              toPubkey: new PublicKey(platformOpsWalletAddress),
               lamports: Math.floor(platformFeeSol * 1e9),
             })
           )

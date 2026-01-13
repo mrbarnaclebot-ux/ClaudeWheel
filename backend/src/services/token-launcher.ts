@@ -13,9 +13,13 @@ import {
 import bs58 from 'bs58'
 import { env } from '../config/env'
 import { getConnection } from '../config/solana'
-import { decrypt } from './encryption.service'
 import { loggers } from '../utils/logger'
 import { privyService } from './privy.service'
+
+// Legacy encryption removed - stub that throws
+function decrypt(_data: { ciphertext: string; iv: string; authTag: string }): never {
+  throw new Error('Legacy encryption removed. Use launchTokenWithPrivySigning for token launches.')
+}
 
 // Import Bags SDK
 import { BagsSDK, signAndSendTransaction } from '@bagsfm/bags-sdk'

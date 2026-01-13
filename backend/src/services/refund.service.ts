@@ -10,10 +10,16 @@ import {
   LAMPORTS_PER_SOL,
 } from '@solana/web3.js'
 import { connection, getBalance } from '../config/solana'
-import { supabase } from '../config/database'
 import { prisma, isPrismaConfigured } from '../config/prisma'
-import { getKeypairFromEncrypted } from './wallet-generator'
 import { loggers } from '../utils/logger'
+
+// Legacy Supabase removed - stub for backward compatibility
+const supabase = null as any
+
+// Legacy encryption removed - this function will throw if called
+function getKeypairFromEncrypted(_encrypted: string, _iv: string, _authTag: string): never {
+  throw new Error('Legacy encryption removed. Use Privy delegated signing for refunds.')
+}
 
 // Minimum SOL to keep for rent exemption
 const RENT_RESERVE_SOL = 0.001
@@ -74,7 +80,7 @@ export async function getPendingRefunds(): Promise<PendingRefund[]> {
 
   // Enrich with current balance and original funder
   const enrichedData = await Promise.all(
-    (data || []).map(async (launch) => {
+    (data || []).map(async (launch: any) => {
       try {
         const devWalletPubkey = new PublicKey(launch.dev_wallet_address)
         const currentBalance = await getBalance(devWalletPubkey)
@@ -189,12 +195,13 @@ export async function executeRefund(
       return { success: false, error: 'Invalid refund address' }
     }
 
-    // Get the dev wallet keypair
+    // LEGACY: Encryption-based refund is deprecated
+    // This will throw at runtime - use Privy delegated signing for refunds
     const devWalletKeypair = getKeypairFromEncrypted(
       launch.dev_wallet_private_key_encrypted,
       launch.dev_encryption_iv,
       launch.dev_encryption_auth_tag || ''
-    )
+    ) as any as import('@solana/web3.js').Keypair
 
     // Check current balance
     const currentBalance = await getBalance(devWalletKeypair.publicKey)

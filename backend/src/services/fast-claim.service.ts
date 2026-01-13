@@ -7,7 +7,7 @@
 
 import { Connection, Transaction, PublicKey, SystemProgram } from '@solana/web3.js'
 import { prisma, isPrismaConfigured } from '../config/prisma'
-import { getConnection, getOpsWallet, getSolPrice } from '../config/solana'
+import { getConnection, getSolPrice } from '../config/solana'
 import { env } from '../config/env'
 import { bagsFmService, ClaimablePosition } from './bags-fm'
 import { loggers } from '../utils/logger'
@@ -487,14 +487,27 @@ class FastClaimService {
       }
 
       const devPubkey = new PublicKey(devWalletAddress)
-      const platformOpsWallet = getOpsWallet()
+
+      // Get platform ops wallet address from Prisma (the WHEEL platform token's ops wallet)
+      let platformOpsWalletAddress: string | null = null
+      if (platformFeeSol >= 0.001) {
+        try {
+          const platformToken = await prisma.privyUserToken.findFirst({
+            where: { tokenSource: 'platform' },
+            include: { opsWallet: true },
+          })
+          platformOpsWalletAddress = platformToken?.opsWallet?.walletAddress || null
+        } catch (e) {
+          loggers.claim.warn('Failed to get platform ops wallet from Prisma')
+        }
+      }
 
       // Transfer 1: Platform fee to WHEEL ops wallet (10%) - skip for WHEEL token
-      if (platformOpsWallet && platformFeeSol >= 0.001) {
+      if (platformOpsWalletAddress && platformFeeSol >= 0.001) {
         const platformTx = new Transaction().add(
           SystemProgram.transfer({
             fromPubkey: devPubkey,
-            toPubkey: platformOpsWallet.publicKey,
+            toPubkey: new PublicKey(platformOpsWalletAddress),
             lamports: Math.floor(platformFeeSol * 1e9),
           })
         )

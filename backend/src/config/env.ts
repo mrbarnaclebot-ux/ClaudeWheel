@@ -19,22 +19,13 @@ const envSchema = z.object({
   SOLANA_WS_URL: z.string().default('wss://api.mainnet-beta.solana.com'),
   HELIUS_API_KEY: z.string().optional(),
 
-  // Wallets (DEPRECATED: Legacy system only, will be removed in future version)
-  DEV_WALLET_PRIVATE_KEY: z.string().optional(), // DEPRECATED: Use Privy delegated signing
+  // Wallets
   DEV_WALLET_ADDRESS: z.string().optional(), // Public key for admin authorization
-  OPS_WALLET_PRIVATE_KEY: z.string().optional(), // DEPRECATED: Use Privy delegated signing
 
   // Token
   TOKEN_MINT_ADDRESS: z.string().default('8JLGQ7RqhsvhsDhvjMuJUeeuaQ53GTJqSHNaBWf4BAGS'),
   TOKEN_SYMBOL: z.string().default('TOKEN'),
   TOKEN_DECIMALS: z.string().default('6'),
-
-  // Supabase (DEPRECATED: Legacy system only, will be removed in future version)
-  SUPABASE_URL: z.string().url().optional(), // DEPRECATED: Migrate to Prisma/Privy system
-  SUPABASE_SERVICE_KEY: z.string().optional(), // DEPRECATED: Migrate to Prisma/Privy system
-
-  // Encryption (DEPRECATED: Legacy system only, will be removed in future version)
-  ENCRYPTION_MASTER_KEY: z.string().optional(), // DEPRECATED: Privy system uses delegated signing
 
   // Automation
   FEE_COLLECTION_INTERVAL_MS: z.string().default('60000'),
@@ -122,21 +113,12 @@ export const env = {
   heliusApiKey: parsed.data.HELIUS_API_KEY,
 
   // Wallets
-  devWalletPrivateKey: parsed.data.DEV_WALLET_PRIVATE_KEY,
   devWalletAddress: parsed.data.DEV_WALLET_ADDRESS, // Public key for admin authorization
-  opsWalletPrivateKey: parsed.data.OPS_WALLET_PRIVATE_KEY,
 
   // Token
   tokenMintAddress: parsed.data.TOKEN_MINT_ADDRESS,
   tokenSymbol: parsed.data.TOKEN_SYMBOL,
   tokenDecimals: parseInt(parsed.data.TOKEN_DECIMALS, 10),
-
-  // Supabase
-  supabaseUrl: parsed.data.SUPABASE_URL,
-  supabaseServiceKey: parsed.data.SUPABASE_SERVICE_KEY,
-
-  // Encryption
-  encryptionMasterKey: parsed.data.ENCRYPTION_MASTER_KEY,
 
   // Automation
   feeCollectionIntervalMs: parseInt(parsed.data.FEE_COLLECTION_INTERVAL_MS, 10),

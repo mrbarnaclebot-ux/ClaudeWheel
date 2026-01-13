@@ -1,13 +1,12 @@
 import { Router, Request, Response } from 'express'
 import { env } from '../config/env'
-import { supabase } from '../config/database'
-import { connection, getDevWallet, getOpsWallet } from '../config/solana'
+import { prisma, isPrismaConfigured } from '../config/prisma'
+import { connection } from '../config/solana'
 import { PublicKey, LAMPORTS_PER_SOL } from '@solana/web3.js'
 import { getAssociatedTokenAddress, getAccount } from '@solana/spl-token'
 import type { ApiResponse, FlywheelStatus } from '../types'
 import { loggers } from '../utils/logger'
 import { getMultiUserFlywheelJobStatus } from '../jobs/multi-flywheel.job'
-import { getWheelFlywheelJobStatus } from '../jobs/wheel-flywheel.job'
 
 const router = Router()
 
@@ -89,22 +88,18 @@ router.get('/system', async (req: Request, res: Response) => {
     latency?: number
   }[] = []
 
-  // Check Supabase connection
+  // Check Prisma/Postgres connection
   try {
-    if (supabase && env.supabaseUrl && env.supabaseServiceKey) {
+    if (isPrismaConfigured()) {
       const start = Date.now()
-      const { error } = await supabase.from('config').select('id').limit(1)
+      await prisma.$queryRaw`SELECT 1`
       const latency = Date.now() - start
-      if (error) {
-        checks.push({ name: 'Supabase', status: 'disconnected', message: error.message, latency })
-      } else {
-        checks.push({ name: 'Supabase', status: 'connected', message: 'Database connected', latency })
-      }
+      checks.push({ name: 'Postgres (Prisma)', status: 'connected', message: 'Database connected', latency })
     } else {
-      checks.push({ name: 'Supabase', status: 'not_configured', message: 'SUPABASE_URL or SUPABASE_SERVICE_KEY not set' })
+      checks.push({ name: 'Postgres (Prisma)', status: 'not_configured', message: 'PRIVY_DATABASE_URL not set' })
     }
   } catch (error: any) {
-    checks.push({ name: 'Supabase', status: 'disconnected', message: error.message || 'Connection failed' })
+    checks.push({ name: 'Postgres (Prisma)', status: 'disconnected', message: error.message || 'Connection failed' })
   }
 
   // Check Solana RPC connection
@@ -117,17 +112,17 @@ router.get('/system', async (req: Request, res: Response) => {
     checks.push({ name: 'Solana RPC', status: 'disconnected', message: error.message || 'RPC connection failed' })
   }
 
-  // Check wallet configurations
-  if (env.devWalletPrivateKey) {
-    checks.push({ name: 'Dev Wallet', status: 'connected', message: 'Private key configured' })
+  // Check wallet configurations (legacy - now uses Privy delegated signing)
+  if (process.env.DEV_WALLET_PRIVATE_KEY) {
+    checks.push({ name: 'Dev Wallet', status: 'connected', message: 'WHEEL dev wallet configured' })
   } else {
-    checks.push({ name: 'Dev Wallet', status: 'not_configured', message: 'DEV_WALLET_PRIVATE_KEY not set' })
+    checks.push({ name: 'Dev Wallet', status: 'not_configured', message: 'Using Privy delegated signing' })
   }
 
-  if (env.opsWalletPrivateKey) {
-    checks.push({ name: 'Ops Wallet', status: 'connected', message: 'Private key configured' })
+  if (process.env.OPS_WALLET_PRIVATE_KEY) {
+    checks.push({ name: 'Ops Wallet', status: 'connected', message: 'WHEEL ops wallet configured' })
   } else {
-    checks.push({ name: 'Ops Wallet', status: 'not_configured', message: 'OPS_WALLET_PRIVATE_KEY not set' })
+    checks.push({ name: 'Ops Wallet', status: 'not_configured', message: 'Using Privy delegated signing' })
   }
 
   // Environment info (non-sensitive)
@@ -182,68 +177,8 @@ router.get('/platform-stats', async (_req: Request, res: Response) => {
     let totalSolVolume = 0
     let totalFeesCollected = 0
 
-    // Fetch from Supabase (legacy system)
-    if (supabase) {
-      try {
-        // Count launched tokens (from pending_token_launches with completed status)
-        const { count: launchedLegacy } = await supabase
-          .from('pending_token_launches')
-          .select('*', { count: 'exact', head: true })
-          .eq('status', 'completed')
-        launchedCount += launchedLegacy || 0
-
-        // Count all registered user tokens
-        const { count: registeredLegacy } = await supabase
-          .from('user_tokens')
-          .select('*', { count: 'exact', head: true })
-          .eq('is_active', true)
-        registeredCount += registeredLegacy || 0
-
-        // Count MM-only tokens (market_making enabled but auto_claim disabled)
-        const { data: mmOnlyLegacy } = await supabase
-          .from('user_token_config')
-          .select('id')
-          .eq('market_making_enabled', true)
-          .eq('auto_claim_enabled', false)
-        mmOnlyCount += mmOnlyLegacy?.length || 0
-
-        // Count active flywheels
-        const { count: activeFlywheels } = await supabase
-          .from('user_token_config')
-          .select('*', { count: 'exact', head: true })
-          .eq('flywheel_active', true)
-        totalActiveFlywheels += activeFlywheels || 0
-
-        // Count total users
-        const { count: usersLegacy } = await supabase
-          .from('users')
-          .select('*', { count: 'exact', head: true })
-        totalUsers += usersLegacy || 0
-
-        // Get fee stats
-        const { data: feeStats } = await supabase
-          .from('fee_stats')
-          .select('total_collected')
-          .eq('id', 'main')
-          .single()
-        totalFeesCollected += feeStats?.total_collected || 0
-
-        // Calculate total volume from transactions
-        const { data: txVolume } = await supabase
-          .from('transactions')
-          .select('amount')
-        if (txVolume) {
-          totalSolVolume += txVolume.reduce((sum, tx) => sum + (tx.amount || 0), 0)
-        }
-      } catch (e) {
-        loggers.server.warn('Failed to fetch legacy platform stats')
-      }
-    }
-
-    // Fetch from Prisma (Privy system) - import prisma client
+    // Fetch from Prisma (Privy system)
     try {
-      const { prisma } = await import('../config/prisma')
-
       // Count launched tokens from Privy
       const privyLaunched = await prisma.privyPendingLaunch.count({
         where: { status: 'launched' }
@@ -331,25 +266,31 @@ router.get('/platform-stats', async (_req: Request, res: Response) => {
 })
 
 // GET /api/status/wheel - Get LIVE WHEEL token data from Solana
+// WHEEL is now a regular Privy token with tokenSource='platform'
 router.get('/wheel', async (_req: Request, res: Response) => {
   try {
-    const tokenMint = new PublicKey(env.tokenMintAddress)
+    // Get WHEEL token from Prisma (platform token)
+    const wheelToken = await prisma.privyUserToken.findFirst({
+      where: { tokenSource: 'platform' },
+      include: {
+        devWallet: true,
+        opsWallet: true,
+        config: true,
+      },
+    })
 
-    // Get wallet keypairs
-    const devWalletKeypair = getDevWallet()
-    const opsWalletKeypair = getOpsWallet()
-
-    // Get wallet addresses
-    const devWalletAddress = devWalletKeypair?.publicKey?.toBase58() || env.devWalletAddress || ''
-    const opsWalletAddress = opsWalletKeypair?.publicKey?.toBase58() || ''
-
-    if (!devWalletAddress || !opsWalletAddress) {
+    if (!wheelToken) {
       return res.json({
         success: false,
-        error: 'Wallet configuration missing',
+        error: 'WHEEL platform token not found in database',
         timestamp: new Date().toISOString(),
       })
     }
+
+    const tokenMint = new PublicKey(wheelToken.tokenMintAddress)
+    const devWalletAddress = wheelToken.devWallet.walletAddress
+    const opsWalletAddress = wheelToken.opsWallet.walletAddress
+    const tokenDecimals = wheelToken.tokenDecimals
 
     const devPubkey = new PublicKey(devWalletAddress)
     const opsPubkey = new PublicKey(opsWalletAddress)
@@ -367,7 +308,7 @@ router.get('/wheel', async (_req: Request, res: Response) => {
     try {
       const devTokenAccount = await getAssociatedTokenAddress(tokenMint, devPubkey)
       const devTokenInfo = await getAccount(connection, devTokenAccount)
-      devTokenBalance = Number(devTokenInfo.amount) / Math.pow(10, env.tokenDecimals)
+      devTokenBalance = Number(devTokenInfo.amount) / Math.pow(10, tokenDecimals)
     } catch {
       // Token account doesn't exist or is empty
     }
@@ -375,58 +316,52 @@ router.get('/wheel', async (_req: Request, res: Response) => {
     try {
       const opsTokenAccount = await getAssociatedTokenAddress(tokenMint, opsPubkey)
       const opsTokenInfo = await getAccount(connection, opsTokenAccount)
-      opsTokenBalance = Number(opsTokenInfo.amount) / Math.pow(10, env.tokenDecimals)
+      opsTokenBalance = Number(opsTokenInfo.amount) / Math.pow(10, tokenDecimals)
     } catch {
       // Token account doesn't exist or is empty
     }
 
-    // Get flywheel status
-    const wheelFlywheelStatus = getWheelFlywheelJobStatus()
+    // Get flywheel status (WHEEL is now processed by multi-user flywheel)
     const multiFlywheelStatus = getMultiUserFlywheelJobStatus()
 
-    // Get fee stats from Supabase (if available)
+    // Get fee stats from Prisma
     let totalFeesCollected = 0
     let todayFeesCollected = 0
-    let hourFeesCollected = 0
-
-    if (supabase) {
-      try {
-        const { data: feeStats } = await supabase
-          .from('fee_stats')
-          .select('*')
-          .eq('id', 'main')
-          .single()
-
-        if (feeStats) {
-          totalFeesCollected = feeStats.total_collected || 0
-          todayFeesCollected = feeStats.today_collected || 0
-          hourFeesCollected = feeStats.hour_collected || 0
-        }
-      } catch {
-        // Fee stats table might not exist or be empty
-      }
-    }
-
-    // Get recent transactions count from Supabase
     let recentTransactionsCount = 0
-    if (supabase) {
-      try {
-        const { count } = await supabase
-          .from('transactions')
-          .select('*', { count: 'exact', head: true })
-        recentTransactionsCount = count || 0
-      } catch {
-        // Transactions table might not exist
-      }
+
+    try {
+      // Total fees collected for WHEEL token
+      const claimStats = await prisma.privyClaimHistory.aggregate({
+        where: { privyTokenId: wheelToken.id },
+        _sum: { totalAmountSol: true }
+      })
+      totalFeesCollected = Number(claimStats._sum.totalAmountSol || 0)
+
+      // Today's fees collected
+      const todayStart = new Date()
+      todayStart.setHours(0, 0, 0, 0)
+      const todayClaimStats = await prisma.privyClaimHistory.aggregate({
+        where: { privyTokenId: wheelToken.id, claimedAt: { gte: todayStart } },
+        _sum: { totalAmountSol: true }
+      })
+      todayFeesCollected = Number(todayClaimStats._sum.totalAmountSol || 0)
+
+      // Transaction count for WHEEL
+      recentTransactionsCount = await prisma.privyTransaction.count({
+        where: { privyTokenId: wheelToken.id }
+      })
+    } catch {
+      // Prisma stats might not be available
     }
 
     res.json({
       success: true,
       data: {
         token: {
-          mintAddress: env.tokenMintAddress,
-          symbol: env.tokenSymbol,
-          decimals: env.tokenDecimals,
+          id: wheelToken.id,
+          mintAddress: wheelToken.tokenMintAddress,
+          symbol: wheelToken.tokenSymbol,
+          decimals: tokenDecimals,
         },
         wallets: {
           dev: {
@@ -443,13 +378,11 @@ router.get('/wheel', async (_req: Request, res: Response) => {
         feeStats: {
           totalCollected: totalFeesCollected,
           todayCollected: todayFeesCollected,
-          hourCollected: hourFeesCollected,
         },
         flywheel: {
-          isActive: wheelFlywheelStatus.flywheelRunning || multiFlywheelStatus.running,
-          wheelJobRunning: wheelFlywheelStatus.flywheelRunning,
+          isActive: wheelToken.config?.flywheelActive || false,
           multiUserJobRunning: multiFlywheelStatus.running,
-          lastRunAt: wheelFlywheelStatus.mmStatus.lastRunAt || multiFlywheelStatus.lastRunAt || null,
+          lastRunAt: multiFlywheelStatus.lastRunAt || null,
         },
         transactionsCount: recentTransactionsCount,
       },

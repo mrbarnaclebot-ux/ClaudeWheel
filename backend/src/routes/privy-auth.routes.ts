@@ -1,6 +1,5 @@
 import { Router, Request, Response } from 'express'
 import { privyService } from '../services/privy.service'
-import { supabase } from '../config/database'
 import { loggers } from '../utils/logger'
 
 const router = Router()

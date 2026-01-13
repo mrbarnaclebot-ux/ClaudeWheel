@@ -1,30 +1,15 @@
-import { supabase } from '../config/database'
 import { prisma, isPrismaConfigured } from '../config/prisma'
-import { encrypt, decrypt, validateEncryptedKey, EncryptedData } from './encryption.service'
-import { Keypair } from '@solana/web3.js'
-import bs58 from 'bs58'
 import { loggers } from '../utils/logger'
 
 // ═══════════════════════════════════════════════════════════════════════════
 // USER TOKEN SERVICE
-// Handles token registration with encrypted dev wallet keys
+// Privy-only implementation using Prisma for data storage
+// Delegated signing via Privy API (no private keys stored)
 // ═══════════════════════════════════════════════════════════════════════════
 
-export interface UserToken {
-  id: string
-  user_id: string
-  token_mint_address: string
-  token_symbol: string
-  token_name: string | null
-  token_image: string | null
-  token_decimals: number
-  dev_wallet_address: string
-  ops_wallet_address: string
-  is_active: boolean
-  is_graduated: boolean
-  created_at: string
-  updated_at: string
-}
+// ═══════════════════════════════════════════════════════════════════════════
+// TYPES
+// ═══════════════════════════════════════════════════════════════════════════
 
 export interface UserTokenConfig {
   id: string
@@ -61,795 +46,6 @@ export interface UserFlywheelState {
   updated_at: string
 }
 
-export interface RegisterTokenParams {
-  userId: string
-  tokenMintAddress: string
-  tokenSymbol: string
-  tokenName?: string
-  tokenImage?: string
-  tokenDecimals: number
-  devWalletPrivateKey: string // Base58 encoded
-  opsWalletPrivateKey: string // Base58 encoded - for automated market making
-}
-
-const DEFAULT_CONFIG: Omit<UserTokenConfig, 'id' | 'user_token_id' | 'updated_at'> = {
-  flywheel_active: false,
-  market_making_enabled: false,
-  auto_claim_enabled: true,
-  fee_threshold_sol: 0.01,
-  slippage_bps: 300,
-  trading_route: 'auto',
-  // 20% of current balance per trade (5 buys then 5 sells)
-  buy_percent: 20,
-  sell_percent: 20,
-}
-
-const DEFAULT_FLYWHEEL_STATE: Omit<UserFlywheelState, 'id' | 'user_token_id' | 'updated_at'> = {
-  cycle_phase: 'buy',
-  buy_count: 0,
-  sell_count: 0,
-  last_trade_at: null,
-  // Failure tracking
-  consecutive_failures: 0,
-  last_failure_reason: null,
-  last_failure_at: null,
-  paused_until: null,
-  total_failures: 0,
-  last_checked_at: null,
-  last_check_result: null,
-}
-
-/**
- * Register a new token for a user
- * Encrypts and stores both dev and ops wallet private keys
- */
-export async function registerToken(params: RegisterTokenParams): Promise<UserToken | null> {
-  if (!supabase) {
-    loggers.user.warn('Supabase not configured')
-    return null
-  }
-
-  try {
-    // Validate the dev wallet private key and derive the wallet address
-    let devWalletAddress: string
-    try {
-      const secretKey = bs58.decode(params.devWalletPrivateKey)
-      const keypair = Keypair.fromSecretKey(secretKey)
-      devWalletAddress = keypair.publicKey.toString()
-    } catch (error) {
-      loggers.user.error('Invalid dev wallet private key format')
-      throw new Error('Invalid dev wallet private key format. Must be Base58 encoded.')
-    }
-
-    // Validate the ops wallet private key and derive the wallet address
-    let opsWalletAddress: string
-    try {
-      const secretKey = bs58.decode(params.opsWalletPrivateKey)
-      const keypair = Keypair.fromSecretKey(secretKey)
-      opsWalletAddress = keypair.publicKey.toString()
-    } catch (error) {
-      loggers.user.error('Invalid ops wallet private key format')
-      throw new Error('Invalid ops wallet private key format. Must be Base58 encoded.')
-    }
-
-    // Encrypt the dev wallet private key
-    const encryptedDevKey = encrypt(params.devWalletPrivateKey)
-
-    // Encrypt the ops wallet private key
-    const encryptedOpsKey = encrypt(params.opsWalletPrivateKey)
-
-    // Check if user already has this token registered
-    const existing = await getUserTokenByMint(params.userId, params.tokenMintAddress)
-    if (existing) {
-      throw new Error('Token already registered for this user')
-    }
-
-    // Insert the user token with both encrypted keys
-    const { data: tokenData, error: tokenError } = await supabase
-      .from('user_tokens')
-      .insert([{
-        user_id: params.userId,
-        token_mint_address: params.tokenMintAddress,
-        token_symbol: params.tokenSymbol,
-        token_name: params.tokenName || null,
-        token_image: params.tokenImage || null,
-        token_decimals: params.tokenDecimals,
-        dev_wallet_address: devWalletAddress,
-        dev_wallet_private_key_encrypted: encryptedDevKey.ciphertext,
-        dev_encryption_iv: encryptedDevKey.iv,
-        dev_encryption_auth_tag: encryptedDevKey.authTag,
-        ops_wallet_address: opsWalletAddress,
-        ops_wallet_private_key_encrypted: encryptedOpsKey.ciphertext,
-        ops_encryption_iv: encryptedOpsKey.iv,
-        ops_encryption_auth_tag: encryptedOpsKey.authTag,
-        is_active: true,
-        is_graduated: false,
-      }])
-      .select()
-      .single()
-
-    if (tokenError) {
-      loggers.user.error({ error: tokenError.message }, 'Failed to register token')
-      throw new Error('Failed to register token: ' + tokenError.message)
-    }
-
-    const userToken = tokenData as UserToken & {
-      dev_wallet_private_key_encrypted: string
-      encryption_iv: string
-      encryption_auth_tag: string
-    }
-
-    // Create default config for the token
-    const { error: configError } = await supabase
-      .from('user_token_config')
-      .insert([{
-        user_token_id: userToken.id,
-        ...DEFAULT_CONFIG,
-      }])
-
-    if (configError) {
-      loggers.user.error({ error: configError.message, tokenId: userToken.id }, 'Failed to create token config')
-      // Clean up the token if config creation fails
-      await supabase.from('user_tokens').delete().eq('id', userToken.id)
-      throw new Error('Failed to create token configuration')
-    }
-
-    // Create default flywheel state
-    const { error: stateError } = await supabase
-      .from('user_flywheel_state')
-      .insert([{
-        user_token_id: userToken.id,
-        ...DEFAULT_FLYWHEEL_STATE,
-      }])
-
-    if (stateError) {
-      loggers.user.error({ error: stateError.message, tokenId: userToken.id }, 'Failed to create flywheel state')
-      // Clean up token and config if state creation fails
-      await supabase.from('user_token_config').delete().eq('user_token_id', userToken.id)
-      await supabase.from('user_tokens').delete().eq('id', userToken.id)
-      throw new Error('Failed to create flywheel state')
-    }
-
-    // Note: Fee stats are tracked via user_claim_history table
-    // Aggregates can be computed from claim history when needed
-
-    loggers.user.info({ tokenSymbol: params.tokenSymbol, userId: params.userId }, 'Registered token')
-
-    // Return without sensitive data
-    return {
-      id: userToken.id,
-      user_id: userToken.user_id,
-      token_mint_address: userToken.token_mint_address,
-      token_symbol: userToken.token_symbol,
-      token_name: userToken.token_name,
-      token_image: userToken.token_image,
-      token_decimals: userToken.token_decimals,
-      dev_wallet_address: userToken.dev_wallet_address,
-      ops_wallet_address: userToken.ops_wallet_address,
-      is_active: userToken.is_active,
-      is_graduated: userToken.is_graduated,
-      created_at: userToken.created_at,
-      updated_at: userToken.updated_at,
-    }
-  } catch (error) {
-    loggers.user.error({ error: String(error) }, 'Token registration failed')
-    throw error
-  }
-}
-
-/**
- * Get all tokens for a user
- */
-export async function getUserTokens(userId: string): Promise<UserToken[]> {
-  if (!supabase) {
-    return []
-  }
-
-  const { data, error } = await supabase
-    .from('user_tokens')
-    .select('id, user_id, token_mint_address, token_symbol, token_name, token_image, token_decimals, dev_wallet_address, ops_wallet_address, is_active, is_graduated, created_at, updated_at')
-    .eq('user_id', userId)
-    .order('created_at', { ascending: false })
-
-  if (error) {
-    loggers.user.error({ error: error.message, userId }, 'Failed to get user tokens')
-    return []
-  }
-
-  return data as UserToken[]
-}
-
-/**
- * Get a specific user token by ID
- */
-export async function getUserToken(userTokenId: string): Promise<UserToken | null> {
-  if (!supabase) {
-    return null
-  }
-
-  const { data, error } = await supabase
-    .from('user_tokens')
-    .select('id, user_id, token_mint_address, token_symbol, token_name, token_image, token_decimals, dev_wallet_address, ops_wallet_address, is_active, is_graduated, created_at, updated_at')
-    .eq('id', userTokenId)
-    .single()
-
-  if (error) {
-    if (error.code !== 'PGRST116') {
-      loggers.user.error({ error: error.message, userTokenId }, 'Failed to get user token')
-    }
-    return null
-  }
-
-  return data as UserToken
-}
-
-/**
- * Get user token by mint address
- */
-export async function getUserTokenByMint(userId: string, tokenMintAddress: string): Promise<UserToken | null> {
-  if (!supabase) {
-    return null
-  }
-
-  const { data, error } = await supabase
-    .from('user_tokens')
-    .select('id, user_id, token_mint_address, token_symbol, token_name, token_image, token_decimals, dev_wallet_address, ops_wallet_address, is_active, is_graduated, created_at, updated_at')
-    .eq('user_id', userId)
-    .eq('token_mint_address', tokenMintAddress)
-    .single()
-
-  if (error) {
-    if (error.code !== 'PGRST116') {
-      loggers.user.error({ error: error.message, userId, tokenMintAddress }, 'Failed to get user token by mint')
-    }
-    return null
-  }
-
-  return data as UserToken
-}
-
-/**
- * Get decrypted dev wallet keypair for operations
- * SECURITY: Only call this when actively signing transactions (e.g., claiming fees)
- */
-export async function getDecryptedDevWallet(userTokenId: string): Promise<Keypair | null> {
-  if (!supabase) {
-    return null
-  }
-
-  const { data, error } = await supabase
-    .from('user_tokens')
-    .select('dev_wallet_private_key_encrypted, dev_encryption_iv, dev_encryption_auth_tag')
-    .eq('id', userTokenId)
-    .single()
-
-  if (error) {
-    loggers.user.error({ error: error.message, userTokenId }, 'Failed to get encrypted key')
-    return null
-  }
-
-  try {
-    const decryptedKey = decrypt({
-      ciphertext: data.dev_wallet_private_key_encrypted,
-      iv: data.dev_encryption_iv,
-      authTag: data.dev_encryption_auth_tag,
-    })
-
-    const secretKey = bs58.decode(decryptedKey)
-    return Keypair.fromSecretKey(secretKey)
-  } catch (error) {
-    loggers.user.error({ error: String(error), userTokenId }, 'Failed to decrypt dev wallet')
-    return null
-  }
-}
-
-/**
- * Get decrypted ops wallet keypair for market making trades
- * SECURITY: Only call this when actively signing transactions (e.g., buy/sell trades)
- */
-export async function getDecryptedOpsWallet(userTokenId: string): Promise<Keypair | null> {
-  if (!supabase) {
-    return null
-  }
-
-  const { data, error } = await supabase
-    .from('user_tokens')
-    .select('ops_wallet_private_key_encrypted, ops_encryption_iv, ops_encryption_auth_tag')
-    .eq('id', userTokenId)
-    .single()
-
-  if (error) {
-    loggers.user.error({ error: error.message, userTokenId }, 'Failed to get encrypted ops key')
-    return null
-  }
-
-  // Check if ops wallet key exists
-  if (!data.ops_wallet_private_key_encrypted) {
-    loggers.user.warn({ userTokenId }, 'Ops wallet private key not configured for token')
-    return null
-  }
-
-  try {
-    const decryptedKey = decrypt({
-      ciphertext: data.ops_wallet_private_key_encrypted,
-      iv: data.ops_encryption_iv,
-      authTag: data.ops_encryption_auth_tag,
-    })
-
-    const secretKey = bs58.decode(decryptedKey)
-    return Keypair.fromSecretKey(secretKey)
-  } catch (error) {
-    loggers.user.error({ error: String(error), userTokenId }, 'Failed to decrypt ops wallet')
-    return null
-  }
-}
-
-/**
- * Get token config
- */
-export async function getTokenConfig(userTokenId: string): Promise<UserTokenConfig | null> {
-  if (!supabase) {
-    return null
-  }
-
-  const { data, error } = await supabase
-    .from('user_token_config')
-    .select('*')
-    .eq('user_token_id', userTokenId)
-    .single()
-
-  if (error) {
-    if (error.code !== 'PGRST116') {
-      loggers.user.error({ error: error.message, userTokenId }, 'Failed to get token config')
-    }
-    return null
-  }
-
-  return data as UserTokenConfig
-}
-
-/**
- * Update token config
- */
-export async function updateTokenConfig(
-  userTokenId: string,
-  updates: Partial<Omit<UserTokenConfig, 'id' | 'user_token_id' | 'updated_at'>>
-): Promise<UserTokenConfig | null> {
-  if (!supabase) {
-    return null
-  }
-
-  const { data, error } = await supabase
-    .from('user_token_config')
-    .update(updates)
-    .eq('user_token_id', userTokenId)
-    .select()
-    .single()
-
-  if (error) {
-    loggers.user.error({ error: error.message, userTokenId }, 'Failed to update token config')
-    return null
-  }
-
-  return data as UserTokenConfig
-}
-
-/**
- * Get flywheel state for a token
- */
-export async function getFlywheelState(userTokenId: string): Promise<UserFlywheelState | null> {
-  if (!supabase) {
-    return null
-  }
-
-  const { data, error } = await supabase
-    .from('user_flywheel_state')
-    .select('*')
-    .eq('user_token_id', userTokenId)
-    .single()
-
-  if (error) {
-    if (error.code !== 'PGRST116') {
-      loggers.user.error({ error: error.message, userTokenId }, 'Failed to get flywheel state')
-    }
-    return null
-  }
-
-  // Map to simplified interface (database may have extra legacy columns)
-  return {
-    id: data.id,
-    user_token_id: data.user_token_id,
-    cycle_phase: data.cycle_phase,
-    buy_count: Number(data.buy_count) || 0,
-    sell_count: Number(data.sell_count) || 0,
-    last_trade_at: data.last_trade_at,
-    consecutive_failures: Number(data.consecutive_failures) || 0,
-    last_failure_reason: data.last_failure_reason,
-    last_failure_at: data.last_failure_at,
-    paused_until: data.paused_until,
-    total_failures: Number(data.total_failures) || 0,
-    last_checked_at: data.last_checked_at,
-    last_check_result: data.last_check_result,
-    updated_at: data.updated_at,
-  } as UserFlywheelState
-}
-
-/**
- * Update flywheel state
- */
-export async function updateFlywheelState(
-  userTokenId: string,
-  updates: Partial<Omit<UserFlywheelState, 'id' | 'user_token_id' | 'updated_at'>>
-): Promise<boolean> {
-  if (!supabase) {
-    return false
-  }
-
-  const { error } = await supabase
-    .from('user_flywheel_state')
-    .update(updates)
-    .eq('user_token_id', userTokenId)
-
-  if (error) {
-    loggers.user.error({ error: error.message, userTokenId }, 'Failed to update flywheel state')
-    return false
-  }
-
-  return true
-}
-
-/**
- * Get all active user tokens (for batch operations like claiming)
- */
-export async function getAllActiveUserTokens(): Promise<(UserToken & { config: UserTokenConfig })[]> {
-  if (!supabase) {
-    return []
-  }
-
-  const { data, error } = await supabase
-    .from('user_tokens')
-    .select(`
-      id, user_id, token_mint_address, token_symbol, token_name, token_image,
-      token_decimals, dev_wallet_address, ops_wallet_address, is_active, is_graduated,
-      created_at, updated_at,
-      user_token_config (*)
-    `)
-    .eq('is_active', true)
-
-  if (error) {
-    loggers.user.error({ error: error.message }, 'Failed to get active user tokens')
-    return []
-  }
-
-  return data.map(item => ({
-    ...item,
-    config: item.user_token_config as unknown as UserTokenConfig,
-  })) as (UserToken & { config: UserTokenConfig })[]
-}
-
-/**
- * Get active tokens with auto-claim enabled
- */
-export async function getTokensForAutoClaim(): Promise<UserToken[]> {
-  if (!supabase) {
-    return []
-  }
-
-  const { data, error } = await supabase
-    .from('user_tokens')
-    .select(`
-      id, user_id, token_mint_address, token_symbol, token_name, token_image,
-      token_decimals, dev_wallet_address, ops_wallet_address, is_active, is_graduated,
-      created_at, updated_at,
-      user_token_config!inner (auto_claim_enabled)
-    `)
-    .eq('is_active', true)
-    .eq('user_token_config.auto_claim_enabled', true)
-
-  if (error) {
-    loggers.user.error({ error: error.message }, 'Failed to get tokens for auto-claim')
-    return []
-  }
-
-  return data as UserToken[]
-}
-
-/**
- * Get active tokens with flywheel enabled
- */
-export async function getTokensForFlywheel(): Promise<(UserToken & { config: UserTokenConfig })[]> {
-  if (!supabase) {
-    return []
-  }
-
-  const { data, error } = await supabase
-    .from('user_tokens')
-    .select(`
-      id, user_id, token_mint_address, token_symbol, token_name, token_image,
-      token_decimals, dev_wallet_address, ops_wallet_address, is_active, is_graduated,
-      created_at, updated_at,
-      user_token_config!inner (*)
-    `)
-    .eq('is_active', true)
-    .eq('user_token_config.flywheel_active', true)
-
-  if (error) {
-    loggers.user.error({ error: error.message }, 'Failed to get tokens for flywheel')
-    return []
-  }
-
-  return data.map(item => ({
-    ...item,
-    config: item.user_token_config as unknown as UserTokenConfig,
-  })) as (UserToken & { config: UserTokenConfig })[]
-}
-
-/**
- * Deactivate a user token (soft delete)
- */
-export async function deactivateToken(userTokenId: string): Promise<boolean> {
-  if (!supabase) {
-    return false
-  }
-
-  // First disable all automation
-  await updateTokenConfig(userTokenId, {
-    flywheel_active: false,
-    market_making_enabled: false,
-    auto_claim_enabled: false,
-  })
-
-  // Then mark as inactive
-  const { error } = await supabase
-    .from('user_tokens')
-    .update({ is_active: false })
-    .eq('id', userTokenId)
-
-  if (error) {
-    loggers.user.error({ error: error.message, userTokenId }, 'Failed to deactivate token')
-    return false
-  }
-
-  loggers.user.info({ userTokenId }, 'Deactivated token')
-  return true
-}
-
-/**
- * Update token graduation status
- */
-export async function updateGraduationStatus(userTokenId: string, isGraduated: boolean): Promise<boolean> {
-  if (!supabase) {
-    return false
-  }
-
-  const { error } = await supabase
-    .from('user_tokens')
-    .update({ is_graduated: isGraduated })
-    .eq('id', userTokenId)
-
-  if (error) {
-    loggers.user.error({ error: error.message, userTokenId, isGraduated }, 'Failed to update graduation status')
-    return false
-  }
-
-  return true
-}
-
-/**
- * Check if a token exists but is suspended (is_active = false)
- * Returns the suspended token data if found, null otherwise
- */
-export async function getSuspendedTokenByMint(tokenMintAddress: string): Promise<{
-  id: string
-  token_symbol: string
-  token_name: string | null
-  dev_wallet_address: string
-  ops_wallet_address: string
-  telegram_user_id: string | null
-  user_id: string | null
-} | null> {
-  if (!supabase) {
-    return null
-  }
-
-  const { data, error } = await supabase
-    .from('user_tokens')
-    .select('id, token_symbol, token_name, dev_wallet_address, ops_wallet_address, telegram_user_id, user_id')
-    .eq('token_mint_address', tokenMintAddress)
-    .eq('is_active', false)
-    .single()
-
-  if (error) {
-    if (error.code !== 'PGRST116') {
-      loggers.user.error({ error: error.message, tokenMintAddress }, 'Failed to check for suspended token')
-    }
-    return null
-  }
-
-  return data
-}
-
-/**
- * Verify that provided private keys match the stored encrypted keys for a suspended token
- * This is used to verify ownership before reactivating a suspended token
- *
- * @param userTokenId The ID of the suspended token
- * @param devPrivateKey The dev wallet private key (base58)
- * @param opsPrivateKey The ops wallet private key (base58)
- * @returns Object with verification result and any error message
- */
-export async function verifySuspendedTokenOwnership(
-  userTokenId: string,
-  devPrivateKey: string,
-  opsPrivateKey: string
-): Promise<{ verified: boolean; error?: string }> {
-  if (!supabase) {
-    return { verified: false, error: 'Database not configured' }
-  }
-
-  try {
-    // Get the encrypted keys and wallet addresses from the suspended token
-    const { data, error } = await supabase
-      .from('user_tokens')
-      .select(`
-        dev_wallet_address,
-        dev_wallet_private_key_encrypted,
-        dev_encryption_iv,
-        dev_encryption_auth_tag,
-        ops_wallet_address,
-        ops_wallet_private_key_encrypted,
-        ops_encryption_iv,
-        ops_encryption_auth_tag
-      `)
-      .eq('id', userTokenId)
-      .eq('is_active', false)
-      .single()
-
-    if (error || !data) {
-      return { verified: false, error: 'Token not found or not suspended' }
-    }
-
-    // Validate dev private key format and derive address
-    let providedDevAddress: string
-    try {
-      const secretKey = bs58.decode(devPrivateKey)
-      const keypair = Keypair.fromSecretKey(secretKey)
-      providedDevAddress = keypair.publicKey.toString()
-    } catch {
-      return { verified: false, error: 'Invalid dev wallet private key format' }
-    }
-
-    // Check if provided dev key derives to the stored dev wallet address
-    if (providedDevAddress !== data.dev_wallet_address) {
-      return {
-        verified: false,
-        error: 'Dev wallet private key does not match the registered dev wallet address'
-      }
-    }
-
-    // Validate ops private key format and derive address
-    let providedOpsAddress: string
-    try {
-      const secretKey = bs58.decode(opsPrivateKey)
-      const keypair = Keypair.fromSecretKey(secretKey)
-      providedOpsAddress = keypair.publicKey.toString()
-    } catch {
-      return { verified: false, error: 'Invalid ops wallet private key format' }
-    }
-
-    // Check if provided ops key derives to the stored ops wallet address
-    if (providedOpsAddress !== data.ops_wallet_address) {
-      return {
-        verified: false,
-        error: 'Ops wallet private key does not match the registered ops wallet address'
-      }
-    }
-
-    // Both keys verified - the user has proven ownership
-    loggers.user.info({ userTokenId }, 'Ownership verified for suspended token')
-    return { verified: true }
-  } catch (error) {
-    loggers.user.error({ error: String(error), userTokenId }, 'Error verifying suspended token ownership')
-    return { verified: false, error: 'Verification failed due to an internal error' }
-  }
-}
-
-/**
- * Reactivate a suspended token after ownership verification
- * Updates the encrypted keys with the newly provided ones (in case encryption changed)
- * and sets is_active to true
- *
- * @param userTokenId The ID of the suspended token
- * @param devPrivateKey The dev wallet private key (base58)
- * @param opsPrivateKey The ops wallet private key (base58)
- * @param newTelegramUserId Optional new telegram user ID (if reactivating from a different account)
- * @returns The reactivated token or null on failure
- */
-export async function reactivateSuspendedToken(
-  userTokenId: string,
-  devPrivateKey: string,
-  opsPrivateKey: string,
-  newTelegramUserId?: string
-): Promise<UserToken | null> {
-  if (!supabase) {
-    return null
-  }
-
-  try {
-    // First verify ownership
-    const verification = await verifySuspendedTokenOwnership(userTokenId, devPrivateKey, opsPrivateKey)
-    if (!verification.verified) {
-      loggers.user.error({ userTokenId, error: verification.error }, 'Reactivation failed - ownership not verified')
-      return null
-    }
-
-    // Re-encrypt the keys with current encryption (in case master key changed)
-    const encryptedDevKey = encrypt(devPrivateKey)
-    const encryptedOpsKey = encrypt(opsPrivateKey)
-
-    // Build update object
-    const updateData: Record<string, unknown> = {
-      is_active: true,
-      dev_wallet_private_key_encrypted: encryptedDevKey.ciphertext,
-      dev_encryption_iv: encryptedDevKey.iv,
-      dev_encryption_auth_tag: encryptedDevKey.authTag,
-      ops_wallet_private_key_encrypted: encryptedOpsKey.ciphertext,
-      ops_encryption_iv: encryptedOpsKey.iv,
-      ops_encryption_auth_tag: encryptedOpsKey.authTag,
-    }
-
-    // Update telegram_user_id if provided
-    if (newTelegramUserId) {
-      updateData.telegram_user_id = newTelegramUserId
-    }
-
-    // Reactivate the token with fresh encrypted keys
-    const { data, error } = await supabase
-      .from('user_tokens')
-      .update(updateData)
-      .eq('id', userTokenId)
-      .select('id, user_id, token_mint_address, token_symbol, token_name, token_image, token_decimals, dev_wallet_address, ops_wallet_address, is_active, is_graduated, created_at, updated_at')
-      .single()
-
-    if (error) {
-      loggers.user.error({ error: error.message, userTokenId }, 'Failed to reactivate token')
-      return null
-    }
-
-    // Re-enable default config settings
-    await supabase
-      .from('user_token_config')
-      .update({
-        flywheel_active: false, // Start with flywheel off for safety
-        auto_claim_enabled: true,
-      })
-      .eq('user_token_id', userTokenId)
-
-    // Reset flywheel state
-    await supabase
-      .from('user_flywheel_state')
-      .update({
-        cycle_phase: 'buy',
-        buy_count: 0,
-        sell_count: 0,
-      })
-      .eq('user_token_id', userTokenId)
-
-    loggers.user.info({ userTokenId }, 'Reactivated suspended token')
-    return data as UserToken
-  } catch (error) {
-    loggers.user.error({ error: String(error), userTokenId }, 'Token reactivation failed')
-    return null
-  }
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// PRIVY-SPECIFIC METHODS
-// For tokens registered via Privy (TMA/embedded wallets)
-// No decryption needed - Privy handles signing
-// Uses Prisma instead of Supabase
-// ═══════════════════════════════════════════════════════════════════════════
-
 /**
  * Privy token with config and wallet info
  */
@@ -873,6 +69,10 @@ export interface PrivyTokenWithConfig {
   // Joined flywheel state (optional)
   privy_flywheel_state?: UserFlywheelState
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// HELPER FUNCTIONS
+// ═══════════════════════════════════════════════════════════════════════════
 
 /**
  * Map Prisma token result to PrivyTokenWithConfig interface
@@ -929,6 +129,11 @@ function mapPrismaTokenToPrivyTokenWithConfig(token: any): PrivyTokenWithConfig 
     } : undefined,
   }
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PRIVY TOKEN METHODS
+// Uses Prisma for data storage and Privy for delegated signing
+// ═══════════════════════════════════════════════════════════════════════════
 
 /**
  * Get active Privy tokens with flywheel enabled
@@ -1073,8 +278,8 @@ export async function getPrivyFlywheelState(privyTokenId: string): Promise<UserF
       last_failure_at: state.lastFailureAt?.toISOString() || null,
       paused_until: state.pausedUntil?.toISOString() || null,
       total_failures: state.totalFailures,
-      last_checked_at: (state as any).lastCheckedAt?.toISOString() || null,
-      last_check_result: (state as any).lastCheckResult || null,
+      last_checked_at: state.lastCheckedAt?.toISOString() || null,
+      last_check_result: state.lastCheckResult || null,
       updated_at: state.updatedAt.toISOString(),
     }
   } catch (error) {
@@ -1124,28 +329,36 @@ export async function updatePrivyFlywheelState(
  * Get token config for a Privy token
  */
 export async function getPrivyTokenConfig(privyTokenId: string): Promise<UserTokenConfig | null> {
-  if (!supabase) {
+  if (!isPrismaConfigured()) {
     return null
   }
 
-  const { data, error } = await supabase
-    .from('privy_token_config')
-    .select('*')
-    .eq('privy_token_id', privyTokenId)
-    .single()
+  try {
+    const config = await prisma.privyTokenConfig.findUnique({
+      where: { privyTokenId },
+    })
 
-  if (error) {
-    if (error.code !== 'PGRST116') {
-      loggers.user.error({ error: error.message, privyTokenId }, 'Failed to get Privy token config')
+    if (!config) {
+      return null
     }
+
+    return {
+      id: config.id,
+      user_token_id: config.privyTokenId,
+      flywheel_active: config.flywheelActive,
+      market_making_enabled: config.marketMakingEnabled,
+      auto_claim_enabled: config.autoClaimEnabled,
+      fee_threshold_sol: Number(config.feeThresholdSol),
+      slippage_bps: config.slippageBps,
+      trading_route: config.tradingRoute as 'bags' | 'jupiter' | 'auto',
+      updated_at: config.updatedAt.toISOString(),
+      buy_percent: config.buyPercent ?? 20,
+      sell_percent: config.sellPercent ?? 20,
+    }
+  } catch (error) {
+    loggers.user.error({ error: String(error), privyTokenId }, 'Failed to get Privy token config')
     return null
   }
-
-  // Map privy_token_id to user_token_id for interface compatibility
-  return {
-    ...data,
-    user_token_id: data.privy_token_id,
-  } as UserTokenConfig
 }
 
 /**
@@ -1155,82 +368,100 @@ export async function updatePrivyTokenConfig(
   privyTokenId: string,
   updates: Partial<Omit<UserTokenConfig, 'id' | 'user_token_id' | 'updated_at'>>
 ): Promise<UserTokenConfig | null> {
-  if (!supabase) {
+  if (!isPrismaConfigured()) {
     return null
   }
 
-  const { data, error } = await supabase
-    .from('privy_token_config')
-    .update(updates)
-    .eq('privy_token_id', privyTokenId)
-    .select()
-    .single()
+  try {
+    // Map snake_case interface fields to camelCase Prisma fields
+    const prismaUpdates: any = {}
 
-  if (error) {
-    loggers.user.error({ error: error.message, privyTokenId }, 'Failed to update Privy token config')
+    if (updates.flywheel_active !== undefined) prismaUpdates.flywheelActive = updates.flywheel_active
+    if (updates.market_making_enabled !== undefined) prismaUpdates.marketMakingEnabled = updates.market_making_enabled
+    if (updates.auto_claim_enabled !== undefined) prismaUpdates.autoClaimEnabled = updates.auto_claim_enabled
+    if (updates.fee_threshold_sol !== undefined) prismaUpdates.feeThresholdSol = updates.fee_threshold_sol
+    if (updates.slippage_bps !== undefined) prismaUpdates.slippageBps = updates.slippage_bps
+    if (updates.trading_route !== undefined) prismaUpdates.tradingRoute = updates.trading_route
+    if (updates.buy_percent !== undefined) prismaUpdates.buyPercent = updates.buy_percent
+    if (updates.sell_percent !== undefined) prismaUpdates.sellPercent = updates.sell_percent
+
+    const config = await prisma.privyTokenConfig.update({
+      where: { privyTokenId },
+      data: prismaUpdates,
+    })
+
+    return {
+      id: config.id,
+      user_token_id: config.privyTokenId,
+      flywheel_active: config.flywheelActive,
+      market_making_enabled: config.marketMakingEnabled,
+      auto_claim_enabled: config.autoClaimEnabled,
+      fee_threshold_sol: Number(config.feeThresholdSol),
+      slippage_bps: config.slippageBps,
+      trading_route: config.tradingRoute as 'bags' | 'jupiter' | 'auto',
+      updated_at: config.updatedAt.toISOString(),
+      buy_percent: config.buyPercent ?? 20,
+      sell_percent: config.sellPercent ?? 20,
+    }
+  } catch (error) {
+    loggers.user.error({ error: String(error), privyTokenId }, 'Failed to update Privy token config')
     return null
   }
-
-  return {
-    ...data,
-    user_token_id: data.privy_token_id,
-  } as UserTokenConfig
 }
 
 /**
  * Get a specific Privy token by ID with all related data
  */
 export async function getPrivyToken(privyTokenId: string): Promise<PrivyTokenWithConfig | null> {
-  if (!supabase) {
+  if (!isPrismaConfigured()) {
     return null
   }
 
-  const { data, error } = await supabase
-    .from('privy_user_tokens')
-    .select(`
-      *,
-      privy_token_config(*),
-      privy_flywheel_state(*),
-      dev_wallet:privy_wallets!dev_wallet_id(id, wallet_address),
-      ops_wallet:privy_wallets!ops_wallet_id(id, wallet_address)
-    `)
-    .eq('id', privyTokenId)
-    .single()
+  try {
+    const token = await prisma.privyUserToken.findUnique({
+      where: { id: privyTokenId },
+      include: {
+        devWallet: true,
+        opsWallet: true,
+        config: true,
+        flywheelState: true,
+      },
+    })
 
-  if (error) {
-    if (error.code !== 'PGRST116') {
-      loggers.user.error({ error: error.message, privyTokenId }, 'Failed to get Privy token')
+    if (!token) {
+      return null
     }
+
+    return mapPrismaTokenToPrivyTokenWithConfig(token)
+  } catch (error) {
+    loggers.user.error({ error: String(error), privyTokenId }, 'Failed to get Privy token')
     return null
   }
-
-  return data as PrivyTokenWithConfig
 }
 
 /**
  * Get all Privy tokens for a user
  */
 export async function getPrivyUserTokens(privyUserId: string): Promise<PrivyTokenWithConfig[]> {
-  if (!supabase) {
+  if (!isPrismaConfigured()) {
     return []
   }
 
-  const { data, error } = await supabase
-    .from('privy_user_tokens')
-    .select(`
-      *,
-      privy_token_config(*),
-      privy_flywheel_state(*),
-      dev_wallet:privy_wallets!dev_wallet_id(id, wallet_address),
-      ops_wallet:privy_wallets!ops_wallet_id(id, wallet_address)
-    `)
-    .eq('privy_user_id', privyUserId)
-    .order('created_at', { ascending: false })
+  try {
+    const tokens = await prisma.privyUserToken.findMany({
+      where: { privyUserId },
+      include: {
+        devWallet: true,
+        opsWallet: true,
+        config: true,
+        flywheelState: true,
+      },
+      orderBy: { createdAt: 'desc' },
+    })
 
-  if (error) {
-    loggers.user.error({ error: error.message, privyUserId }, 'Failed to get Privy user tokens')
+    return tokens.map(mapPrismaTokenToPrivyTokenWithConfig)
+  } catch (error) {
+    loggers.user.error({ error: String(error), privyUserId }, 'Failed to get Privy user tokens')
     return []
   }
-
-  return data as PrivyTokenWithConfig[]
 }

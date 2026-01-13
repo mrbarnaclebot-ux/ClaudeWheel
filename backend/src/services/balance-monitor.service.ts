@@ -6,13 +6,14 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { PublicKey } from '@solana/web3.js'
-import { supabase } from '../config/database'
 import { prisma, isPrismaConfigured, type PrivyUserToken, type PrivyWallet, type PrivyTokenConfig } from '../config/prisma'
 import { getConnection, getBalance, getTokenBalance, getSolPrice } from '../config/solana'
 import { bagsFmService } from './bags-fm'
-import { getTokensForAutoClaim } from './user-token.service'
 import { loggers } from '../utils/logger'
 import { env } from '../config/env'
+
+// Legacy Supabase removed - stub for backward compatibility
+const supabase = null as any
 
 // ═══════════════════════════════════════════════════════════════════════════
 // TYPES
@@ -550,10 +551,10 @@ class BalanceMonitorService {
     }
 
     return {
-      totalDevSol: data.reduce((sum, b) => sum + (b.dev_sol_balance || 0), 0),
-      totalOpsSol: data.reduce((sum, b) => sum + (b.ops_sol_balance || 0), 0),
-      totalClaimableFees: data.reduce((sum, b) => sum + (b.claimable_fees_sol || 0), 0),
-      totalUsdValue: data.reduce((sum, b) => sum + (b.dev_usd_value || 0) + (b.ops_usd_value || 0), 0),
+      totalDevSol: data.reduce((sum: number, b: any) => sum + (b.dev_sol_balance || 0), 0),
+      totalOpsSol: data.reduce((sum: number, b: any) => sum + (b.ops_sol_balance || 0), 0),
+      totalClaimableFees: data.reduce((sum: number, b: any) => sum + (b.claimable_fees_sol || 0), 0),
+      totalUsdValue: data.reduce((sum: number, b: any) => sum + (b.dev_usd_value || 0) + (b.ops_usd_value || 0), 0),
       tokenCount: data.length,
     }
   }

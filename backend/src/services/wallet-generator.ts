@@ -5,26 +5,10 @@
 
 import { Keypair } from '@solana/web3.js'
 import bs58 from 'bs58'
-import { encrypt, EncryptedData } from './encryption.service'
 
 export interface GeneratedWallet {
   publicKey: string
-  privateKey: string // Base58 encoded (will be encrypted before storage)
-}
-
-export interface EncryptedWalletPair {
-  devWallet: {
-    address: string
-    encryptedPrivateKey: string
-    iv: string
-    authTag: string
-  }
-  opsWallet: {
-    address: string
-    encryptedPrivateKey: string
-    iv: string
-    authTag: string
-  }
+  privateKey: string // Base58 encoded
 }
 
 /**
@@ -37,35 +21,6 @@ export function generateKeypair(): GeneratedWallet {
   return {
     publicKey: keypair.publicKey.toString(),
     privateKey: bs58.encode(keypair.secretKey),
-  }
-}
-
-/**
- * Generate both dev and ops wallets with encryption
- * Returns encrypted wallet pair ready for database storage
- */
-export function generateEncryptedWalletPair(): EncryptedWalletPair {
-  // Generate dev wallet
-  const devWallet = generateKeypair()
-  const devEncrypted = encrypt(devWallet.privateKey)
-
-  // Generate ops wallet
-  const opsWallet = generateKeypair()
-  const opsEncrypted = encrypt(opsWallet.privateKey)
-
-  return {
-    devWallet: {
-      address: devWallet.publicKey,
-      encryptedPrivateKey: devEncrypted.ciphertext,
-      iv: devEncrypted.iv,
-      authTag: devEncrypted.authTag,
-    },
-    opsWallet: {
-      address: opsWallet.publicKey,
-      encryptedPrivateKey: opsEncrypted.ciphertext,
-      iv: opsEncrypted.iv,
-      authTag: opsEncrypted.authTag,
-    },
   }
 }
 
@@ -97,21 +52,25 @@ export function validatePrivateKey(privateKeyBase58: string): string | null {
 }
 
 /**
- * Get keypair from encrypted data
- * @throws Error if decryption fails or key is invalid
+ * Get keypair from base58 private key
+ * @throws Error if key is invalid
  */
-export function getKeypairFromEncrypted(
-  encryptedPrivateKey: string,
-  iv: string,
-  authTag: string
-): Keypair {
+export function getKeypairFromPrivateKey(privateKeyBase58: string): Keypair {
   try {
-    const { decrypt } = require('./encryption.service')
-    const decrypted = decrypt({ ciphertext: encryptedPrivateKey, iv, authTag })
-    const secretKey = bs58.decode(decrypted)
+    const secretKey = bs58.decode(privateKeyBase58)
     return Keypair.fromSecretKey(secretKey)
   } catch (error: any) {
     const errorMessage = error?.message || 'Unknown error'
-    throw new Error(`Failed to decrypt wallet key: ${errorMessage}`)
+    throw new Error(`Invalid private key: ${errorMessage}`)
   }
+}
+
+// Legacy function - encryption has been removed (migrated to Privy)
+// @deprecated Use Privy delegated signing instead
+export function getKeypairFromEncrypted(
+  _encryptedPrivateKey: string,
+  _iv: string,
+  _authTag: string
+): Keypair {
+  throw new Error('Encryption has been removed. Use Privy delegated signing instead.')
 }

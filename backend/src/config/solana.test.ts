@@ -40,37 +40,8 @@ describe('Solana Configuration', () => {
     })
   })
 
-  describe('getDevWallet', () => {
-    it('should return null when private key is not configured', async () => {
-      process.env.DEV_WALLET_PRIVATE_KEY = ''
-      vi.resetModules()
-      const { getDevWallet } = await import('./solana')
-      expect(getDevWallet()).toBeNull()
-    })
-
-    it('should return null for invalid private key', async () => {
-      process.env.DEV_WALLET_PRIVATE_KEY = 'invalid-key'
-      vi.resetModules()
-      const { getDevWallet } = await import('./solana')
-      expect(getDevWallet()).toBeNull()
-    })
-  })
-
-  describe('getOpsWallet', () => {
-    it('should return null when private key is not configured', async () => {
-      process.env.OPS_WALLET_PRIVATE_KEY = ''
-      vi.resetModules()
-      const { getOpsWallet } = await import('./solana')
-      expect(getOpsWallet()).toBeNull()
-    })
-
-    it('should return null for invalid private key', async () => {
-      process.env.OPS_WALLET_PRIVATE_KEY = 'invalid-key'
-      vi.resetModules()
-      const { getOpsWallet } = await import('./solana')
-      expect(getOpsWallet()).toBeNull()
-    })
-  })
+  // Wallet keypair tests removed - all wallets now use Privy delegated signing
+  // WHEEL platform token is registered in Prisma with tokenSource='platform'
 
   describe('getSolPrice', () => {
     it('should return a mock price', async () => {

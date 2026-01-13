@@ -1,11 +1,19 @@
 import { Router, Response } from 'express'
 import { z } from 'zod'
 import { PublicKey, Transaction, SystemProgram, LAMPORTS_PER_SOL } from '@solana/web3.js'
-import { supabase } from '../config/database'
 import { requireAdmin, requirePermission, AdminRequest } from '../services/admin-auth.service'
-import { connection, getBalance, getDevWallet, getOpsWallet, getTokenBalance } from '../config/solana'
-import { getKeypairFromEncrypted } from '../services/wallet-generator'
+import { connection, getBalance, getTokenBalance } from '../config/solana'
 import { bagsFmService } from '../services/bags-fm'
+import { prisma } from '../config/prisma'
+
+// Legacy Supabase removed - stub for backward compatibility
+const supabase = null as any
+
+// Legacy encryption removed - stub that throws
+function getKeypairFromEncrypted(_encrypted: string, _iv: string, _authTag: string): never {
+  throw new Error('Legacy encryption removed. Use Privy delegated signing instead.')
+}
+
 import { getMultiUserFlywheelJobStatus, restartFlywheelJob } from '../jobs/multi-flywheel.job'
 import { getFastClaimJobStatus, triggerFastClaimCycle, restartFastClaimJob } from '../jobs/fast-claim.job'
 import { getBalanceUpdateJobStatus, triggerBalanceUpdate, restartBalanceUpdateJob } from '../jobs/balance-update.job'
@@ -17,8 +25,8 @@ import {
 import { getDepositMonitorStatus } from '../jobs/deposit-monitor.job'
 import { triggerFlywheelCycle } from '../jobs/multi-flywheel.job'
 import { loggers } from '../utils/logger'
-import { wheelMMService } from '../services/wheel-mm.service'
 import { platformConfigService } from '../services/platform-config.service'
+// wheelMMService removed - WHEEL is now handled by regular Privy flywheel
 
 // Legacy function stubs for backwards compatibility - these jobs have been removed
 // Returns deprecated status to inform API consumers these are no longer active
@@ -712,7 +720,7 @@ router.post('/tokens/suspend-all', requireAdmin, async (req: AdminRequest, res: 
     }
 
     // Suspend all tokens
-    const tokenIds = tokens.map(t => t.id)
+    const tokenIds = tokens.map((t: any) => t.id)
 
     const { error: suspendError } = await supabase
       .from('user_tokens')
@@ -780,7 +788,7 @@ router.post('/tokens/unsuspend-all', requireAdmin, async (req: AdminRequest, res
       })
     }
 
-    const tokenIds = tokens.map(t => t.id)
+    const tokenIds = tokens.map((t: any) => t.id)
 
     const { error: unsuspendError } = await supabase
       .from('user_tokens')
@@ -2593,12 +2601,13 @@ router.post('/tokens/:id/stop-and-refund', requireAdmin, async (req: AdminReques
     }> = []
 
     // Refund from dev wallet
+    // LEGACY: This code path uses deprecated encryption and will throw at runtime
     try {
       const devKeypair = getKeypairFromEncrypted(
         token.dev_wallet_private_key_encrypted,
         token.dev_encryption_iv,
         token.dev_encryption_auth_tag || ''
-      )
+      ) as any as import('@solana/web3.js').Keypair
 
       const devBalance = await getBalance(devKeypair.publicKey)
       console.log(`💰 Dev wallet balance: ${devBalance} SOL`)
@@ -2660,12 +2669,13 @@ router.post('/tokens/:id/stop-and-refund', requireAdmin, async (req: AdminReques
     }
 
     // Refund from ops wallet
+    // LEGACY: This code path uses deprecated encryption and will throw at runtime
     try {
       const opsKeypair = getKeypairFromEncrypted(
         token.ops_wallet_private_key_encrypted,
         token.ops_encryption_iv,
         token.ops_encryption_auth_tag || ''
-      )
+      ) as any as import('@solana/web3.js').Keypair
 
       const opsBalance = await getBalance(opsKeypair.publicKey)
       console.log(`💰 Ops wallet balance: ${opsBalance} SOL`)
@@ -2833,13 +2843,10 @@ router.get('/tokens/:id/refund-preview', requireAdmin, async (req: AdminRequest,
     let opsBalance = 0
     let originalFunder: string | null = null
 
+    // LEGACY: Encryption removed - get balance by address instead
     try {
-      const devKeypair = getKeypairFromEncrypted(
-        token.dev_wallet_private_key_encrypted,
-        token.dev_encryption_iv,
-        token.dev_encryption_auth_tag || ''
-      )
-      devBalance = await getBalance(devKeypair.publicKey)
+      const { PublicKey } = await import('@solana/web3.js')
+      devBalance = await getBalance(new PublicKey(token.dev_wallet_address))
 
       // Find original funder
       const { findOriginalFunder } = await import('../services/refund.service')
@@ -2849,12 +2856,8 @@ router.get('/tokens/:id/refund-preview', requireAdmin, async (req: AdminRequest,
     }
 
     try {
-      const opsKeypair = getKeypairFromEncrypted(
-        token.ops_wallet_private_key_encrypted,
-        token.ops_encryption_iv,
-        token.ops_encryption_auth_tag || ''
-      )
-      opsBalance = await getBalance(opsKeypair.publicKey)
+      const { PublicKey } = await import('@solana/web3.js')
+      opsBalance = await getBalance(new PublicKey(token.ops_wallet_address))
     } catch (e) {
       console.error('Error getting ops wallet balance:', e)
     }
@@ -2894,40 +2897,39 @@ router.get('/tokens/:id/refund-preview', requireAdmin, async (req: AdminRequest,
 
 // ═══════════════════════════════════════════════════════════════════════════
 // PLATFORM WHEEL TOKEN DATA
-// Platform $WHEEL token statistics and management
+// Platform $WHEEL token - now handled as a regular Privy token with tokenSource='platform'
 // ═══════════════════════════════════════════════════════════════════════════
 
 /**
  * GET /api/admin/wheel
- * Get $WHEEL platform token data (admin only)
+ * Get $WHEEL platform token data from Prisma (admin only)
+ * WHEEL is now a regular Privy token with tokenSource='platform'
  */
-router.get('/wheel', requireAdmin, async (req: AdminRequest, res: Response) => {
+router.get('/wheel', requireAdmin, async (_req: AdminRequest, res: Response) => {
   try {
-    if (!supabase) {
-      return res.status(500).json({ error: 'Database not configured' })
+    // Get WHEEL token from Prisma (platform token)
+    const wheelToken = await prisma.privyUserToken.findFirst({
+      where: { tokenSource: 'platform' },
+      include: {
+        devWallet: true,
+        opsWallet: true,
+        config: true,
+        flywheelState: true,
+      },
+    })
+
+    if (!wheelToken) {
+      return res.status(404).json({
+        success: false,
+        error: 'WHEEL platform token not found in database',
+      })
     }
 
-    // $WHEEL uses the original single-token flywheel system, not user_tokens
-    // Fetch from: config, wallet_balances, flywheel_state, fee_stats tables
-
-    // Get config from the original config table
-    const { data: config, error: configError } = await supabase
-      .from('config')
-      .select('*')
-      .eq('id', 'main')
-      .single()
-
-    if (configError && configError.code !== 'PGRST116') {
-      console.error('Error fetching config:', configError)
-    }
-
-    // Get wallets from environment variables (same as claim service uses)
-    // This ensures dashboard shows the same wallets that actually do the claiming
-    const devWallet = getDevWallet()
-    const opsWallet = getOpsWallet()
-
-    const devWalletAddress = devWallet?.publicKey.toString() || ''
-    const opsWalletAddress = opsWallet?.publicKey.toString() || ''
+    const tokenMint = new PublicKey(wheelToken.tokenMintAddress)
+    const devWalletAddress = wheelToken.devWallet.walletAddress
+    const opsWalletAddress = wheelToken.opsWallet.walletAddress
+    const devPubkey = new PublicKey(devWalletAddress)
+    const opsPubkey = new PublicKey(opsWalletAddress)
 
     // Fetch LIVE balances from Solana
     let devSolBalance = 0
@@ -2935,87 +2937,51 @@ router.get('/wheel', requireAdmin, async (req: AdminRequest, res: Response) => {
     let opsSolBalance = 0
     let opsTokenBalance = 0
 
-    const tokenMint = new PublicKey(PLATFORM_TOKEN_MINT)
-
-    // Fetch dev wallet balances live
-    if (devWallet) {
-      try {
-        devSolBalance = await getBalance(devWallet.publicKey)
-        devTokenBalance = await getTokenBalance(devWallet.publicKey, tokenMint)
-      } catch (e) {
-        console.warn('Failed to fetch dev wallet balance:', e)
-      }
+    try {
+      devSolBalance = await getBalance(devPubkey)
+      devTokenBalance = await getTokenBalance(devPubkey, tokenMint)
+    } catch (e) {
+      console.warn('Failed to fetch dev wallet balance:', e)
     }
 
-    // Fetch ops wallet balances live
-    if (opsWallet) {
-      try {
-        opsSolBalance = await getBalance(opsWallet.publicKey)
-        opsTokenBalance = await getTokenBalance(opsWallet.publicKey, tokenMint)
-      } catch (e) {
-        console.warn('Failed to fetch ops wallet balance:', e)
-      }
+    try {
+      opsSolBalance = await getBalance(opsPubkey)
+      opsTokenBalance = await getTokenBalance(opsPubkey, tokenMint)
+    } catch (e) {
+      console.warn('Failed to fetch ops wallet balance:', e)
     }
 
-    // Update cached balances in database (fire and forget)
-    if (devWalletAddress) {
-      supabase.from('wallet_balances').upsert({
-        wallet_type: 'dev',
-        address: devWalletAddress,
-        sol_balance: devSolBalance,
-        token_balance: devTokenBalance,
-        updated_at: new Date().toISOString(),
-      }, { onConflict: 'wallet_type' }).then(() => {})
-    }
+    // Get fee stats from Prisma
+    const claimStats = await prisma.privyClaimHistory.aggregate({
+      where: { privyTokenId: wheelToken.id },
+      _sum: { totalAmountSol: true },
+    })
+    const totalCollected = Number(claimStats._sum.totalAmountSol || 0)
 
-    if (opsWalletAddress) {
-      supabase.from('wallet_balances').upsert({
-        wallet_type: 'ops',
-        address: opsWalletAddress,
-        sol_balance: opsSolBalance,
-        token_balance: opsTokenBalance,
-        updated_at: new Date().toISOString(),
-      }, { onConflict: 'wallet_type' }).then(() => {})
-    }
-
-    // Get flywheel state from flywheel_state table
-    const { data: flywheelState, error: stateError } = await supabase
-      .from('flywheel_state')
-      .select('*')
-      .eq('id', 'main')
-      .single()
-
-    if (stateError && stateError.code !== 'PGRST116') {
-      console.error('Error fetching flywheel state:', stateError)
-    }
-
-    // Get fee stats from fee_stats table
-    const { data: feeStats, error: feeError } = await supabase
-      .from('fee_stats')
-      .select('*')
-      .eq('id', 'main')
-      .single()
-
-    if (feeError && feeError.code !== 'PGRST116') {
-      console.error('Error fetching fee stats:', feeError)
-    }
+    const todayStart = new Date()
+    todayStart.setHours(0, 0, 0, 0)
+    const todayClaimStats = await prisma.privyClaimHistory.aggregate({
+      where: { privyTokenId: wheelToken.id, claimedAt: { gte: todayStart } },
+      _sum: { totalAmountSol: true },
+    })
+    const todayCollected = Number(todayClaimStats._sum.totalAmountSol || 0)
 
     // Fetch market data from DexScreener via Bags.fm service
     let marketData = {
       marketCap: 0,
       volume24h: 0,
-      isGraduated: false,
+      isGraduated: wheelToken.isGraduated,
       bondingCurveProgress: 0,
       holders: 0,
     }
 
     try {
-      const tokenInfo = await bagsFmService.getTokenCreatorInfo(PLATFORM_TOKEN_MINT)
+      const tokenInfo = await bagsFmService.getTokenCreatorInfo(wheelToken.tokenMintAddress)
       if (tokenInfo) {
         marketData = {
           marketCap: tokenInfo.marketCap || 0,
           volume24h: tokenInfo.volume24h || 0,
-          isGraduated: tokenInfo.isGraduated || false,
+          isGraduated: tokenInfo.isGraduated || wheelToken.isGraduated,
           bondingCurveProgress: tokenInfo.bondingCurveProgress || 0,
           holders: tokenInfo.holders || 0,
         }
@@ -3027,10 +2993,12 @@ router.get('/wheel', requireAdmin, async (req: AdminRequest, res: Response) => {
     return res.json({
       success: true,
       data: {
-        tokenMint: PLATFORM_TOKEN_MINT,
-        symbol: '$WHEEL',
-        tokenName: 'Claude Wheel',
-        tokenImage: null,
+        tokenId: wheelToken.id,
+        tokenMint: wheelToken.tokenMintAddress,
+        symbol: wheelToken.tokenSymbol,
+        tokenName: wheelToken.tokenName,
+        tokenImage: wheelToken.tokenImage,
+        tokenDecimals: wheelToken.tokenDecimals,
         devWallet: {
           address: devWalletAddress,
           solBalance: devSolBalance,
@@ -3042,26 +3010,25 @@ router.get('/wheel', requireAdmin, async (req: AdminRequest, res: Response) => {
           tokenBalance: opsTokenBalance,
         },
         feeStats: {
-          totalCollected: Number(feeStats?.total_collected) || 0,
-          todayCollected: Number(feeStats?.today_collected) || 0,
-          hourCollected: Number(feeStats?.hour_collected) || 0,
+          totalCollected,
+          todayCollected,
         },
-        flywheelState: flywheelState ? {
-          phase: flywheelState.cycle_phase || 'buy',
-          buyCount: Number(flywheelState.buy_count) || 0,
-          sellCount: Number(flywheelState.sell_count) || 0,
-          lastTradeAt: flywheelState.updated_at,
+        flywheelState: wheelToken.flywheelState ? {
+          phase: wheelToken.flywheelState.cyclePhase,
+          buyCount: wheelToken.flywheelState.buyCount,
+          sellCount: wheelToken.flywheelState.sellCount,
+          lastTradeAt: wheelToken.flywheelState.updatedAt,
         } : null,
-        config: config ? {
-          flywheelActive: config.flywheel_active ?? false,
-          algorithmMode: config.algorithm_mode || 'simple',
-          minBuySol: Number(config.min_buy_amount_sol) || 0.01,
-          maxBuySol: Number(config.max_buy_amount_sol) || 0.1,
-          slippageBps: Number(config.slippage_bps) || 100,
+        config: wheelToken.config ? {
+          flywheelActive: wheelToken.config.flywheelActive,
+          autoClaimEnabled: wheelToken.config.autoClaimEnabled,
+          buyPercent: wheelToken.config.buyPercent,
+          sellPercent: wheelToken.config.sellPercent,
+          slippageBps: wheelToken.config.slippageBps,
         } : null,
         marketData,
-        isActive: config?.flywheel_active ?? false,
-        createdAt: null,
+        isActive: wheelToken.config?.flywheelActive ?? false,
+        createdAt: wheelToken.createdAt,
       },
     })
   } catch (error) {
@@ -3072,68 +3039,52 @@ router.get('/wheel', requireAdmin, async (req: AdminRequest, res: Response) => {
 
 /**
  * POST /api/admin/wheel/sell
- * Execute manual sell for platform token (admin only)
+ * Manual sells are deprecated - WHEEL is handled by regular Privy flywheel
  */
-router.post('/wheel/sell', requireAdmin, requirePermission('trigger_jobs'), async (req: AdminRequest, res: Response) => {
-  try {
-    const { percentage } = req.body
-
-    if (!percentage || typeof percentage !== 'number' || percentage < 1 || percentage > 100) {
-      return res.status(400).json({ error: 'Percentage must be between 1 and 100' })
-    }
-
-    loggers.flywheel.info({ percentage }, '🔄 Admin requested manual WHEEL sell')
-
-    // Execute the sell via wheel service
-    const result = await wheelMMService.executeManualSell(percentage)
-
-    if (!result.success) {
-      return res.status(400).json({ error: result.error })
-    }
-
-    return res.json({
-      success: true,
-      message: `Sold ${percentage}% of WHEEL tokens`,
-      signature: result.signature,
-      amountSold: result.amount,
-    })
-  } catch (error) {
-    loggers.flywheel.error({ error: String(error) }, 'Error executing wheel sell')
-    return res.status(500).json({ error: 'Internal server error' })
-  }
+router.post('/wheel/sell', requireAdmin, requirePermission('trigger_jobs'), async (_req: AdminRequest, res: Response) => {
+  return res.status(410).json({
+    success: false,
+    error: 'Manual WHEEL sell is deprecated. WHEEL is now handled by the regular Privy flywheel.',
+    message: 'Use the token config to adjust sell percentage or disable flywheel.',
+  })
 })
 
 /**
  * GET /api/admin/wheel/claimable
- * Check claimable fees for WHEEL token (for debugging)
+ * Check claimable fees for WHEEL token
  */
 router.get('/wheel/claimable', requireAdmin, async (_req: AdminRequest, res: Response) => {
   try {
-    const devWallet = getDevWallet()
+    // Get WHEEL token from Prisma
+    const wheelToken = await prisma.privyUserToken.findFirst({
+      where: { tokenSource: 'platform' },
+      include: { devWallet: true },
+    })
 
-    if (!devWallet) {
-      return res.status(400).json({
-        error: 'DEV_WALLET_PRIVATE_KEY not configured',
-        devWalletConfigured: false,
+    if (!wheelToken) {
+      return res.status(404).json({
+        success: false,
+        error: 'WHEEL platform token not found',
       })
     }
 
-    const devWalletAddress = devWallet.publicKey.toString()
+    const devWalletAddress = wheelToken.devWallet.walletAddress
 
     // Fetch claimable positions from Bags.fm
     const positions = await bagsFmService.getClaimablePositions(devWalletAddress)
-    const wheelPosition = positions?.find(p => p.tokenMint === PLATFORM_TOKEN_MINT)
+    const wheelPosition = positions?.find(p => p.tokenMint === wheelToken.tokenMintAddress)
 
     return res.json({
       success: true,
+      tokenId: wheelToken.id,
       devWalletAddress,
-      platformTokenMint: PLATFORM_TOKEN_MINT,
+      platformTokenMint: wheelToken.tokenMintAddress,
       allPositions: positions || [],
       wheelPosition: wheelPosition || null,
       claimableAmountSol: wheelPosition?.claimableAmount || 0,
       claimableAmountUsd: wheelPosition?.claimableAmountUsd || 0,
-      claimThresholdSol: parseFloat(process.env.WHEEL_CLAIM_THRESHOLD_SOL || '0.05'),
-      wouldClaim: (wheelPosition?.claimableAmount || 0) >= parseFloat(process.env.WHEEL_CLAIM_THRESHOLD_SOL || '0.05'),
+      claimThresholdSol: parseFloat(process.env.FAST_CLAIM_THRESHOLD_SOL || '0.15'),
+      wouldClaim: (wheelPosition?.claimableAmount || 0) >= parseFloat(process.env.FAST_CLAIM_THRESHOLD_SOL || '0.15'),
     })
   } catch (error) {
     loggers.claim.error({ error: String(error) }, 'Error checking WHEEL claimable')
@@ -3143,55 +3094,14 @@ router.get('/wheel/claimable', requireAdmin, async (_req: AdminRequest, res: Res
 
 /**
  * POST /api/admin/wheel/claim
- * Manually trigger WHEEL claim (for debugging)
+ * Manual claim deprecated - WHEEL is handled by regular fast-claim service
  */
 router.post('/wheel/claim', requireAdmin, requirePermission('trigger_jobs'), async (_req: AdminRequest, res: Response) => {
-  try {
-    const { wheelClaimService } = await import('../services/wheel-claim.service')
-
-    loggers.claim.info('🔄 Admin requested manual WHEEL claim')
-
-    const result = await wheelClaimService.runClaimCycle()
-
-    if (!result) {
-      // Get more debug info
-      const devWallet = getDevWallet()
-      const positions = devWallet
-        ? await bagsFmService.getClaimablePositions(devWallet.publicKey.toString())
-        : []
-      const wheelPosition = positions?.find(p => p.tokenMint === PLATFORM_TOKEN_MINT)
-
-      return res.json({
-        success: false,
-        message: 'No claim executed',
-        reason: !devWallet
-          ? 'DEV_WALLET_PRIVATE_KEY not configured'
-          : !wheelPosition
-            ? 'No WHEEL position found in claimable positions'
-            : wheelPosition.claimableAmount < parseFloat(process.env.WHEEL_CLAIM_THRESHOLD_SOL || '0.05')
-              ? `Below threshold (${wheelPosition.claimableAmount} < ${process.env.WHEEL_CLAIM_THRESHOLD_SOL || '0.05'})`
-              : 'Claim cycle returned null (check logs)',
-        debug: {
-          devWalletConfigured: !!devWallet,
-          devWalletAddress: devWallet?.publicKey.toString() || null,
-          claimableAmount: wheelPosition?.claimableAmount || 0,
-          threshold: parseFloat(process.env.WHEEL_CLAIM_THRESHOLD_SOL || '0.05'),
-        },
-      })
-    }
-
-    return res.json({
-      success: result.success,
-      amountClaimedSol: result.amountClaimedSol,
-      amountTransferredSol: result.amountTransferredSol,
-      claimSignature: result.claimSignature,
-      transferSignature: result.transferSignature,
-      error: result.error,
-    })
-  } catch (error) {
-    loggers.claim.error({ error: String(error) }, 'Error executing manual WHEEL claim')
-    return res.status(500).json({ error: 'Failed to execute claim', details: String(error) })
-  }
+  return res.status(410).json({
+    success: false,
+    error: 'Manual WHEEL claim is deprecated. WHEEL is now handled by the regular fast-claim service.',
+    message: 'The fast-claim job will automatically claim WHEEL fees when above threshold.',
+  })
 })
 
 // ═══════════════════════════════════════════════════════════════════════════
