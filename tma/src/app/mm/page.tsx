@@ -11,7 +11,7 @@ type MmStep = 'input' | 'review' | 'depositing' | 'active';
 
 interface MmData {
     tokenMint: string;
-    mmAlgorithm: 'simple' | 'rebalance';
+    mmAlgorithm: 'simple' | 'turbo_lite' | 'rebalance';
 }
 
 interface TokenInfo {
@@ -281,17 +281,21 @@ export default function MmPage() {
                         {/* MM Strategy Selection */}
                         <div className="bg-bg-card border border-border-subtle rounded-xl p-4">
                             <label className="block text-sm text-text-muted mb-3">Market Making Strategy</label>
-                            <div className="grid grid-cols-2 gap-2">
+                            <div className="grid grid-cols-3 gap-2">
                                 {[
-                                    { value: 'simple', label: 'Simple', desc: '5 buys, 5 sells cycle' },
-                                    { value: 'rebalance', label: 'Rebalance', desc: 'Maintain portfolio %' },
+                                    { value: 'simple', label: '🐢 Simple', desc: '5 buys, 5 sells', disabled: false },
+                                    { value: 'turbo_lite', label: '🚀 Turbo', desc: '8 buys, 8 sells (8x)', disabled: false },
+                                    { value: 'rebalance', label: '⚖️ Rebalance', desc: 'Portfolio %', disabled: true },
                                 ].map(opt => (
                                     <button
                                         key={opt.value}
                                         type="button"
-                                        onClick={() => setData({ ...data, mmAlgorithm: opt.value as MmData['mmAlgorithm'] })}
+                                        onClick={() => !opt.disabled && setData({ ...data, mmAlgorithm: opt.value as MmData['mmAlgorithm'] })}
+                                        disabled={opt.disabled}
                                         className={`p-3 rounded-lg text-center transition-colors ${
-                                            data.mmAlgorithm === opt.value
+                                            opt.disabled
+                                                ? 'bg-bg-secondary/50 text-text-muted opacity-50 cursor-not-allowed border border-border-subtle'
+                                                : data.mmAlgorithm === opt.value
                                                 ? 'bg-accent-cyan text-bg-void'
                                                 : 'bg-bg-secondary text-text-secondary hover:bg-bg-card-hover border border-border-subtle'
                                         }`}
