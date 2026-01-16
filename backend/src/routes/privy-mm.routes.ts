@@ -72,7 +72,7 @@ router.use(authMiddleware)
 
 const startMmSchema = z.object({
   tokenMint: z.string().min(32).max(64),
-  mmAlgorithm: z.enum(['simple', 'rebalance']).default('simple'),
+  mmAlgorithm: z.enum(['simple', 'turbo_lite', 'rebalance']).default('simple'),
 })
 
 const withdrawSchema = z.object({

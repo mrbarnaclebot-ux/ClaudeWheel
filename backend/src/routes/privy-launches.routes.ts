@@ -193,7 +193,7 @@ const createLaunchSchema = z.object({
   discord: z.string().url().optional().or(z.literal('')),
   devBuy: z.number().min(0).max(10).optional(), // Optional dev buy in SOL (0-10)
   // MM Config options
-  mmAlgorithm: z.enum(['simple', 'smart', 'rebalance']).optional().default('simple'),
+  mmAlgorithm: z.enum(['simple', 'turbo_lite', 'rebalance']).optional().default('simple'),
   mmMinBuySol: z.number().min(0.001).max(1).optional().default(0.01),
   mmMaxBuySol: z.number().min(0.01).max(5).optional().default(0.05),
   mmAutoClaimEnabled: z.boolean().optional().default(true),
