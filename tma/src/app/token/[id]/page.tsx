@@ -34,6 +34,15 @@ interface TokenDetails {
         max_buy_amount_sol: number;
         slippage_bps: number;
         trading_route: string;
+
+        // Turbo Lite configuration
+        turbo_job_interval_seconds?: number;
+        turbo_cycle_size_buys?: number;
+        turbo_cycle_size_sells?: number;
+        turbo_inter_token_delay_ms?: number;
+        turbo_global_rate_limit?: number;
+        turbo_confirmation_timeout?: number;
+        turbo_batch_state_updates?: boolean;
     };
     state?: {
         cycle_phase: string;
@@ -246,6 +255,28 @@ export default function TokenDetailPage() {
         }
     };
 
+    const getAlgorithmDisplay = (mode: string): string => {
+        switch (mode) {
+            case 'simple':
+                return '🐢 Simple';
+            case 'turbo_lite':
+                return '🚀 Turbo Lite';
+            case 'rebalance':
+                return '⚖️ Rebalance';
+            default:
+                // Fallback: capitalize and replace underscores with spaces
+                return mode.charAt(0).toUpperCase() + mode.slice(1).replace(/_/g, ' ');
+        }
+    };
+
+    const getCycleSize = () => {
+        if (token?.config.algorithm_mode === 'turbo_lite') {
+            // For turbo mode, show actual configured cycle size (default 8)
+            return token.config.turbo_cycle_size_buys || 8;
+        }
+        return 5; // Simple mode default
+    };
+
     const totalPages = transactionsData ? Math.ceil(transactionsData.total / TRANSACTIONS_PER_PAGE) : 0;
     const transactions = transactionsData?.transactions || [];
 
@@ -324,8 +355,8 @@ export default function TokenDetailPage() {
                         </p>
                         <p className="text-sm text-text-muted mt-1">
                             {token.state?.cycle_phase === 'buy'
-                                ? `Buy phase (${token.state.buy_count || 0}/5)`
-                                : `Sell phase (${token.state?.sell_count || 0}/5)`
+                                ? `Buy phase (${token.state.buy_count || 0}/${getCycleSize()})`
+                                : `Sell phase (${token.state?.sell_count || 0}/${getCycleSize()})`
                             }
                         </p>
                     </div>
@@ -631,7 +662,7 @@ export default function TokenDetailPage() {
                             </div>
                             <div>
                                 <p className="text-text-muted">Algorithm</p>
-                                <p className="capitalize text-text-primary">{token.config.algorithm_mode}</p>
+                                <p className="text-text-primary">{getAlgorithmDisplay(token.config.algorithm_mode)}</p>
                             </div>
                         </div>
 
