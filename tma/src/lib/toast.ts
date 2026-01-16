@@ -116,7 +116,7 @@ export const toast = {
   ): Promise<T> => {
     triggerHaptic('light');
 
-    return sonnerToast.promise(promise, {
+    sonnerToast.promise(promise, {
       loading: options.loading,
       success: (data: T) => {
         // Trigger success haptic
@@ -154,7 +154,9 @@ export const toast = {
 
         return description ? { message, description } : message;
       },
-    }) as Promise<T>;
+    });
+
+    return promise;
   },
 
   /**
