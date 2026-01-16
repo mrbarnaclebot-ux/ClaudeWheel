@@ -4,6 +4,10 @@ import { useQuery } from '@tanstack/react-query';
 import { usePrivy } from '@privy-io/react-auth';
 import { useWallets } from '@privy-io/react-auth/solana';
 import { useTelegram } from '@/components/TelegramProvider';
+import { WalletAddress } from '@/components/WalletAddress';
+import { TokenAvatar } from '@/components/TokenAvatar';
+import { SkeletonCard } from '@/components/SkeletonCard';
+import { EmptyState } from '@/components/EmptyState';
 import { api } from '@/lib/api';
 import Link from 'next/link';
 import { motion } from 'framer-motion';
@@ -93,17 +97,13 @@ export default function DashboardPage() {
                         {devWallet && (
                             <div className="flex items-center justify-between">
                                 <span className="text-xs text-text-muted">Dev Wallet</span>
-                                <p className="text-accent-primary font-mono text-xs truncate max-w-[200px]">
-                                    {devWallet.address}
-                                </p>
+                                <WalletAddress address={devWallet.address} />
                             </div>
                         )}
                         {opsWallet && (
                             <div className="flex items-center justify-between">
                                 <span className="text-xs text-text-muted">Ops Wallet</span>
-                                <p className="text-accent-primary font-mono text-xs truncate max-w-[200px]">
-                                    {opsWallet.address}
-                                </p>
+                                <WalletAddress address={opsWallet.address} />
                             </div>
                         )}
                     </div>
@@ -170,25 +170,23 @@ export default function DashboardPage() {
                 <h2 className="text-lg font-medium text-text-primary">Your Tokens</h2>
 
                 {isLoading ? (
-                    <div className="bg-bg-card border border-border-subtle rounded-xl p-8 text-center">
-                        <div className="animate-spin w-6 h-6 border-2 border-accent-primary border-t-transparent rounded-full mx-auto" />
-                    </div>
+                    <SkeletonCard count={3} />
                 ) : tokens?.length === 0 ? (
-                    <motion.div
-                        initial={{ opacity: 0 }}
-                        animate={{ opacity: 1 }}
-                        className="bg-bg-card border border-border-subtle rounded-xl p-8 text-center"
-                    >
-                        <div className="text-3xl mb-3">🎡</div>
-                        <p className="text-text-muted mb-4">No tokens yet</p>
-                        <Link
-                            href="/launch"
-                            onClick={handleLinkClick}
-                            className="text-accent-primary hover:text-accent-secondary transition-colors"
-                        >
-                            Launch your first token →
-                        </Link>
-                    </motion.div>
+                    <EmptyState
+                        icon="🎡"
+                        title="No tokens yet"
+                        description="Launch your first token in under 2 minutes. We'll handle the trading for you."
+                        primaryAction={{
+                            label: 'Launch Your First Token',
+                            href: '/launch',
+                            icon: '🚀',
+                        }}
+                        secondaryAction={{
+                            label: 'Or register existing token',
+                            href: '/register',
+                        }}
+                        socialProof="Join creators already trading"
+                    />
                 ) : (
                     <motion.div
                         initial={{ opacity: 0 }}
@@ -235,17 +233,11 @@ function TokenCard({
             >
                 <div className="flex items-center justify-between">
                     <div className="flex items-center gap-3">
-                        {token.token_image ? (
-                            <img
-                                src={token.token_image}
-                                alt={token.token_symbol}
-                                className="w-10 h-10 rounded-full object-cover border-2 border-border-accent"
-                            />
-                        ) : (
-                            <div className="w-10 h-10 bg-bg-secondary border-2 border-border-accent rounded-full flex items-center justify-center text-lg font-bold text-accent-primary">
-                                {token.token_symbol[0]}
-                            </div>
-                        )}
+                        <TokenAvatar
+                            symbol={token.token_symbol}
+                            imageUrl={token.token_image}
+                            size="md"
+                        />
                         <div>
                             <div className="font-medium text-text-primary flex items-center gap-2">
                                 {token.token_symbol}

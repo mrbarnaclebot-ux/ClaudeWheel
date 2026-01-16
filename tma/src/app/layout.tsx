@@ -1,5 +1,6 @@
 import React from 'react';
 import type { Metadata } from 'next';
+import { Toaster } from 'sonner';
 import { TelegramProvider } from '@/components/TelegramProvider';
 import { PrivyTMAProvider } from '@/components/PrivyTMAProvider';
 import { QueryProvider } from '@/components/QueryProvider';
@@ -21,6 +22,15 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                         </QueryProvider>
                     </PrivyTMAProvider>
                 </TelegramProvider>
+                <Toaster
+                    position="bottom-center"
+                    toastOptions={{
+                        duration: 3000,
+                        style: {
+                            fontFamily: 'var(--font-body)',
+                        },
+                    }}
+                />
             </body>
         </html>
     );

@@ -4,7 +4,9 @@ import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { usePrivy } from '@privy-io/react-auth';
 import { useWallets } from '@privy-io/react-auth/solana';
+import { toast } from 'sonner';
 import { useTelegram } from '@/components/TelegramProvider';
+import { WalletAddress } from '@/components/WalletAddress';
 import { api } from '@/lib/api';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -89,11 +91,16 @@ export default function LaunchPage() {
             if (response.data.success && response.data.imageUrl) {
                 setData(prev => ({ ...prev, imageUrl: response.data.imageUrl }));
                 hapticFeedback('medium');
+                toast.success('Image uploaded successfully');
             } else {
-                setError('Failed to upload image');
+                const errorMsg = 'Failed to upload image';
+                setError(errorMsg);
+                toast.error(errorMsg);
             }
         } catch (err: any) {
-            setError(err.response?.data?.error || 'Failed to upload image');
+            const errorMsg = err.response?.data?.error || 'Failed to upload image';
+            setError(errorMsg);
+            toast.error(errorMsg);
         } finally {
             setIsUploading(false);
         }
@@ -116,14 +123,26 @@ export default function LaunchPage() {
             // Handle different statuses
             if (launch.status === 'completed') {
                 hapticFeedback('heavy');
+                toast.success('🎉 Token launched successfully!', {
+                    description: 'View it in your dashboard',
+                });
                 setStep('launched');
             } else if (launch.status === 'failed' || launch.status === 'expired' || launch.status === 'refunded') {
-                setError(launch.lastError || launch.error || `Launch ${launch.status}`);
+                const errorMsg = launch.lastError || launch.error || `Launch ${launch.status}`;
+                setError(errorMsg);
+                toast.error('Launch failed', { description: errorMsg });
+            } else if (launch.status === 'launching' && launch.balance >= launch.required_amount) {
+                // Only show this toast once when deposit is detected
+                if (launchStatus !== 'launching') {
+                    toast.info('Deposit detected!', {
+                        description: 'Launching your token...',
+                    });
+                }
             }
         } catch (err) {
             console.error('Failed to poll launch status:', err);
         }
-    }, [pendingLaunch?.id, getAccessToken, hapticFeedback]);
+    }, [pendingLaunch?.id, getAccessToken, hapticFeedback, launchStatus]);
 
     // Start polling when in depositing step
     useEffect(() => {
@@ -190,9 +209,14 @@ export default function LaunchPage() {
                 required_amount: launchData.minDeposit,
             });
             hapticFeedback('heavy');
+            toast.success('Launch created!', {
+                description: 'Send SOL to your dev wallet to begin',
+            });
             setStep('depositing');
         } catch (err: any) {
-            setError(err.response?.data?.error || err.message || 'Failed to create launch');
+            const errorMsg = err.response?.data?.error || err.message || 'Failed to create launch';
+            setError(errorMsg);
+            toast.error('Failed to create launch', { description: errorMsg });
             hapticFeedback('heavy');
         } finally {
             setIsSubmitting(false);
@@ -641,9 +665,12 @@ export default function LaunchPage() {
 
                         <div className="bg-bg-card border border-border-subtle rounded-xl p-4 mb-4">
                             <p className="text-sm text-text-muted mb-2">Dev Wallet Address</p>
-                            <p className="font-mono text-accent-primary text-sm break-all">
-                                {devWallet?.address || pendingLaunch.deposit_address}
-                            </p>
+                            <div className="flex justify-center">
+                                <WalletAddress
+                                    address={devWallet?.address || pendingLaunch.deposit_address}
+                                    className="text-sm"
+                                />
+                            </div>
                         </div>
 
                         {/* Balance indicator */}

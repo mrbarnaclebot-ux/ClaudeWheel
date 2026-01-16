@@ -6,6 +6,7 @@ import { usePrivy, useSigners, type WalletWithMetadata } from '@privy-io/react-a
 import { useWallets, useCreateWallet } from '@privy-io/react-auth/solana';
 import { useTelegram } from '@/components/TelegramProvider';
 import { motion, AnimatePresence } from 'framer-motion';
+import { toast } from 'sonner';
 import { api } from '@/lib/api';
 
 // Key Quorum ID from Privy Dashboard -> Wallet Infrastructure -> Authorization Keys
@@ -106,11 +107,18 @@ export default function OnboardingPage() {
                 console.log('[Onboarding] Ops wallet created:', result?.wallet?.address);
             }
 
+            toast.success('Wallets created successfully', {
+                description: 'Your dev and ops wallets are ready',
+            });
             setStep('delegate_dev');
         } catch (err: any) {
             console.error('[Onboarding] Wallet creation failed:', err);
             console.error('[Onboarding] Error details:', err?.message, err?.code, err?.cause);
-            setError(`Failed to create wallets: ${err?.message || 'Unknown error'}. Please try again.`);
+            const errorMsg = `Failed to create wallets: ${err?.message || 'Unknown error'}. Please try again.`;
+            setError(errorMsg);
+            toast.error('Wallet creation failed', {
+                description: err?.message || 'Unknown error',
+            });
             setStep('welcome');
         } finally {
             setIsCreating(false);
@@ -166,6 +174,9 @@ export default function OnboardingPage() {
             console.log('[Onboarding] addSigners result:', result);
             setDebugInfo(`${walletInfo}\n\nSigner added successfully!`);
 
+            toast.success('Dev wallet authorized', {
+                description: 'Trading enabled for dev wallet',
+            });
             setStep('delegate_ops');
         } catch (err: any) {
             console.error('[Onboarding] Dev wallet signer failed:', err);
@@ -180,7 +191,11 @@ export default function OnboardingPage() {
             };
 
             setDebugInfo(`Error: ${JSON.stringify(errorDetails)}`);
-            setError(`Dev wallet authorization failed: ${err?.message || 'Unknown error'}`);
+            const errorMsg = `Dev wallet authorization failed: ${err?.message || 'Unknown error'}`;
+            setError(errorMsg);
+            toast.error('Dev wallet authorization failed', {
+                description: err?.message || 'Unknown error',
+            });
         } finally {
             setIsDelegating(false);
         }
@@ -232,6 +247,10 @@ export default function OnboardingPage() {
             console.log('[Onboarding] addSigners result:', result);
             console.log('[Onboarding] Ops wallet signer added successfully');
 
+            toast.success('Ops wallet authorized', {
+                description: 'Trading enabled for ops wallet',
+            });
+
             // Now register with backend
             setStep('registering');
             await completeRegistration();
@@ -248,7 +267,11 @@ export default function OnboardingPage() {
             };
 
             setDebugInfo(`Error: ${JSON.stringify(errorDetails)}`);
-            setError(`Ops wallet authorization failed: ${err?.message || 'Unknown error'}`);
+            const errorMsg = `Ops wallet authorization failed: ${err?.message || 'Unknown error'}`;
+            setError(errorMsg);
+            toast.error('Ops wallet authorization failed', {
+                description: err?.message || 'Unknown error',
+            });
         } finally {
             setIsDelegating(false);
         }
@@ -276,6 +299,9 @@ export default function OnboardingPage() {
             console.log('[Onboarding] Backend response:', response.data);
 
             hapticFeedback('heavy');
+            toast.success('🎉 Registration complete!', {
+                description: 'Redirecting to your dashboard...',
+            });
             setStep('complete');
 
             setTimeout(() => router.replace('/dashboard'), 1500);
@@ -283,6 +309,9 @@ export default function OnboardingPage() {
             console.error('[Onboarding] Registration failed:', err);
             const errorMsg = err?.response?.data?.error || err?.message || 'Unknown error';
             setError(`Registration failed: ${errorMsg}`);
+            toast.error('Registration failed', {
+                description: errorMsg,
+            });
             setStep('delegate_ops'); // Go back to retry
         }
     }

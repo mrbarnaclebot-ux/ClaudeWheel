@@ -561,3 +561,140 @@ h1, h2, h3, h4, h5, h6 {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   SKELETON LOADERS
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--bg-card) 0%,
+    var(--bg-card-hover) 50%,
+    var(--bg-card) 100%
+  );
+  background-size: 200% 100%;
+  animation: skeleton-loading 1.5s ease-in-out infinite;
+  border-radius: inherit;
+}
+
+@keyframes skeleton-loading {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   TOAST OVERRIDES (Sonner)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* Toast container */
+[data-sonner-toaster] {
+  font-family: var(--font-body) !important;
+}
+
+/* Individual toast */
+[data-sonner-toast] {
+  background: var(--bg-card) !important;
+  border: 1px solid var(--border-subtle) !important;
+  color: var(--text-primary) !important;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4) !important;
+}
+
+/* Success toast */
+[data-sonner-toast][data-type="success"] {
+  border-left: 3px solid var(--success) !important;
+}
+
+[data-sonner-toast][data-type="success"] [data-icon] {
+  color: var(--success) !important;
+}
+
+/* Error toast */
+[data-sonner-toast][data-type="error"] {
+  border-left: 3px solid var(--error) !important;
+}
+
+[data-sonner-toast][data-type="error"] [data-icon] {
+  color: var(--error) !important;
+}
+
+/* Loading toast */
+[data-sonner-toast][data-type="loading"] {
+  border-left: 3px solid var(--accent-primary) !important;
+}
+
+/* Info toast */
+[data-sonner-toast][data-type="info"] {
+  border-left: 3px solid var(--accent-primary) !important;
+}
+
+/* Warning toast */
+[data-sonner-toast][data-type="warning"] {
+  border-left: 3px solid var(--warning) !important;
+}
+
+/* Toast title */
+[data-sonner-toast] [data-title] {
+  font-weight: 600;
+  color: var(--text-primary) !important;
+}
+
+/* Toast description */
+[data-sonner-toast] [data-description] {
+  color: var(--text-secondary) !important;
+}
+
+/* Toast close button */
+[data-sonner-toast] [data-close-button] {
+  background: var(--bg-card-hover) !important;
+  border-color: var(--border-subtle) !important;
+  color: var(--text-muted) !important;
+}
+
+[data-sonner-toast] [data-close-button]:hover {
+  background: var(--bg-secondary) !important;
+  border-color: var(--border-accent) !important;
+}
+
+/* Toast action button */
+[data-sonner-toast] [data-button] {
+  background: var(--accent-primary) !important;
+  color: var(--bg-void) !important;
+  font-family: var(--font-mono) !important;
+  font-weight: 600 !important;
+}
+
+[data-sonner-toast] [data-button]:hover {
+  background: var(--accent-secondary) !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   COPY BUTTON STYLES
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.copy-btn {
+  padding: 0.25rem;
+  border-radius: 4px;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.copy-btn:hover {
+  background: var(--bg-card-hover);
+  border-color: var(--border-subtle);
+  color: var(--accent-primary);
+}
+
+.copy-btn:active {
+  transform: scale(0.95);
+}
+
+.copy-btn.copied {
+  color: var(--success);
+}
