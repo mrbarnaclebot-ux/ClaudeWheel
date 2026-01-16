@@ -5,6 +5,10 @@ import { useRouter } from 'next/navigation';
 import { usePrivy } from '@privy-io/react-auth';
 import { useTelegram } from '@/components/TelegramProvider';
 import { api } from '@/lib/api';
+import { toast } from '@/lib/toast';
+import { LoadingButton } from '@/components/LoadingButton';
+import { CopyButton } from '@/components/CopyButton';
+import { AlgorithmBadge } from '@/components/StatusBadge';
 import { motion, AnimatePresence } from 'framer-motion';
 
 type MmStep = 'input' | 'review' | 'depositing' | 'active';
@@ -86,6 +90,9 @@ export default function MmPage() {
             if (!pending) {
                 // Pending no longer exists - was activated or cancelled
                 hapticFeedback('heavy');
+                toast.success('MM Activated!', {
+                    description: 'Market making is now running',
+                });
                 setStep('active');
                 return;
             }
@@ -95,6 +102,9 @@ export default function MmPage() {
             // Check if activated (status changed or no longer pending)
             if (pending.status !== 'awaiting_deposit') {
                 hapticFeedback('heavy');
+                toast.success('MM Activated!', {
+                    description: 'Market making is now running',
+                });
                 setStep('active');
             }
         } catch (err) {
@@ -173,11 +183,14 @@ export default function MmPage() {
                 tokenName: mmData.tokenName,
                 tokenImage: mmData.tokenImage,
             });
-            hapticFeedback('heavy');
+            toast.success('MM created!', {
+                description: `Deposit ${mmData.minDepositSol} SOL to activate`,
+            });
             setStep('depositing');
         } catch (err: any) {
-            setError(err.response?.data?.error || err.message || 'Failed to start MM');
-            hapticFeedback('heavy');
+            const errorMsg = err.response?.data?.error || err.message || 'Failed to start MM';
+            setError(errorMsg);
+            toast.error('Failed to start MM', { description: errorMsg });
         } finally {
             setIsSubmitting(false);
         }
@@ -192,11 +205,14 @@ export default function MmPage() {
             await api.delete(`/api/privy/mm/pending/${pendingMm.id}`, {
                 headers: { Authorization: `Bearer ${token}` },
             });
+            toast.info('MM cancelled', { description: 'Pending activation has been cancelled' });
             setPendingMm(null);
             setStep('input');
             setData({ tokenMint: '', mmAlgorithm: 'simple' });
         } catch (err: any) {
-            setError(err.response?.data?.error || 'Failed to cancel');
+            const errorMsg = err.response?.data?.error || 'Failed to cancel';
+            setError(errorMsg);
+            toast.error('Failed to cancel', { description: errorMsg });
         }
     }
 

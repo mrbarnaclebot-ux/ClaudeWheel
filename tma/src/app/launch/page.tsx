@@ -1,12 +1,13 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { usePrivy } from '@privy-io/react-auth';
 import { useWallets } from '@privy-io/react-auth/solana';
-import { toast } from 'sonner';
+import { toast } from '@/lib/toast';
 import { useTelegram } from '@/components/TelegramProvider';
 import { WalletAddress } from '@/components/WalletAddress';
+import { LoadingButton } from '@/components/LoadingButton';
 import { api } from '@/lib/api';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -34,6 +35,57 @@ interface PendingLaunch {
     token_mint?: string;
     balance?: number;
     error?: string;
+    expiresAt?: string;
+}
+
+// Hook for countdown timer
+function useCountdown(expiresAt: string | undefined) {
+    const [timeLeft, setTimeLeft] = useState<number | null>(null);
+    const [hasWarned, setHasWarned] = useState(false);
+
+    useEffect(() => {
+        if (!expiresAt) {
+            setTimeLeft(null);
+            return;
+        }
+
+        const calculateTimeLeft = () => {
+            const now = new Date().getTime();
+            const expiry = new Date(expiresAt).getTime();
+            const diff = Math.max(0, expiry - now);
+            return Math.floor(diff / 1000); // seconds
+        };
+
+        setTimeLeft(calculateTimeLeft());
+        const interval = setInterval(() => {
+            const remaining = calculateTimeLeft();
+            setTimeLeft(remaining);
+
+            // Warn when < 5 minutes remaining (only once)
+            if (remaining > 0 && remaining <= 300 && !hasWarned) {
+                setHasWarned(true);
+                toast.warning('Launch expiring soon!', {
+                    description: `You have ${Math.ceil(remaining / 60)} minutes left to deposit`,
+                });
+            }
+        }, 1000);
+
+        return () => clearInterval(interval);
+    }, [expiresAt, hasWarned]);
+
+    const formatTime = useMemo(() => {
+        if (timeLeft === null) return null;
+        if (timeLeft <= 0) return 'Expired';
+
+        const minutes = Math.floor(timeLeft / 60);
+        const seconds = timeLeft % 60;
+        return `${minutes}:${seconds.toString().padStart(2, '0')}`;
+    }, [timeLeft]);
+
+    const isExpiring = timeLeft !== null && timeLeft > 0 && timeLeft <= 300; // < 5 minutes
+    const isExpired = timeLeft !== null && timeLeft <= 0;
+
+    return { timeLeft, formatTime, isExpiring, isExpired };
 }
 
 export default function LaunchPage() {
@@ -58,6 +110,9 @@ export default function LaunchPage() {
     const [launchStatus, setLaunchStatus] = useState<string>('awaiting_deposit');
     const [depositBalance, setDepositBalance] = useState<number>(0);
     const [isUploading, setIsUploading] = useState(false);
+
+    // Expiration countdown
+    const { formatTime, isExpiring, isExpired } = useCountdown(pendingLaunch?.expiresAt);
 
     // Handle image file upload
     async function handleImageUpload(file: File) {
@@ -207,6 +262,7 @@ export default function LaunchPage() {
                 status: launchData.launch.status,
                 deposit_address: launchData.depositAddress,
                 required_amount: launchData.minDeposit,
+                expiresAt: launchData.launch.expiresAt || launchData.expiresAt,
             });
             hapticFeedback('heavy');
             toast.success('Launch created!', {
@@ -650,6 +706,14 @@ export default function LaunchPage() {
                                 <h2 className="text-xl font-bold mb-2 text-error">Launch {launchStatus}</h2>
                                 {error && <p className="text-text-muted mb-6">{error}</p>}
                             </>
+                        ) : isExpired ? (
+                            <>
+                                <div className="text-5xl mb-4">⏰</div>
+                                <h2 className="text-xl font-bold mb-2 text-error">Launch Expired</h2>
+                                <p className="text-text-muted mb-4">
+                                    This launch has expired. Please create a new launch.
+                                </p>
+                            </>
                         ) : (
                             <>
                                 <div className="text-5xl mb-4">💰</div>
@@ -661,6 +725,34 @@ export default function LaunchPage() {
                                     💡 We recommend <span className="text-accent-primary">{((pendingLaunch.required_amount || 0.1) + 0.4).toFixed(2)} SOL</span> total for effective MM
                                 </p>
                             </>
+                        )}
+
+                        {/* Expiration Warning */}
+                        {formatTime && !isExpired && launchStatus === 'awaiting_deposit' && (
+                            <motion.div
+                                initial={{ opacity: 0, y: -10 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                className={`rounded-xl p-3 mb-4 ${
+                                    isExpiring
+                                        ? 'bg-error/20 border border-error/30'
+                                        : 'bg-bg-card border border-border-subtle'
+                                }`}
+                            >
+                                <div className="flex items-center justify-center gap-2">
+                                    <span className={isExpiring ? 'text-error' : 'text-text-muted'}>
+                                        ⏱️
+                                    </span>
+                                    <span className={`font-mono text-sm ${isExpiring ? 'text-error font-bold' : 'text-text-secondary'}`}>
+                                        {isExpiring ? '⚠️ Expires in ' : 'Time remaining: '}
+                                        {formatTime}
+                                    </span>
+                                </div>
+                                {isExpiring && (
+                                    <p className="text-xs text-error/70 mt-1 text-center">
+                                        Deposit now to avoid losing this launch!
+                                    </p>
+                                )}
+                            </motion.div>
                         )}
 
                         <div className="bg-bg-card border border-border-subtle rounded-xl p-4 mb-4">

@@ -4,6 +4,11 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { usePrivy } from '@privy-io/react-auth';
 import { useTelegram } from '@/components/TelegramProvider';
 import { api } from '@/lib/api';
+import { toast } from '@/lib/toast';
+import { LoadingButton } from '@/components/LoadingButton';
+import { CopyButton } from '@/components/CopyButton';
+import { AlgorithmBadge, FlywheelIndicator, TransactionIcon } from '@/components/StatusBadge';
+import { ConfirmDialog } from '@/components/ConfirmDialog';
 import Link from 'next/link';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useParams } from 'next/navigation';
@@ -139,14 +144,19 @@ export default function TokenDetailPage() {
             }, {
                 headers: { Authorization: `Bearer ${accessToken}` },
             });
+            return active;
         },
-        onSuccess: () => {
+        onSuccess: (active) => {
             queryClient.invalidateQueries({ queryKey: ['token', tokenId] });
             queryClient.invalidateQueries({ queryKey: ['tokens'] });
-            hapticFeedback('medium');
+            toast.success(active ? 'Flywheel started' : 'Flywheel paused', {
+                description: active ? 'Trading will begin shortly' : 'Trading has been paused',
+            });
         },
-        onError: () => {
-            hapticFeedback('heavy');
+        onError: (error: any) => {
+            toast.error('Failed to update flywheel', {
+                description: error?.response?.data?.error || 'Please try again',
+            });
         },
     });
 
@@ -174,17 +184,24 @@ export default function TokenDetailPage() {
             }, {
                 headers: { Authorization: `Bearer ${accessToken}` },
             });
-            return res.data;
+            return { action, data: res.data };
         },
-        onSuccess: () => {
+        onSuccess: ({ action }) => {
             queryClient.invalidateQueries({ queryKey: ['token', tokenId] });
             queryClient.invalidateQueries({ queryKey: ['devbuy-balance', tokenId] });
-            hapticFeedback('heavy');
+            const messages = {
+                burn: { title: 'Tokens burned', desc: 'Dev buy tokens have been burned permanently' },
+                sell: { title: 'Tokens sold', desc: 'Dev buy tokens have been sold for SOL' },
+                transfer: { title: 'Tokens transferred', desc: 'Dev buy tokens moved to ops wallet' },
+            };
+            toast.success(messages[action].title, { description: messages[action].desc });
             setDevBuyAction(null);
             setShowDevBuyActions(false);
         },
-        onError: () => {
-            hapticFeedback('heavy');
+        onError: (error: any) => {
+            toast.error('Action failed', {
+                description: error?.response?.data?.error || 'Please try again',
+            });
         },
     });
 
@@ -202,11 +219,16 @@ export default function TokenDetailPage() {
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ['token', tokenId] });
             queryClient.invalidateQueries({ queryKey: ['tokens'] });
-            hapticFeedback('heavy');
+            toast.success('Withdrawal initiated', {
+                description: 'Tokens sold and SOL sent to your address',
+            });
             setShowWithdraw(false);
+            setWithdrawAddress('');
         },
-        onError: () => {
-            hapticFeedback('heavy');
+        onError: (error: any) => {
+            toast.error('Withdrawal failed', {
+                description: error?.response?.data?.error || 'Please try again',
+            });
         },
     });
 
@@ -216,9 +238,13 @@ export default function TokenDetailPage() {
         }
     };
 
-    const copyToClipboard = (text: string) => {
-        navigator.clipboard.writeText(text);
-        hapticFeedback('light');
+    const copyToClipboard = async (text: string, label?: string) => {
+        try {
+            await navigator.clipboard.writeText(text);
+            toast.copied(label ? `${label} copied` : undefined);
+        } catch (err) {
+            console.error('Failed to copy:', err);
+        }
     };
 
     const formatTimeAgo = (dateString: string) => {

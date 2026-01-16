@@ -1,10 +1,14 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { usePrivy } from '@privy-io/react-auth';
 import { useTelegram } from '@/components/TelegramProvider';
 import { api } from '@/lib/api';
+import { toast } from '@/lib/toast';
+import { LoadingButton } from '@/components/LoadingButton';
+import { UnsavedChangesDialog, useUnsavedChanges } from '@/components/ConfirmDialog';
+import { AlgorithmBadge } from '@/components/StatusBadge';
 import Link from 'next/link';
 import { motion } from 'framer-motion';
 import { useParams, useRouter } from 'next/navigation';
@@ -86,14 +90,38 @@ export default function TokenSettingsPage() {
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ['token', tokenId] });
             queryClient.invalidateQueries({ queryKey: ['tokens'] });
-            hapticFeedback('medium');
+            toast.success('Settings saved', {
+                description: 'Your configuration has been updated',
+            });
             setHasChanges(false);
             router.push(`/token/${tokenId}`);
         },
-        onError: () => {
-            hapticFeedback('heavy');
+        onError: (error: any) => {
+            toast.error('Failed to save settings', {
+                description: error?.response?.data?.error || 'Please try again',
+            });
         },
     });
+
+    // Handle save for unsaved changes dialog
+    const handleSave = useCallback(async () => {
+        await saveMutation.mutateAsync(formData);
+    }, [formData, saveMutation]);
+
+    // Unsaved changes hook
+    const {
+        showDialog: showUnsavedDialog,
+        handleNavigate,
+        UnsavedChangesDialogProps,
+    } = useUnsavedChanges({
+        hasChanges,
+        onSave: handleSave,
+    });
+
+    // Override back button to check for unsaved changes
+    const handleBack = useCallback(() => {
+        handleNavigate(() => router.push(`/token/${tokenId}`));
+    }, [handleNavigate, router, tokenId]);
 
     const updateField = <K extends keyof TokenConfig>(field: K, value: TokenConfig[K]) => {
         setFormData(prev => ({ ...prev, [field]: value }));
@@ -127,18 +155,20 @@ export default function TokenSettingsPage() {
 
     return (
         <div className="min-h-screen p-4 pb-24">
+            {/* Unsaved Changes Dialog */}
+            <UnsavedChangesDialog {...UnsavedChangesDialogProps} />
+
             {/* Header */}
             <div className="flex items-center gap-3 mb-6">
-                <Link
-                    href={`/token/${tokenId}`}
-                    onClick={() => hapticFeedback('light')}
-                    className="w-10 h-10 bg-gray-800 rounded-full flex items-center justify-center"
+                <button
+                    onClick={handleBack}
+                    className="w-10 h-10 bg-bg-card border border-border-subtle hover:border-border-accent rounded-full flex items-center justify-center text-text-secondary hover:text-text-primary transition-colors"
                 >
                     ←
-                </Link>
+                </button>
                 <div>
-                    <h1 className="text-xl font-bold">{token.token_symbol} Settings</h1>
-                    <p className="text-sm text-gray-400">Configure flywheel behavior</p>
+                    <h1 className="text-xl font-bold text-text-primary">{token.token_symbol} Settings</h1>
+                    <p className="text-sm text-text-muted">Configure flywheel behavior</p>
                 </div>
             </div>
 
@@ -394,19 +424,19 @@ export default function TokenSettingsPage() {
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: 0.3 }}
-                className="fixed bottom-0 left-0 right-0 p-4 bg-gray-950/90 backdrop-blur"
+                className="fixed bottom-0 left-0 right-0 p-4 bg-bg-void/90 backdrop-blur border-t border-border-subtle"
             >
-                <button
-                    onClick={handleSave}
-                    disabled={!hasChanges || saveMutation.isPending}
-                    className={`w-full py-4 rounded-xl font-medium transition-colors ${
-                        hasChanges
-                            ? 'bg-green-600 hover:bg-green-500'
-                            : 'bg-gray-700 text-gray-400 cursor-not-allowed'
-                    }`}
+                <LoadingButton
+                    onClick={() => saveMutation.mutate(formData)}
+                    isLoading={saveMutation.isPending}
+                    loadingText="Saving..."
+                    disabled={!hasChanges}
+                    variant={hasChanges ? 'success' : 'secondary'}
+                    fullWidth
+                    className="py-4"
                 >
-                    {saveMutation.isPending ? 'Saving...' : hasChanges ? 'Save Changes' : 'No Changes'}
-                </button>
+                    {hasChanges ? 'Save Changes' : 'No Changes'}
+                </LoadingButton>
             </motion.div>
         </div>
     );

@@ -5,6 +5,9 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { usePrivy, useHeadlessDelegatedActions } from '@privy-io/react-auth';
 import { useTelegram } from '@/components/TelegramProvider';
 import { api } from '@/lib/api';
+import { toast } from '@/lib/toast';
+import { LoadingButton } from '@/components/LoadingButton';
+import { CopyButton } from '@/components/CopyButton';
 import Link from 'next/link';
 import { motion } from 'framer-motion';
 
@@ -94,14 +97,16 @@ export default function RegisterPage() {
             setTokenInfo(data);
             setError(null);
             setStep('enter_key');
-            hapticFeedback?.('medium');
+            toast.success('Token found!', {
+                description: `${data.tokenName} (${data.tokenSymbol})`,
+            });
         },
         onError: (err: any) => {
             console.error('[Register] Validation failed:', err);
             setStep('enter_mint');
             const errorMessage = err?.response?.data?.error || err?.message || 'Failed to fetch token info. Make sure this is a valid Bags.fm token.';
             setError(errorMessage);
-            hapticFeedback?.('heavy');
+            toast.error('Token not found', { description: errorMessage });
         },
     });
 
@@ -161,7 +166,9 @@ export default function RegisterPage() {
             setOpsWalletAddress(data.data?.opsWallet?.address || null);
             setStep('success');
             queryClient.invalidateQueries({ queryKey: ['tokens'] });
-            hapticFeedback?.('medium');
+            toast.success('Token registered!', {
+                description: 'Flywheel is now active',
+            });
             // Clear sensitive data
             setPrivateKey('');
         },
@@ -170,7 +177,7 @@ export default function RegisterPage() {
             setStep('enter_key');
             const errorMessage = err?.response?.data?.error || err?.message || 'Failed to register token';
             setError(errorMessage);
-            hapticFeedback?.('heavy');
+            toast.error('Registration failed', { description: errorMessage });
         },
     });
 
