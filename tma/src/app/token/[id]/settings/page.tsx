@@ -128,10 +128,6 @@ export default function TokenSettingsPage() {
         setHasChanges(true);
     };
 
-    const handleSave = () => {
-        saveMutation.mutate(formData);
-    };
-
     if (isLoading) {
         return (
             <div className="min-h-screen p-4 flex items-center justify-center">
