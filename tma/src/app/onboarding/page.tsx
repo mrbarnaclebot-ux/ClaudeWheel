@@ -206,13 +206,41 @@ export default function OnboardingPage() {
 
             // Check if error is "already has wallet"
             if (errorMsg.includes('already has') || errorMsg.includes('embedded wallet')) {
-                console.log('[Onboarding] User already has wallets, skipping to delegation');
+                console.log('[Onboarding] User already has wallets, waiting for sync...');
 
-                // Skip to appropriate delegation step
+                // WAIT for useWallets() to populate (same pattern as wallet creation)
+                for (let i = 0; i < 15; i++) {
+                    await new Promise(resolve => setTimeout(resolve, 200));
+                    console.log(`[Onboarding] Polling wallets... attempt ${i + 1}, count: ${wallets.length}`);
+                    if (wallets.length >= 2) {
+                        console.log('[Onboarding] Wallets synced, checking delegation status');
+                        break;
+                    }
+                }
+
+                // Verify we have wallets loaded
+                if (wallets.length < 2) {
+                    console.error('[Onboarding] Timeout waiting for wallets to sync');
+                    // Fallback: redirect to dashboard and let it handle the state
+                    router.replace('/dashboard');
+                    return;
+                }
+
+                // NOW check delegation with populated wallets array
                 const devDelegated = isWalletDelegated(wallets[0]?.address);
-                if (devDelegated) {
+                const opsDelegated = isWalletDelegated(wallets[1]?.address);
+
+                console.log('[Onboarding] Delegation status:', { devDelegated, opsDelegated });
+
+                // Redirect based on delegation state
+                if (devDelegated && opsDelegated) {
+                    console.log('[Onboarding] Both wallets delegated, redirecting to dashboard');
+                    router.replace('/dashboard');
+                } else if (devDelegated) {
+                    console.log('[Onboarding] Only dev delegated, skipping to ops delegation');
                     setStep('delegate_ops');
                 } else {
+                    console.log('[Onboarding] No delegation, starting with dev delegation');
                     setStep('delegate_dev');
                 }
 
