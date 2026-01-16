@@ -13,9 +13,6 @@ export interface MutationToastOptions {
   loading: string;
   success: string | ((data: unknown) => string);
   error: string | ((error: unknown) => string);
-  loadingDescription?: string;
-  successDescription?: string | ((data: unknown) => string);
-  errorDescription?: string | ((error: unknown) => string);
 }
 
 // Get haptic feedback function from Telegram context if available
@@ -126,15 +123,9 @@ export const toast = {
           triggerHaptic('success');
         }
 
-        const message = typeof options.success === 'function'
+        return typeof options.success === 'function'
           ? options.success(data)
           : options.success;
-
-        const description = typeof options.successDescription === 'function'
-          ? options.successDescription(data)
-          : options.successDescription;
-
-        return description ? { message, description } : message;
       },
       error: (error: unknown) => {
         // Trigger error haptic
@@ -144,15 +135,9 @@ export const toast = {
           triggerHaptic('error');
         }
 
-        const message = typeof options.error === 'function'
+        return typeof options.error === 'function'
           ? options.error(error)
           : options.error;
-
-        const description = typeof options.errorDescription === 'function'
-          ? options.errorDescription(error)
-          : options.errorDescription;
-
-        return description ? { message, description } : message;
       },
     });
 
