@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { usePrivy, useSigners, type WalletWithMetadata } from '@privy-io/react-auth';
 import { useWallets, useCreateWallet } from '@privy-io/react-auth/solana';
@@ -29,6 +29,9 @@ export default function OnboardingPage() {
     const [isCreating, setIsCreating] = useState(false);
     const [debugInfo, setDebugInfo] = useState<string | null>(null);
 
+    // Ref to track current wallets for setTimeout callback (avoids closure capture)
+    const walletsRef = useRef(wallets);
+
     // useSolanaWallets already returns only Solana wallets
     const solanaWallets = wallets;
 
@@ -45,6 +48,11 @@ export default function OnboardingPage() {
 
     // Track if we should auto-complete registration (both wallets already delegated)
     const [shouldAutoComplete, setShouldAutoComplete] = useState(false);
+
+    // Keep walletsRef in sync with current wallets array
+    useEffect(() => {
+        walletsRef.current = wallets;
+    }, [wallets]);
 
     // If user already has 2 wallets, check delegation status and skip appropriately
     useEffect(() => {
@@ -113,15 +121,17 @@ export default function OnboardingPage() {
         } else if (wallets.length === 0) {
             // Wait a bit before assuming this is a new user
             // (wallets might still be loading for returning users)
-            console.log('[Onboarding] Waiting 1s to confirm new user (wallets still loading?)');
+            console.log('[Onboarding] Waiting 1.5s to confirm new user (wallets still loading?)');
             const timer = setTimeout(() => {
-                // After timeout, if still 0 wallets, assume new user
-                if (wallets.length === 0) {
-                    console.log('[Onboarding] Confirmed new user, showing welcome screen');
+                // Check CURRENT value from ref, not captured closure value
+                if (walletsRef.current.length === 0) {
+                    console.log('[Onboarding] Confirmed new user after timeout, showing welcome screen');
                     setIsInitializing(false);
+                } else {
+                    console.log('[Onboarding] Wallets loaded during timeout (count: ' + walletsRef.current.length + '), skipping welcome');
+                    // Don't set isInitializing=false, let the wallets.length >= 2 branch handle it
                 }
-                // If wallets loaded during timeout, this effect will re-run with wallets.length >= 2
-            }, 1000);
+            }, 1500); // Increased from 1000ms to 1500ms for slower connections
             return () => clearTimeout(timer);
         }
         // If wallets.length === 1, keep loading (shouldn't happen but handle gracefully)
