@@ -24,6 +24,7 @@ export default function OnboardingPage() {
     const { user: telegramUser, hapticFeedback } = useTelegram();
 
     const [step, setStep] = useState<Step>('welcome');
+    const [isInitializing, setIsInitializing] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [isCreating, setIsCreating] = useState(false);
     const [debugInfo, setDebugInfo] = useState<string | null>(null);
@@ -77,9 +78,13 @@ export default function OnboardingPage() {
     // NEW: Initial redirect for users with existing wallets
     // This prevents showing the welcome screen to returning users
     useEffect(() => {
-        if (!ready || !authenticated) return;
+        if (!ready || !authenticated) {
+            return; // Still initializing
+        }
 
-        // Check if user has wallets (regardless of current step)
+        // Wait for wallets to load for existing users
+        // For new users (wallets.length === 0), we can proceed immediately
+        // For existing users, we need to wait for wallets to populate
         if (wallets.length >= 2) {
             const devDelegated = isWalletDelegated(wallets[0]?.address);
             const opsDelegated = isWalletDelegated(wallets[1]?.address);
@@ -88,28 +93,32 @@ export default function OnboardingPage() {
                 walletsCount: wallets.length,
                 devDelegated,
                 opsDelegated,
-                currentStep: step,
             });
 
             if (devDelegated && opsDelegated) {
                 // Fully onboarded, redirect to dashboard
                 console.log('[Onboarding] Fully onboarded, redirecting to dashboard');
                 router.replace('/dashboard');
+                // Don't set isInitializing = false, let the redirect happen
+                return;
             } else if (devDelegated) {
                 // Skip to ops delegation
-                if (step === 'welcome' || step === 'creating_wallets' || step === 'delegate_dev') {
-                    console.log('[Onboarding] Skipping to ops delegation');
-                    setStep('delegate_ops');
-                }
+                console.log('[Onboarding] Skipping to ops delegation');
+                setStep('delegate_ops');
+                setIsInitializing(false); // Done initializing, render the step
             } else {
                 // Skip to dev delegation
-                if (step === 'welcome' || step === 'creating_wallets') {
-                    console.log('[Onboarding] Skipping to dev delegation');
-                    setStep('delegate_dev');
-                }
+                console.log('[Onboarding] Skipping to dev delegation');
+                setStep('delegate_dev');
+                setIsInitializing(false); // Done initializing, render the step
             }
+        } else if (wallets.length === 0) {
+            // New user with no wallets - show welcome screen
+            console.log('[Onboarding] New user, showing welcome screen');
+            setIsInitializing(false); // Done initializing, render welcome
         }
-    }, [ready, authenticated, wallets.length, user?.linkedAccounts, step, router]);
+        // If wallets.length === 1, keep loading (shouldn't happen but handle gracefully)
+    }, [ready, authenticated, wallets.length, user?.linkedAccounts, router]);
 
     // Debug logging useEffect
     useEffect(() => {
@@ -463,8 +472,15 @@ export default function OnboardingPage() {
 
     return (
         <div className="min-h-screen flex flex-col p-6">
-            <AnimatePresence mode="wait">
-                {step === 'welcome' && (
+            {/* Show loading spinner during initialization */}
+            {(!ready || isInitializing) ? (
+                <div className="flex-1 flex flex-col items-center justify-center gap-4">
+                    <div className="animate-spin w-8 h-8 border-2 border-green-500 border-t-transparent rounded-full" />
+                    <p className="text-telegram-hint text-sm">Loading...</p>
+                </div>
+            ) : (
+                <AnimatePresence mode="wait">
+                    {step === 'welcome' && (
                     <motion.div
                         key="welcome"
                         initial={{ opacity: 0, y: 20 }}
@@ -652,6 +668,7 @@ export default function OnboardingPage() {
                     </motion.div>
                 )}
             </AnimatePresence>
+            )}
         </div>
     );
 }
