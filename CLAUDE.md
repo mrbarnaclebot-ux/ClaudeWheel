@@ -16,21 +16,21 @@ Both systems run in parallel with independent databases and job runners.
 
 ```
 ClaudeWheel/
-├── backend/              # Express + TypeScript API server
+├── backend/              # Express + TypeScript API server (port 3001)
 │   ├── prisma/           # Prisma schema and migrations (Privy system)
 │   │   └── schema.prisma
 │   └── src/
 │       ├── config/       # Environment, Solana, database configuration
 │       ├── jobs/         # Cron jobs (flywheel, claims, deposits)
-│       ├── routes/       # Express API routes (including privy-*.routes.ts)
-│       ├── services/     # Business logic (market-maker, privy, fee-collector)
+│       ├── routes/       # Express API routes (9 route files)
+│       ├── services/     # Business logic (17 services)
 │       ├── telegram/     # Telegram bot handlers
 │       ├── websocket/    # Admin WebSocket server
 │       ├── types/        # TypeScript type definitions
 │       ├── utils/        # Helper functions (logger, signature-verify, transaction)
 │       ├── scripts/      # Utility scripts (database audit, migrations)
 │       └── index.ts      # Server entry point
-├── frontend/             # Next.js 14 + TypeScript web app
+├── frontend/             # Next.js 14 Admin Dashboard (port 3000)
 │   ├── app/
 │   │   ├── admin/        # Admin dashboard (views, components, stores)
 │   │   │   ├── _components/  # Admin UI components
@@ -45,7 +45,21 @@ ClaudeWheel/
 │   │   ├── docs/         # Documentation page
 │   │   └── privacy/      # Privacy policy page
 │   └── lib/              # Utilities and API clients
-├── supabase/             # Legacy database migrations
+├── tma/                  # Next.js 14 Telegram Mini App (port 3002)
+│   └── src/app/
+│       ├── page.tsx              # Root/index page
+│       ├── onboarding/           # First-time user wallet setup
+│       ├── dashboard/            # Main token list & balances
+│       ├── token/[id]/           # Token details & trading
+│       │   └── settings/         # Token MM configuration
+│       ├── launch/               # Multi-step token launch wizard
+│       ├── mm/                   # MM-only mode (any Bags.fm token)
+│       ├── register/             # Import existing token
+│       ├── settings/             # User profile & preferences
+│       ├── components/           # TMA-specific components
+│       ├── hooks/                # Custom React hooks
+│       └── lib/                  # API client & utilities
+├── supabase/             # Legacy database migrations (deprecated)
 │   └── migrations/       # SQL migration files
 ├── docs/                 # Project documentation
 └── .github/              # GitHub workflows and CI/CD
@@ -70,14 +84,23 @@ npm run db:migrate   # Run migrations
 npm run db:studio    # Open Prisma Studio
 ```
 
-### Frontend (run from `/frontend`)
+### Frontend - Admin Dashboard (run from `/frontend`)
 
 ```bash
-npm run dev          # Start Next.js dev server
+npm run dev          # Start Next.js dev server (port 3000)
 npm run build        # Build for production
 npm run start        # Start production server
 npm run test         # Run tests with Vitest
 npm run lint         # Run Next.js linting
+```
+
+### TMA - Telegram Mini App (run from `/tma`)
+
+```bash
+npm run dev          # Start Next.js dev server (port 3002)
+npm run build        # Build for production
+npm run start        # Start production server
+npm run lint         # Run linting
 ```
 
 ## Tech Stack
@@ -99,7 +122,7 @@ npm run lint         # Run Next.js linting
 | Zod                     | Runtime validation         | 3.24.1  |
 | Vitest                  | Testing                    | 2.1.8   |
 
-### Frontend
+### Frontend (Admin Dashboard)
 
 | Technology            | Purpose                | Version |
 | --------------------- | ---------------------- | ------- |
@@ -113,21 +136,43 @@ npm run lint         # Run Next.js linting
 | Framer Motion         | Animation              | 11.15.0 |
 | Vitest                | Testing                | 2.1.8   |
 
+### TMA (Telegram Mini App)
+
+| Technology            | Purpose                | Version |
+| --------------------- | ---------------------- | ------- |
+| Next.js               | Framework (App Router) | 14.2.21 |
+| React                 | UI library             | 18.3.1  |
+| Tailwind CSS          | Styling                | 3.4.17  |
+| Zustand               | Client state           | 5.0.9   |
+| TanStack Query        | Server state           | 5.90.16 |
+| @privy-io/react-auth  | Privy authentication   | 3.10.1  |
+| @telegram-apps/sdk    | Telegram integration   | 3.3.9   |
+| Sonner                | Toast notifications    | 1.7.1   |
+
 ## Core Jobs & Automation
 
 | Job                    | Frequency       | Purpose                                                                           |
 | ---------------------- | --------------- | --------------------------------------------------------------------------------- |
-| Multi-Flywheel         | Every 1 min     | Market-making cycles for legacy user tokens (5 buy → 5 sell pattern)              |
-| Privy Flywheel         | Every 1 min     | Market-making cycles for Privy user tokens (delegated signing)                    |
-| WHEEL Flywheel         | Every 1 min     | Market-making for platform WHEEL token (0% platform fee)                          |
-| Fast Claim             | Configurable*   | Claims accumulated fees when threshold (0.15 SOL) is reached                      |
-| WHEEL Claim            | Every 30 sec    | Claims WHEEL token fees (0.05 SOL threshold, 0% platform fee)                     |
-| Balance Update         | Every 5 min     | Updates cached wallet balances (batched requests)                                 |
-| Deposit Monitor        | Every 30 sec    | Watches for SOL deposits on pending token launches (both legacy and Privy)        |
+| Multi-Flywheel         | Every 1 min     | Core market-making for ALL active tokens (simple & turbo_lite modes)              |
+| Fast Claim             | Every 30 sec*   | Claims accumulated fees when >= 0.15 SOL threshold (10% platform, 90% user)       |
+| Balance Update         | Every 5 min     | Updates cached wallet balances for all tokens (batched requests)                  |
+| Deposit Monitor        | Every 30 sec    | Watches pending launches & MM-only tokens for SOL deposits, triggers activation   |
 
 *Fast Claim interval is configurable via admin dashboard (10-300 seconds, default 30s).
 
-Jobs can be enabled/disabled via environment variables and manually triggered for testing.
+**Job Configuration Environment Variables:**
+```
+MULTI_USER_FLYWHEEL_ENABLED=true
+MULTI_USER_FLYWHEEL_INTERVAL_MINUTES=1
+FAST_CLAIM_JOB_ENABLED=true
+FAST_CLAIM_INTERVAL_SECONDS=30
+BALANCE_UPDATE_JOB_ENABLED=true
+BALANCE_UPDATE_INTERVAL_SECONDS=300
+DEPOSIT_MONITOR_ENABLED=true
+DEPOSIT_MONITOR_INTERVAL_MS=30000
+```
+
+Jobs can be enabled/disabled via environment variables and manually triggered via admin dashboard.
 
 ## Adding New MM Modes
 
@@ -142,6 +187,23 @@ Market-making (MM) algorithm modes control how the flywheel executes buy/sell cy
 - Additional modes: twap_vwap, dynamic (for specific use cases)
 
 Algorithm modes are stored in `PrivyTokenConfig.algorithm_mode` and executed by the flywheel service (`backend/src/services/multi-user-mm.service.ts`).
+
+### Turbo Lite Mode Behavior
+
+The turbo_lite algorithm has the following special behaviors:
+
+1. **State Persistence**: State is ALWAYS persisted after each trade (not batched) because each job run only processes one trade per token. This ensures cycle progress is never lost between runs.
+
+2. **Low SOL Auto-Switch**: If SOL balance drops below 0.1 during buy phase, the algorithm automatically switches to sell phase to recover funds instead of getting stuck.
+
+3. **Configurable Parameters**:
+   - `turbo_cycle_size_buys` (default: 8) - Number of buys per cycle
+   - `turbo_cycle_size_sells` (default: 8) - Number of sells per cycle
+   - `turbo_inter_token_delay_ms` (default: 200) - Delay between tokens
+   - `turbo_global_rate_limit` (default: 60) - Max trades per minute
+   - `turbo_confirmation_timeout` (default: 45) - Transaction timeout
+   - `turbo_job_interval_seconds` (default: 15) - Unused, reserved for future
+   - `turbo_batch_state_updates` (default: true) - Unused, state always persists
 
 ### Implementation Checklist
 
@@ -682,6 +744,7 @@ Admin endpoints:
 
 ### Status Endpoints (Public)
 
+- `GET /api/status` - Platform status
 - `GET /api/status/health` - Health check
 - `GET /api/status/wallets` - Wallet balances
 - `GET /api/status/transactions` - Transaction history
@@ -690,13 +753,35 @@ Admin endpoints:
 
 - `GET /api/admin/nonce` - Get signature nonce
 - `POST /api/admin/config` - Update configuration
-- `GET /api/admin/jobs` - Job status
-- `POST /api/admin/jobs/:job/trigger` - Manually trigger job
-- `GET /api/admin/settings` - Get platform settings (includes WHEEL trading config)
-- `POST /api/admin/settings` - Update platform settings
-- `GET /api/admin/wheel` - Get WHEEL token status (live wallet balances from Solana)
+- `GET /api/admin/platform-settings` - Get platform settings
+- `PUT /api/admin/platform-settings` - Update platform settings
+- `GET /api/admin/tokens` - List all tokens
+- `GET /api/admin/tokens/:id` - Token details
+- `POST /api/admin/tokens/:id/verify` - Verify token
+- `POST /api/admin/tokens/:id/suspend` - Suspend token
+- `POST /api/admin/tokens/:id/unsuspend` - Unsuspend token
+- `PUT /api/admin/tokens/:id/limits` - Update trading limits
+- `GET /api/admin/platform-stats` - Platform statistics
+- `POST /api/admin/fast-claim/trigger` - Trigger fast claim
+- `GET /api/admin/fast-claim/status` - Fast claim status
+- `POST /api/admin/fast-claim/restart` - Restart fast claim
+- `GET /api/admin/balance-update/status` - Balance update status
+- `POST /api/admin/balance-update/trigger` - Trigger balance update
+- `GET /api/admin/flywheel-status` - Flywheel status
+- `POST /api/admin/flywheel/trigger` - Manual flywheel trigger
+- `GET /api/admin/wheel` - WHEEL token status (live from Solana)
+- `POST /api/admin/wheel/sell` - WHEEL manual sell
+- `GET /api/admin/wheel/claimable` - WHEEL claimable fees
+- `POST /api/admin/wheel/claim` - WHEEL manual claim
+- `POST /api/admin/manual-sell` - Manual sell any token
+- `GET /api/admin/telegram/stats` - Telegram bot stats
+- `GET /api/admin/telegram/launches` - Telegram launches
+- `GET /api/admin/telegram/refunds` - Pending refunds
+- `POST /api/admin/telegram/refund/:id` - Process refund
+- `POST /api/admin/discord/test` - Test Discord webhook
+- `GET /api/admin/discord/stats` - Discord reporting stats
 
-### Legacy User Token Endpoints
+### Legacy User Token Endpoints (Deprecated)
 
 - `GET /api/user/tokens` - List user's tokens
 - `POST /api/user/tokens` - Register new token
@@ -722,28 +807,46 @@ Admin endpoints:
 
 - `GET /api/privy/tokens` - List user's Privy tokens
 - `POST /api/privy/tokens` - Register existing token
-- `GET /api/privy/tokens/:tokenId` - Token details
-- `PUT /api/privy/tokens/:tokenId/config` - Update token config
+- `POST /api/privy/tokens/register-with-import` - Register with imported dev wallet
+- `GET /api/privy/tokens/:id` - Token details
+- `PUT /api/privy/tokens/:id/config` - Update token config
+- `DELETE /api/privy/tokens/:id` - Deactivate token
+- `POST /api/privy/tokens/:id/claim` - Claim fees
+- `GET /api/privy/tokens/:id/transactions` - Transaction history
+- `GET /api/privy/tokens/:id/claims` - Claim history
+- `GET /api/privy/tokens/:id/claimable` - Claimable amount
 
 ### Privy Launch Endpoints
 
 - `POST /api/privy/launches` - Create pending token launch
+- `POST /api/privy/launches/upload-image` - Upload token image (Pinata)
 - `GET /api/privy/launches/pending` - Get current pending launch
 - `GET /api/privy/launches/history` - Get launch history
 - `GET /api/privy/launches/:id` - Get launch status
 - `DELETE /api/privy/launches/:id` - Cancel pending launch
-- `POST /api/privy/launches/upload-image` - Upload token image
+- `POST /api/privy/launches/devbuy-action` - Execute dev buy
+- `GET /api/privy/launches/devbuy-balance/:tokenId` - Dev buy balance
+
+### Privy MM-Only Endpoints
+
+- `POST /api/privy/mm/start` - Start MM-only mode on any Bags.fm token
+- `GET /api/privy/mm/pending` - Get pending MM activation
+- `DELETE /api/privy/mm/pending/:id` - Cancel pending MM
+- `POST /api/privy/mm/:tokenId/withdraw` - Withdraw from MM
 
 ### Bags.fm Proxy Endpoints
 
 - `GET /api/bags/token/:mint` - Token info
 - `GET /api/bags/fees/:mint` - Fee statistics
 - `GET /api/bags/claimable/:wallet` - Claimable fees
-- `POST /api/bags/claim` - Claim fees
+- `GET /api/bags/claim-stats/:wallet` - Claim statistics
+- `GET /api/bags/quote` - Price quote
+- `GET /api/bags/dashboard` - Dashboard data
+- `POST /api/bags/api-key` - Configure API key
 
 ## Database Schema
 
-### Legacy (Supabase)
+### Legacy (Supabase) - Deprecated
 
 | Table                    | Purpose                                                 |
 | ------------------------ | ------------------------------------------------------- |
@@ -758,18 +861,48 @@ Admin endpoints:
 | `pending_token_launches` | Legacy token launches awaiting deposit                  |
 | `telegram_users`         | Telegram bot user mappings                              |
 
-### Privy (Prisma)
+### Privy (Prisma) - Active System
 
+#### User & Authentication
 | Table                 | Purpose                                              |
 | --------------------- | ---------------------------------------------------- |
 | `PrivyUser`           | Privy-authenticated users (telegramId, delegation)   |
 | `PrivyWallet`         | Embedded wallets (dev/ops, NO private keys stored)   |
+| `AdminRole`           | Admin role-based access control                      |
+
+#### Tokens & Trading
+| Table                 | Purpose                                              |
+| --------------------- | ---------------------------------------------------- |
 | `PrivyUserToken`      | Token registrations for Privy users                  |
-| `PrivyTokenConfig`    | Per-token market-making configuration                |
+| `PrivyTokenConfig`    | Per-token MM config (includes turbo mode settings)   |
 | `PrivyFlywheelState`  | Algorithm state with failure tracking                |
+
+#### Launches & MM
+| Table                 | Purpose                                              |
+| --------------------- | ---------------------------------------------------- |
 | `PrivyPendingLaunch`  | Token launches awaiting deposit (with devBuy option) |
-| `PrivyTransaction`    | Trade history with routing and pricing info          |
+| `PrivyMmPending`      | MM-only mode pending tokens                          |
+
+#### Trading History
+| Table                 | Purpose                                              |
+| --------------------- | ---------------------------------------------------- |
+| `PrivyTransaction`    | All trades (buy/sell/transfer/claim)                 |
 | `PrivyClaimHistory`   | Fee claims with 10/90 platform split tracking        |
+
+#### Platform Management
+| Table                    | Purpose                                           |
+| ------------------------ | ------------------------------------------------- |
+| `PlatformConfig`         | Global platform settings (trading limits, etc.)   |
+| `PlatformWalletBalance`  | Platform wallet balances (dev/ops)                |
+| `PlatformFeeStats`       | Aggregated fee collection statistics              |
+| `AuditLog`               | Admin action audit trail                          |
+
+#### Telegram Integration
+| Table                       | Purpose                                        |
+| --------------------------- | ---------------------------------------------- |
+| `TelegramUser`              | Maps Telegram IDs to Privy users               |
+| `TelegramAlertSubscriber`   | Maintenance alert subscribers                  |
+| `BotStatus`                 | Maintenance mode singleton                     |
 
 ## Environment Configuration
 
@@ -873,6 +1006,7 @@ The admin dashboard at `/admin` provides configuration for various platform sett
 | `backend/src/routes/privy-users.routes.ts`      | User profile and onboarding            |
 | `backend/src/routes/privy-tokens.routes.ts`     | Privy token management                 |
 | `backend/src/routes/privy-launches.routes.ts`   | Token launch endpoints                 |
+| `backend/src/routes/privy-mm.routes.ts`         | MM-only mode endpoints                 |
 | `backend/prisma/schema.prisma`                  | Privy database schema                  |
 
 ### Admin & Frontend
@@ -886,6 +1020,39 @@ The admin dashboard at `/admin` provides configuration for various platform sett
 | `frontend/app/admin/_components/views/SettingsView.tsx` | Admin settings configuration UI |
 | `frontend/app/components/PriceChart.tsx`        | DexScreener price chart component      |
 | `frontend/lib/api.ts`                           | API client utilities                   |
+
+### TMA (Telegram Mini App)
+
+| File                                            | Purpose                                |
+| ----------------------------------------------- | -------------------------------------- |
+| `tma/src/app/page.tsx`                          | Root/index page                        |
+| `tma/src/app/onboarding/page.tsx`               | First-time wallet setup                |
+| `tma/src/app/dashboard/page.tsx`                | Main token list & balances             |
+| `tma/src/app/token/[id]/page.tsx`               | Token details & trading                |
+| `tma/src/app/token/[id]/settings/page.tsx`      | Token MM configuration                 |
+| `tma/src/app/launch/page.tsx`                   | Multi-step token launch wizard         |
+| `tma/src/app/mm/page.tsx`                       | MM-only mode (any Bags.fm token)       |
+| `tma/src/app/register/page.tsx`                 | Import existing token                  |
+| `tma/src/app/settings/page.tsx`                 | User profile & preferences             |
+
+## TMA Pages & Features
+
+| Page | Path | Features |
+|------|------|----------|
+| **Index** | `/` | Welcome/entry point, redirects to dashboard |
+| **Onboarding** | `/onboarding` | Create dev/ops wallets, delegate signing to backend |
+| **Dashboard** | `/dashboard` | List tokens, view balances, quick actions, algorithm badges |
+| **Token Details** | `/token/[id]` | Token info, balance, MM status, cycle progress, manual trading |
+| **Token Settings** | `/token/[id]/settings` | Configure algorithm mode, trading parameters, turbo settings |
+| **Launch Token** | `/launch` | Multi-step wizard: details → socials → MM config → review → deposit |
+| **MM Mode** | `/mm` | Start market-making on any Bags.fm token (no launch needed) |
+| **Register Token** | `/register` | Import existing token to portfolio |
+| **Settings** | `/settings` | User profile, wallet info, preferences |
+
+**Token Source Types:**
+- `launched` - Token created via ClaudeWheel launch wizard
+- `registered` - Existing token imported to portfolio
+- `mm_only` - Market-making only (no launch, no fee claiming)
 
 ## Testing Conventions
 
