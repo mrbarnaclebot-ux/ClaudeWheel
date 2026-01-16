@@ -83,8 +83,6 @@ export default function OnboardingPage() {
         }
 
         // Wait for wallets to load for existing users
-        // For new users (wallets.length === 0), we can proceed immediately
-        // For existing users, we need to wait for wallets to populate
         if (wallets.length >= 2) {
             const devDelegated = isWalletDelegated(wallets[0]?.address);
             const opsDelegated = isWalletDelegated(wallets[1]?.address);
@@ -113,9 +111,18 @@ export default function OnboardingPage() {
                 setIsInitializing(false); // Done initializing, render the step
             }
         } else if (wallets.length === 0) {
-            // New user with no wallets - show welcome screen
-            console.log('[Onboarding] New user, showing welcome screen');
-            setIsInitializing(false); // Done initializing, render welcome
+            // Wait a bit before assuming this is a new user
+            // (wallets might still be loading for returning users)
+            console.log('[Onboarding] Waiting 1s to confirm new user (wallets still loading?)');
+            const timer = setTimeout(() => {
+                // After timeout, if still 0 wallets, assume new user
+                if (wallets.length === 0) {
+                    console.log('[Onboarding] Confirmed new user, showing welcome screen');
+                    setIsInitializing(false);
+                }
+                // If wallets loaded during timeout, this effect will re-run with wallets.length >= 2
+            }, 1000);
+            return () => clearTimeout(timer);
         }
         // If wallets.length === 1, keep loading (shouldn't happen but handle gracefully)
     }, [ready, authenticated, wallets.length, user?.linkedAccounts, router]);
