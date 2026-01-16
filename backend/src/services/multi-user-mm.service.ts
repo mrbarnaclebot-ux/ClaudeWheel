@@ -700,6 +700,23 @@ class MultiUserMMService {
       // Calculate buy amount as percentage of available balance
       const buyAmount = availableForTrade * (buyPercent / 100)
 
+      // If SOL balance < 0.1, switch to sell phase to recover funds
+      if (solBalance < 0.1) {
+        loggers.flywheel.info({
+          tokenSymbol: token.token_symbol,
+          solBalance,
+          buyCount: state.buy_count
+        }, '🚀 [Turbo Lite] Low SOL balance (<0.1), switching to sell phase')
+        await updatePrivyFlywheelState(token.id, {
+          cycle_phase: 'sell',
+          buy_count: 0,
+          sell_count: 0,
+          last_trade_at: new Date().toISOString(),
+        })
+        await this.updateFlywheelCheck(token.id, 'low_sol_switch_to_sell')
+        return null
+      }
+
       if (buyAmount < 0.001 || solBalance < minReserve + 0.001) {
         const message = `🚀 [Turbo Lite] Insufficient SOL for buy (have ${solBalance.toFixed(4)}, need at least ${(minReserve + 0.001).toFixed(4)})`
         loggers.flywheel.info({ tokenSymbol: token.token_symbol, solBalance, buyAmount }, message)
@@ -747,24 +764,17 @@ class MultiUserMMService {
       // Clear failures on success
       await this.clearFailures(token.id)
 
-      // Update state
+      // Update state - ALWAYS persist since each job run only does one trade per token
+      // Batching doesn't work with the current execution model (state reloads from DB each run)
       const newBuyCount = state.buy_count + 1
       const shouldSwitchToSell = newBuyCount >= turboCycleSizeBuys
 
-      // Batch state updates: Only update every 3 trades or at phase transition
-      const shouldUpdateState = !turboBatchStateUpdates || newBuyCount % 3 === 0 || shouldSwitchToSell
-
-      if (shouldUpdateState) {
-        await updatePrivyFlywheelState(token.id, {
-          cycle_phase: shouldSwitchToSell ? 'sell' : 'buy',
-          buy_count: shouldSwitchToSell ? 0 : newBuyCount,
-          sell_count: 0,
-          last_trade_at: new Date().toISOString(),
-        })
-      } else {
-        // Only update buy count in memory (will be persisted on next batched update)
-        state.buy_count = newBuyCount
-      }
+      await updatePrivyFlywheelState(token.id, {
+        cycle_phase: shouldSwitchToSell ? 'sell' : 'buy',
+        buy_count: shouldSwitchToSell ? 0 : newBuyCount,
+        sell_count: 0,
+        last_trade_at: new Date().toISOString(),
+      })
 
       if (shouldSwitchToSell) {
         loggers.flywheel.info({ tokenSymbol: token.token_symbol }, '✅ [Turbo Lite] Buy phase complete, switching to sell')
@@ -826,24 +836,17 @@ class MultiUserMMService {
       // Clear failures on success
       await this.clearFailures(token.id)
 
-      // Update state
+      // Update state - ALWAYS persist since each job run only does one trade per token
+      // Batching doesn't work with the current execution model (state reloads from DB each run)
       const newSellCount = state.sell_count + 1
       const shouldSwitchToBuy = newSellCount >= turboCycleSizeSells
 
-      // Batch state updates: Only update every 3 trades or at cycle completion
-      const shouldUpdateState = !turboBatchStateUpdates || newSellCount % 3 === 0 || shouldSwitchToBuy
-
-      if (shouldUpdateState) {
-        await updatePrivyFlywheelState(token.id, {
-          cycle_phase: shouldSwitchToBuy ? 'buy' : 'sell',
-          buy_count: 0,
-          sell_count: shouldSwitchToBuy ? 0 : newSellCount,
-          last_trade_at: new Date().toISOString(),
-        })
-      } else {
-        // Only update sell count in memory (will be persisted on next batched update)
-        state.sell_count = newSellCount
-      }
+      await updatePrivyFlywheelState(token.id, {
+        cycle_phase: shouldSwitchToBuy ? 'buy' : 'sell',
+        buy_count: 0,
+        sell_count: shouldSwitchToBuy ? 0 : newSellCount,
+        last_trade_at: new Date().toISOString(),
+      })
 
       if (shouldSwitchToBuy) {
         loggers.flywheel.info({ tokenSymbol: token.token_symbol }, '🎉 [Turbo Lite] Sell phase complete, cycle finished')
