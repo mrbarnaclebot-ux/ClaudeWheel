@@ -125,6 +125,15 @@ router.get('/', async (req: PrivyRequest, res: Response) => {
         fee_threshold_sol: token.config.feeThresholdSol,
         min_buy_amount_sol: token.config.minBuyAmountSol,
         max_buy_amount_sol: token.config.maxBuyAmountSol,
+        algorithm_mode: token.config.algorithmMode,
+        // Turbo Lite configuration
+        turbo_job_interval_seconds: token.config.turboJobIntervalSeconds,
+        turbo_cycle_size_buys: token.config.turboCycleSizeBuys,
+        turbo_cycle_size_sells: token.config.turboCycleSizeSells,
+        turbo_inter_token_delay_ms: token.config.turboInterTokenDelayMs,
+        turbo_global_rate_limit: token.config.turboGlobalRateLimit,
+        turbo_confirmation_timeout: token.config.turboConfirmationTimeout,
+        turbo_batch_state_updates: token.config.turboBatchStateUpdates,
       } : null,
       flywheel_state: token.flywheelState ? {
         cycle_phase: token.flywheelState.cyclePhase,
@@ -562,6 +571,14 @@ router.get('/:id', async (req: PrivyRequest, res: Response) => {
         max_buy_amount_sol: Number(token.config.maxBuyAmountSol),
         slippage_bps: token.config.slippageBps,
         trading_route: token.config.tradingRoute,
+        // Turbo Lite configuration
+        turbo_job_interval_seconds: token.config.turboJobIntervalSeconds,
+        turbo_cycle_size_buys: token.config.turboCycleSizeBuys,
+        turbo_cycle_size_sells: token.config.turboCycleSizeSells,
+        turbo_inter_token_delay_ms: token.config.turboInterTokenDelayMs,
+        turbo_global_rate_limit: token.config.turboGlobalRateLimit,
+        turbo_confirmation_timeout: token.config.turboConfirmationTimeout,
+        turbo_batch_state_updates: token.config.turboBatchStateUpdates,
       } : null,
       state: token.flywheelState ? {
         cycle_phase: token.flywheelState.cyclePhase,
@@ -692,6 +709,14 @@ router.put('/:id/config', async (req: PrivyRequest, res: Response) => {
     if (config.target_token_allocation !== undefined) prismaConfig.targetTokenAllocation = config.target_token_allocation
     if (config.rebalance_threshold !== undefined) prismaConfig.rebalanceThreshold = config.rebalance_threshold
     if (config.trading_route !== undefined) prismaConfig.tradingRoute = config.trading_route
+    // Turbo Lite configuration
+    if (config.turbo_job_interval_seconds !== undefined) prismaConfig.turboJobIntervalSeconds = config.turbo_job_interval_seconds
+    if (config.turbo_cycle_size_buys !== undefined) prismaConfig.turboCycleSizeBuys = config.turbo_cycle_size_buys
+    if (config.turbo_cycle_size_sells !== undefined) prismaConfig.turboCycleSizeSells = config.turbo_cycle_size_sells
+    if (config.turbo_inter_token_delay_ms !== undefined) prismaConfig.turboInterTokenDelayMs = config.turbo_inter_token_delay_ms
+    if (config.turbo_global_rate_limit !== undefined) prismaConfig.turboGlobalRateLimit = config.turbo_global_rate_limit
+    if (config.turbo_confirmation_timeout !== undefined) prismaConfig.turboConfirmationTimeout = config.turbo_confirmation_timeout
+    if (config.turbo_batch_state_updates !== undefined) prismaConfig.turboBatchStateUpdates = config.turbo_batch_state_updates
     // TWAP/VWAP config
     if (config.twap_enabled !== undefined) prismaConfig.twapEnabled = config.twap_enabled
     if (config.twap_slices !== undefined) prismaConfig.twapSlices = config.twap_slices
