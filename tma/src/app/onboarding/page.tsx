@@ -74,6 +74,57 @@ export default function OnboardingPage() {
         }
     }, [ready, authenticated, wallets.length, step, user?.linkedAccounts]);
 
+    // NEW: Initial redirect for users with existing wallets
+    // This prevents showing the welcome screen to returning users
+    useEffect(() => {
+        if (!ready || !authenticated) return;
+
+        // Check if user has wallets (regardless of current step)
+        if (wallets.length >= 2) {
+            const devDelegated = isWalletDelegated(wallets[0]?.address);
+            const opsDelegated = isWalletDelegated(wallets[1]?.address);
+
+            console.log('[Onboarding] Initial wallet check:', {
+                walletsCount: wallets.length,
+                devDelegated,
+                opsDelegated,
+                currentStep: step,
+            });
+
+            if (devDelegated && opsDelegated) {
+                // Fully onboarded, redirect to dashboard
+                console.log('[Onboarding] Fully onboarded, redirecting to dashboard');
+                router.replace('/dashboard');
+            } else if (devDelegated) {
+                // Skip to ops delegation
+                if (step === 'welcome' || step === 'creating_wallets' || step === 'delegate_dev') {
+                    console.log('[Onboarding] Skipping to ops delegation');
+                    setStep('delegate_ops');
+                }
+            } else {
+                // Skip to dev delegation
+                if (step === 'welcome' || step === 'creating_wallets') {
+                    console.log('[Onboarding] Skipping to dev delegation');
+                    setStep('delegate_dev');
+                }
+            }
+        }
+    }, [ready, authenticated, wallets.length, user?.linkedAccounts, step, router]);
+
+    // Debug logging useEffect
+    useEffect(() => {
+        if (ready && authenticated) {
+            console.log('[Onboarding] State:', {
+                step,
+                walletsCount: wallets.length,
+                walletAddresses: wallets.map(w => w.address.slice(0, 8)),
+                linkedAccounts: user?.linkedAccounts?.length,
+                devDelegated: wallets[0] ? isWalletDelegated(wallets[0].address) : false,
+                opsDelegated: wallets[1] ? isWalletDelegated(wallets[1].address) : false,
+            });
+        }
+    }, [ready, authenticated, wallets.length, step, user?.linkedAccounts]);
+
     async function handleStart() {
         if (!ready || !authenticated) {
             setError('Please wait for authentication to complete.');
@@ -89,35 +140,93 @@ export default function OnboardingPage() {
         try {
             console.log('[Onboarding] Starting wallet creation, current wallets:', wallets.length);
 
-            // Create dev wallet (first)
+            // GUARD: If user already has 2+ wallets, skip creation entirely
+            if (wallets.length >= 2) {
+                console.log('[Onboarding] User already has wallets, skipping creation');
+                const devDelegated = isWalletDelegated(wallets[0]?.address);
+                if (devDelegated) {
+                    setStep('delegate_ops');
+                } else {
+                    setStep('delegate_dev');
+                }
+                return;
+            }
+
+            let devWalletCreated = false;
+            let opsWalletCreated = false;
+
+            // Create dev wallet if needed
             if (wallets.length === 0) {
                 console.log('[Onboarding] Creating first wallet (dev)...');
                 const result = await createWallet();
                 console.log('[Onboarding] Dev wallet created:', result?.wallet?.address);
+                devWalletCreated = true;
+
+                // Wait for Privy state to sync (poll for wallet)
+                console.log('[Onboarding] Waiting for dev wallet to appear in state...');
+                for (let i = 0; i < 10; i++) {
+                    await new Promise(resolve => setTimeout(resolve, 200));
+                    if (wallets.length > 0) {
+                        console.log('[Onboarding] Dev wallet now in state');
+                        break;
+                    }
+                }
             }
 
-            // Small delay to let Privy state update
-            await new Promise(resolve => setTimeout(resolve, 500));
-
-            // Create ops wallet (second)
-            // Check current wallets again after first creation
+            // Create ops wallet if needed (check fresh wallet count)
             if (wallets.length < 2) {
                 console.log('[Onboarding] Creating second wallet (ops)...');
                 const result = await createWallet({ createAdditional: true });
                 console.log('[Onboarding] Ops wallet created:', result?.wallet?.address);
+                opsWalletCreated = true;
+
+                // Wait for Privy state to sync
+                console.log('[Onboarding] Waiting for ops wallet to appear in state...');
+                for (let i = 0; i < 10; i++) {
+                    await new Promise(resolve => setTimeout(resolve, 200));
+                    if (wallets.length >= 2) {
+                        console.log('[Onboarding] Ops wallet now in state');
+                        break;
+                    }
+                }
             }
 
-            toast.success('Wallets created successfully', {
-                description: 'Your dev and ops wallets are ready',
-            });
+            if (devWalletCreated || opsWalletCreated) {
+                toast.success('Wallets created successfully', {
+                    description: 'Your dev and ops wallets are ready',
+                });
+            }
+
             setStep('delegate_dev');
         } catch (err: any) {
             console.error('[Onboarding] Wallet creation failed:', err);
             console.error('[Onboarding] Error details:', err?.message, err?.code, err?.cause);
-            const errorMsg = `Failed to create wallets: ${err?.message || 'Unknown error'}. Please try again.`;
-            setError(errorMsg);
+
+            const errorMsg = err?.message || 'Unknown error';
+
+            // Check if error is "already has wallet"
+            if (errorMsg.includes('already has') || errorMsg.includes('embedded wallet')) {
+                console.log('[Onboarding] User already has wallets, skipping to delegation');
+
+                // Skip to appropriate delegation step
+                const devDelegated = isWalletDelegated(wallets[0]?.address);
+                if (devDelegated) {
+                    setStep('delegate_ops');
+                } else {
+                    setStep('delegate_dev');
+                }
+
+                toast.info('Wallets already exist', {
+                    description: 'Continuing with wallet authorization',
+                });
+                return;
+            }
+
+            // Other errors
+            const displayError = `Failed to create wallets: ${errorMsg}. Please try again.`;
+            setError(displayError);
             toast.error('Wallet creation failed', {
-                description: err?.message || 'Unknown error',
+                description: errorMsg,
             });
             setStep('welcome');
         } finally {
@@ -362,9 +471,10 @@ export default function OnboardingPage() {
 
                             <button
                                 onClick={handleStart}
-                                className="w-full bg-green-600 hover:bg-green-500 text-white py-4 rounded-xl font-medium text-lg"
+                                disabled={isCreating || wallets.length >= 2}
+                                className="w-full bg-green-600 hover:bg-green-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white py-4 rounded-xl font-medium text-lg"
                             >
-                                Get Started
+                                {wallets.length >= 2 ? 'Wallets Ready' : 'Get Started'}
                             </button>
 
                             {error && (
