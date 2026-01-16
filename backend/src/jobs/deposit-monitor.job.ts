@@ -320,21 +320,35 @@ async function handleSuccessfulLaunch(launch: PrivyPendingLaunchWithRelations, t
 
     // Create config with flywheel enabled using stored MM preferences from launch
     try {
+      const launchAlgorithmMode = launch.mmAlgorithm || 'simple'
+      const launchConfigData: any = {
+        privyTokenId: userToken.id,
+        flywheelActive: true,
+        autoClaimEnabled: launch.mmAutoClaimEnabled ?? true,
+        algorithmMode: launchAlgorithmMode,
+        minBuyAmountSol: Number(launch.mmMinBuySol) || 0.01,
+        maxBuyAmountSol: Number(launch.mmMaxBuySol) || 0.05,
+        slippageBps: 300,
+        tradingRoute: 'auto',
+      }
+
+      // Add turbo mode defaults if turbo_lite algorithm selected
+      if (launchAlgorithmMode === 'turbo_lite') {
+        launchConfigData.turboJobIntervalSeconds = 15
+        launchConfigData.turboCycleSizeBuys = 8
+        launchConfigData.turboCycleSizeSells = 8
+        launchConfigData.turboInterTokenDelayMs = 200
+        launchConfigData.turboGlobalRateLimit = 60
+        launchConfigData.turboConfirmationTimeout = 45
+        launchConfigData.turboBatchStateUpdates = true
+      }
+
       await prisma.privyTokenConfig.create({
-        data: {
-          privyTokenId: userToken.id,
-          flywheelActive: true,
-          autoClaimEnabled: launch.mmAutoClaimEnabled ?? true,
-          algorithmMode: launch.mmAlgorithm || 'simple',
-          minBuyAmountSol: Number(launch.mmMinBuySol) || 0.01,
-          maxBuyAmountSol: Number(launch.mmMaxBuySol) || 0.05,
-          slippageBps: 300,
-          tradingRoute: 'auto',
-        },
+        data: launchConfigData,
       })
       loggers.deposit.info({
         userTokenId: userToken.id,
-        algorithm: launch.mmAlgorithm,
+        algorithm: launchAlgorithmMode,
         minBuy: Number(launch.mmMinBuySol),
         maxBuy: Number(launch.mmMaxBuySol),
       }, '⚙️ Created privy_token_config with user MM preferences')
@@ -716,17 +730,31 @@ async function activateMmToken(pending: PrivyMmPendingWithRelations): Promise<vo
       })
 
       // Create config with flywheel enabled, NO auto-claim (not creator)
+      const algorithmMode = pending.mmAlgorithm || 'simple'
+      const configData: any = {
+        privyTokenId: token.id,
+        flywheelActive: true,
+        autoClaimEnabled: false, // MM-only users can't claim fees (not creator)
+        algorithmMode,
+        minBuyAmountSol: 0.01,
+        maxBuyAmountSol: 0.05,
+        slippageBps: 300,
+        tradingRoute: 'auto',
+      }
+
+      // Add turbo mode defaults if turbo_lite algorithm selected
+      if (algorithmMode === 'turbo_lite') {
+        configData.turboJobIntervalSeconds = 15
+        configData.turboCycleSizeBuys = 8
+        configData.turboCycleSizeSells = 8
+        configData.turboInterTokenDelayMs = 200
+        configData.turboGlobalRateLimit = 60
+        configData.turboConfirmationTimeout = 45
+        configData.turboBatchStateUpdates = true
+      }
+
       await tx.privyTokenConfig.create({
-        data: {
-          privyTokenId: token.id,
-          flywheelActive: true,
-          autoClaimEnabled: false, // MM-only users can't claim fees (not creator)
-          algorithmMode: pending.mmAlgorithm || 'simple',
-          minBuyAmountSol: 0.01,
-          maxBuyAmountSol: 0.05,
-          slippageBps: 300,
-          tradingRoute: 'auto',
-        },
+        data: configData,
       })
 
       // Create flywheel state
