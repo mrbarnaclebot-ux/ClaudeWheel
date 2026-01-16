@@ -154,6 +154,15 @@ model PrivyTokenConfig {
   pauseOnExtremeVolatility  Boolean @default(true) @map("pause_on_extreme_volatility")
   volatilityPauseThreshold  Int     @default(15) @map("volatility_pause_threshold")
 
+  // Turbo mode configuration
+  turboJobIntervalSeconds   Int?    @default(15) @map("turbo_job_interval_seconds")
+  turboCycleSizeBuys        Int?    @default(8) @map("turbo_cycle_size_buys")
+  turboCycleSizeSells       Int?    @default(8) @map("turbo_cycle_size_sells")
+  turboInterTokenDelayMs    Int?    @default(200) @map("turbo_inter_token_delay_ms")
+  turboGlobalRateLimit      Int?    @default(60) @map("turbo_global_rate_limit")
+  turboConfirmationTimeout  Int?    @default(45) @map("turbo_confirmation_timeout")
+  turboBatchStateUpdates    Boolean? @default(true) @map("turbo_batch_state_updates")
+
   token PrivyUserToken @relation(fields: [privyTokenId], references: [id], onDelete: Cascade)
 
   @@index([flywheelActive])

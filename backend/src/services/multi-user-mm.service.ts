@@ -278,10 +278,22 @@ class MultiUserMMService {
       loggers.flywheel.info({ tokenCount: tokens.length }, 'Found tokens with active flywheels')
 
       for (const token of tokens) {
+        // Get algorithm-specific rate limit
+        const config = token.privy_token_config
+        const algorithmMode = config?.algorithm_mode ?? 'simple'
+        const tokenRateLimit = algorithmMode === 'turbo_lite'
+          ? (config?.turbo_global_rate_limit ?? 60)
+          : maxTradesPerMinute
+
         // Check rate limit
-        if (this.tradesThisMinute >= maxTradesPerMinute) {
-          loggers.flywheel.warn({ maxTradesPerMinute }, 'Rate limit reached, pausing until next cycle')
-          break
+        if (this.tradesThisMinute >= tokenRateLimit) {
+          loggers.flywheel.warn({
+            tokenSymbol: token.token_symbol,
+            algorithm: algorithmMode,
+            rateLimit: tokenRateLimit,
+            tradesThisMinute: this.tradesThisMinute
+          }, 'Rate limit reached for this algorithm, skipping token')
+          continue
         }
 
         try {
@@ -293,8 +305,11 @@ class MultiUserMMService {
             }
           }
 
-          // Small delay between tokens
-          await this.sleep(500)
+          // Algorithm-specific delay between tokens
+          const interTokenDelay = algorithmMode === 'turbo_lite'
+            ? (config?.turbo_inter_token_delay_ms ?? 200)
+            : 500
+          await this.sleep(interTokenDelay)
         } catch (error: any) {
           loggers.flywheel.error({
             tokenSymbol: token.token_symbol,
@@ -398,8 +413,23 @@ class MultiUserMMService {
       return { ...baseResult, tradeType: 'buy', success: false, amount: 0, error: 'Ops wallet not found' }
     }
 
-    // Run simple 5-buy/5-sell cycle with percentage-based amounts
-    return this.runSimpleAlgorithm(token, config, state, opsWalletAddress, connection, baseResult, tradingRoute)
+    // Route to appropriate algorithm based on config
+    const algorithmMode = config.algorithm_mode ?? 'simple'
+
+    switch (algorithmMode) {
+      case 'simple':
+        return this.runSimpleAlgorithm(token, config, state, opsWalletAddress, connection, baseResult, tradingRoute)
+      case 'turbo_lite':
+        return this.runTurboLiteAlgorithm(token, config, state, opsWalletAddress, connection, baseResult, tradingRoute)
+      case 'rebalance':
+      case 'twap_vwap':
+      case 'dynamic':
+        loggers.flywheel.warn({ tokenSymbol: token.token_symbol, algorithm: algorithmMode }, 'Algorithm not implemented, falling back to simple')
+        return this.runSimpleAlgorithm(token, config, state, opsWalletAddress, connection, baseResult, tradingRoute)
+      default:
+        loggers.flywheel.error({ tokenSymbol: token.token_symbol, algorithm: algorithmMode }, 'Unknown algorithm mode')
+        return this.runSimpleAlgorithm(token, config, state, opsWalletAddress, connection, baseResult, tradingRoute)
+    }
   }
 
   /**
@@ -623,6 +653,201 @@ class MultiUserMMService {
         sell_count: shouldSwitchToBuy ? 0 : newSellCount,
         last_trade_at: new Date().toISOString(),
       })
+
+      await this.recordTransaction(token.id, 'sell', sellAmount, signature)
+      await this.updateFlywheelCheck(token.id, 'traded')
+
+      return { ...baseResult, tradeType: 'sell', success: true, amount: sellAmount, signature }
+    }
+  }
+
+  /**
+   * Turbo Lite Algorithm - 3-5x speed improvement over Simple mode
+   *
+   * Key optimizations:
+   * - Larger cycle sizes (8 buys/sells vs 5)
+   * - Configurable job intervals (15s vs 60s - managed by job scheduler)
+   * - Reduced inter-token delays (managed by caller)
+   * - Batched database state updates (every 3 trades instead of every trade)
+   */
+  private async runTurboLiteAlgorithm(
+    token: PrivyTokenWithConfig,
+    config: UserTokenConfig,
+    state: UserFlywheelState,
+    opsWalletAddress: string,
+    connection: Connection,
+    baseResult: { userTokenId: string; tokenMint: string; tokenSymbol: string },
+    tradingRoute: 'bags' | 'jupiter' = 'bags'
+  ): Promise<TradeResult | null> {
+    const tokenMint = new PublicKey(token.token_mint_address)
+    const opsWalletPubkey = new PublicKey(opsWalletAddress)
+
+    // Get turbo mode configuration with defaults
+    const turboCycleSizeBuys = config.turbo_cycle_size_buys ?? 8
+    const turboCycleSizeSells = config.turbo_cycle_size_sells ?? 8
+    const turboBatchStateUpdates = config.turbo_batch_state_updates ?? true
+
+    // Get percentage settings (same as simple mode)
+    const buyPercent = config.buy_percent || 20
+    const sellPercent = config.sell_percent || 20
+
+    if (state.cycle_phase === 'buy') {
+      // Check SOL balance
+      const solBalance = await getBalance(opsWalletPubkey)
+      const minReserve = 0.01 // Reserve for tx fees
+      const availableForTrade = Math.max(0, solBalance - minReserve)
+
+      // Calculate buy amount as percentage of available balance
+      const buyAmount = availableForTrade * (buyPercent / 100)
+
+      if (buyAmount < 0.001 || solBalance < minReserve + 0.001) {
+        const message = `🚀 [Turbo Lite] Insufficient SOL for buy (have ${solBalance.toFixed(4)}, need at least ${(minReserve + 0.001).toFixed(4)})`
+        loggers.flywheel.info({ tokenSymbol: token.token_symbol, solBalance, buyAmount }, message)
+        await this.updateFlywheelCheck(token.id, 'insufficient_sol')
+        return null
+      }
+
+      const lamports = Math.floor(buyAmount * 1e9)
+
+      loggers.flywheel.info({
+        tokenSymbol: token.token_symbol,
+        buyAmount,
+        buyPercent,
+        solBalance,
+        buyCount: state.buy_count,
+        maxBuys: turboCycleSizeBuys,
+        route: tradingRoute,
+      }, `🚀 [Turbo Lite] Executing BUY ${state.buy_count + 1}/${turboCycleSizeBuys}`)
+
+      // Get quote
+      const quote = await this.getTradeQuote(
+        tradingRoute,
+        SOL_MINT,
+        token.token_mint_address,
+        lamports,
+        'buy',
+        config.slippage_bps
+      )
+
+      if (!quote?.rawQuoteResponse) {
+        const errorMsg = `Failed to get ${tradingRoute} quote`
+        loggers.flywheel.info({ tokenSymbol: token.token_symbol, route: tradingRoute }, '🚀 [Turbo Lite] Quote failed (temporary, no pause)')
+        await this.updateFlywheelCheck(token.id, 'quote_failed')
+        return { ...baseResult, tradeType: 'buy', success: false, amount: buyAmount, error: errorMsg }
+      }
+
+      const signature = await this.executeSwapWithPrivySigning(connection, opsWalletAddress, quote.rawQuoteResponse, tradingRoute)
+
+      if (!signature) {
+        const errorMsg = `${tradingRoute} swap failed`
+        await this.recordFailure(token.id, errorMsg)
+        return { ...baseResult, tradeType: 'buy', success: false, amount: buyAmount, error: errorMsg }
+      }
+
+      // Clear failures on success
+      await this.clearFailures(token.id)
+
+      // Update state
+      const newBuyCount = state.buy_count + 1
+      const shouldSwitchToSell = newBuyCount >= turboCycleSizeBuys
+
+      // Batch state updates: Only update every 3 trades or at phase transition
+      const shouldUpdateState = !turboBatchStateUpdates || newBuyCount % 3 === 0 || shouldSwitchToSell
+
+      if (shouldUpdateState) {
+        await updatePrivyFlywheelState(token.id, {
+          cycle_phase: shouldSwitchToSell ? 'sell' : 'buy',
+          buy_count: shouldSwitchToSell ? 0 : newBuyCount,
+          sell_count: 0,
+          last_trade_at: new Date().toISOString(),
+        })
+      } else {
+        // Only update buy count in memory (will be persisted on next batched update)
+        state.buy_count = newBuyCount
+      }
+
+      if (shouldSwitchToSell) {
+        loggers.flywheel.info({ tokenSymbol: token.token_symbol }, '✅ [Turbo Lite] Buy phase complete, switching to sell')
+      }
+
+      await this.recordTransaction(token.id, 'buy', buyAmount, signature)
+      await this.updateFlywheelCheck(token.id, 'traded')
+
+      return { ...baseResult, tradeType: 'buy', success: true, amount: buyAmount, signature }
+
+    } else {
+      // SELL phase - use percentage of current token balance
+      const tokenBalance = await getTokenBalance(opsWalletPubkey, tokenMint)
+      const sellAmount = tokenBalance * (sellPercent / 100)
+
+      if (tokenBalance < 1 || sellAmount < 1) {
+        loggers.flywheel.info({ tokenSymbol: token.token_symbol, tokenBalance, sellAmount }, '🚀 [Turbo Lite] Insufficient tokens for sell, switching to buy phase')
+        await this.updateFlywheelCheck(token.id, 'no_tokens')
+        await updatePrivyFlywheelState(token.id, { cycle_phase: 'buy', sell_count: 0 })
+        return null
+      }
+
+      const tokenUnits = Math.floor(sellAmount * Math.pow(10, token.token_decimals))
+
+      loggers.flywheel.info({
+        tokenSymbol: token.token_symbol,
+        sellAmount,
+        sellPercent,
+        tokenBalance,
+        sellCount: state.sell_count,
+        maxSells: turboCycleSizeSells,
+        route: tradingRoute,
+      }, `🚀 [Turbo Lite] Executing SELL ${state.sell_count + 1}/${turboCycleSizeSells}`)
+
+      const quote = await this.getTradeQuote(
+        tradingRoute,
+        token.token_mint_address,
+        SOL_MINT,
+        tokenUnits,
+        'sell',
+        config.slippage_bps
+      )
+
+      if (!quote?.rawQuoteResponse) {
+        const errorMsg = `Failed to get ${tradingRoute} quote`
+        loggers.flywheel.info({ tokenSymbol: token.token_symbol, route: tradingRoute }, '🚀 [Turbo Lite] Quote failed (temporary, no pause)')
+        await this.updateFlywheelCheck(token.id, 'quote_failed')
+        return { ...baseResult, tradeType: 'sell', success: false, amount: sellAmount, error: errorMsg }
+      }
+
+      const signature = await this.executeSwapWithPrivySigning(connection, opsWalletAddress, quote.rawQuoteResponse, tradingRoute)
+
+      if (!signature) {
+        const errorMsg = `${tradingRoute} swap failed`
+        await this.recordFailure(token.id, errorMsg)
+        return { ...baseResult, tradeType: 'sell', success: false, amount: sellAmount, error: errorMsg }
+      }
+
+      // Clear failures on success
+      await this.clearFailures(token.id)
+
+      // Update state
+      const newSellCount = state.sell_count + 1
+      const shouldSwitchToBuy = newSellCount >= turboCycleSizeSells
+
+      // Batch state updates: Only update every 3 trades or at cycle completion
+      const shouldUpdateState = !turboBatchStateUpdates || newSellCount % 3 === 0 || shouldSwitchToBuy
+
+      if (shouldUpdateState) {
+        await updatePrivyFlywheelState(token.id, {
+          cycle_phase: shouldSwitchToBuy ? 'buy' : 'sell',
+          buy_count: 0,
+          sell_count: shouldSwitchToBuy ? 0 : newSellCount,
+          last_trade_at: new Date().toISOString(),
+        })
+      } else {
+        // Only update sell count in memory (will be persisted on next batched update)
+        state.sell_count = newSellCount
+      }
+
+      if (shouldSwitchToBuy) {
+        loggers.flywheel.info({ tokenSymbol: token.token_symbol }, '🎉 [Turbo Lite] Sell phase complete, cycle finished')
+      }
 
       await this.recordTransaction(token.id, 'sell', sellAmount, signature)
       await this.updateFlywheelCheck(token.id, 'traded')

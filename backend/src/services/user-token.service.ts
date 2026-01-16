@@ -23,9 +23,21 @@ export interface UserTokenConfig {
   trading_route: 'bags' | 'jupiter' | 'auto'
   updated_at: string
 
+  // Algorithm mode selection
+  algorithm_mode?: 'simple' | 'turbo_lite' | 'rebalance' | 'twap_vwap' | 'dynamic'
+
   // Percentage-based trading: 20% of current balance per trade
   buy_percent: number   // % of SOL balance to use for buys (default 20)
   sell_percent: number  // % of token balance to use for sells (default 20)
+
+  // Turbo Lite mode configuration
+  turbo_job_interval_seconds?: number      // Job interval in seconds (default 15)
+  turbo_cycle_size_buys?: number           // Number of buys per cycle (default 8)
+  turbo_cycle_size_sells?: number          // Number of sells per cycle (default 8)
+  turbo_inter_token_delay_ms?: number      // Delay between tokens in ms (default 200)
+  turbo_global_rate_limit?: number         // Max trades per minute (default 60)
+  turbo_confirmation_timeout?: number      // Confirmation timeout in seconds (default 45)
+  turbo_batch_state_updates?: boolean      // Batch DB writes every 3 trades (default true)
 }
 
 export interface UserFlywheelState {
