@@ -12,7 +12,16 @@ import { useParams, useRouter } from 'next/navigation';
 interface TokenConfig {
     flywheel_active: boolean;
     auto_claim_enabled: boolean;
-    algorithm_mode: 'simple' | 'smart' | 'rebalance';
+    algorithm_mode: 'simple' | 'turbo_lite' | 'rebalance';
+
+    // Turbo Lite configuration
+    turbo_job_interval_seconds?: number;
+    turbo_cycle_size_buys?: number;
+    turbo_cycle_size_sells?: number;
+    turbo_inter_token_delay_ms?: number;
+    turbo_global_rate_limit?: number;
+    turbo_confirmation_timeout?: number;
+    turbo_batch_state_updates?: boolean;
 }
 
 interface TokenDetails {
@@ -53,6 +62,15 @@ export default function TokenSettingsPage() {
                 flywheel_active: token.config.flywheel_active,
                 auto_claim_enabled: token.config.auto_claim_enabled,
                 algorithm_mode: token.config.algorithm_mode,
+
+                // Initialize turbo fields with defaults
+                turbo_job_interval_seconds: token.config.turbo_job_interval_seconds ?? 15,
+                turbo_cycle_size_buys: token.config.turbo_cycle_size_buys ?? 8,
+                turbo_cycle_size_sells: token.config.turbo_cycle_size_sells ?? 8,
+                turbo_inter_token_delay_ms: token.config.turbo_inter_token_delay_ms ?? 200,
+                turbo_global_rate_limit: token.config.turbo_global_rate_limit ?? 60,
+                turbo_confirmation_timeout: token.config.turbo_confirmation_timeout ?? 45,
+                turbo_batch_state_updates: token.config.turbo_batch_state_updates ?? true,
             });
         }
     }, [token]);
@@ -182,9 +200,9 @@ export default function TokenSettingsPage() {
 
                 <div className="space-y-3">
                     {([
-                        { value: 'simple', label: 'Simple', desc: '5 buys then 5 sells, repeat', disabled: false },
-                        { value: 'smart', label: 'Smart', desc: 'Coming Soon', disabled: true },
-                        { value: 'rebalance', label: 'Rebalance', desc: 'Maintains target allocation', disabled: false },
+                        { value: 'simple', label: '🐢 Simple', desc: '5 buys → 5 sells (60s cycles)', disabled: false },
+                        { value: 'turbo_lite', label: '🚀 Turbo Lite', desc: '8 buys → 8 sells (15s cycles, 8x faster)', disabled: false },
+                        { value: 'rebalance', label: '⚖️ Rebalance', desc: 'Maintains target allocation', disabled: true },
                     ] as const).map((mode) => (
                         <button
                             key={mode.value}
@@ -204,6 +222,172 @@ export default function TokenSettingsPage() {
                     ))}
                 </div>
             </motion.div>
+
+            {/* Turbo Mode Configuration */}
+            {formData.algorithm_mode === 'turbo_lite' && (
+                <motion.div
+                    initial={{ opacity: 0, height: 0 }}
+                    animate={{ opacity: 1, height: 'auto' }}
+                    exit={{ opacity: 0, height: 0 }}
+                    transition={{ delay: 0.2 }}
+                    className="space-y-4 bg-gray-800/30 rounded-xl p-4 border border-gray-700/50 mb-6"
+                >
+                    <div className="flex items-center gap-2 mb-3">
+                        <span className="text-lg">🚀</span>
+                        <h3 className="font-semibold text-white">Turbo Mode Settings</h3>
+                    </div>
+
+                    {/* Cycle Size Configuration */}
+                    <div className="space-y-3">
+                        <label className="block text-sm text-gray-300">
+                            Cycle Size (trades per phase)
+                        </label>
+                        <div className="grid grid-cols-2 gap-3">
+                            <div>
+                                <label className="text-xs text-gray-400 mb-1 block">Buys per cycle</label>
+                                <input
+                                    type="number"
+                                    min={1}
+                                    max={20}
+                                    value={formData.turbo_cycle_size_buys ?? 8}
+                                    onChange={(e) => updateField('turbo_cycle_size_buys', parseInt(e.target.value) || 8)}
+                                    className="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-white"
+                                />
+                            </div>
+                            <div>
+                                <label className="text-xs text-gray-400 mb-1 block">Sells per cycle</label>
+                                <input
+                                    type="number"
+                                    min={1}
+                                    max={20}
+                                    value={formData.turbo_cycle_size_sells ?? 8}
+                                    onChange={(e) => updateField('turbo_cycle_size_sells', parseInt(e.target.value) || 8)}
+                                    className="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-white"
+                                />
+                            </div>
+                        </div>
+                        <p className="text-xs text-gray-400">Default: 8 buys + 8 sells (vs 5+5 in Simple mode)</p>
+                    </div>
+
+                    {/* Rate Limit Configuration */}
+                    <div>
+                        <label className="block text-sm text-gray-300 mb-2">
+                            Rate Limit (trades per minute)
+                        </label>
+                        <input
+                            type="range"
+                            min={30}
+                            max={200}
+                            step={10}
+                            value={formData.turbo_global_rate_limit ?? 60}
+                            onChange={(e) => updateField('turbo_global_rate_limit', parseInt(e.target.value))}
+                            className="w-full"
+                        />
+                        <div className="flex justify-between text-xs text-gray-400 mt-1">
+                            <span>30/min</span>
+                            <span className="text-green-400 font-semibold">
+                                {formData.turbo_global_rate_limit ?? 60}/min
+                            </span>
+                            <span>200/min</span>
+                        </div>
+                    </div>
+
+                    {/* Job Interval Configuration */}
+                    <div>
+                        <label className="block text-sm text-gray-300 mb-2">
+                            Job Interval (seconds between cycles)
+                        </label>
+                        <input
+                            type="range"
+                            min={5}
+                            max={60}
+                            step={5}
+                            value={formData.turbo_job_interval_seconds ?? 15}
+                            onChange={(e) => updateField('turbo_job_interval_seconds', parseInt(e.target.value))}
+                            className="w-full"
+                        />
+                        <div className="flex justify-between text-xs text-gray-400 mt-1">
+                            <span>5s</span>
+                            <span className="text-green-400 font-semibold">
+                                {formData.turbo_job_interval_seconds ?? 15}s
+                            </span>
+                            <span>60s</span>
+                        </div>
+                    </div>
+
+                    {/* Advanced Settings Toggle */}
+                    <details className="border-t border-gray-700 pt-3">
+                        <summary className="text-sm text-gray-300 cursor-pointer hover:text-white">
+                            Advanced Settings
+                        </summary>
+                        <div className="mt-3 space-y-3">
+                            {/* Inter-token Delay */}
+                            <div>
+                                <label className="block text-xs text-gray-400 mb-1">
+                                    Inter-token Delay (ms)
+                                </label>
+                                <input
+                                    type="number"
+                                    min={0}
+                                    max={1000}
+                                    step={50}
+                                    value={formData.turbo_inter_token_delay_ms ?? 200}
+                                    onChange={(e) => updateField('turbo_inter_token_delay_ms', parseInt(e.target.value) || 200)}
+                                    className="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm"
+                                />
+                            </div>
+
+                            {/* Confirmation Timeout */}
+                            <div>
+                                <label className="block text-xs text-gray-400 mb-1">
+                                    Confirmation Timeout (seconds)
+                                </label>
+                                <input
+                                    type="number"
+                                    min={20}
+                                    max={120}
+                                    step={5}
+                                    value={formData.turbo_confirmation_timeout ?? 45}
+                                    onChange={(e) => updateField('turbo_confirmation_timeout', parseInt(e.target.value) || 45)}
+                                    className="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm"
+                                />
+                            </div>
+
+                            {/* Batch State Updates Toggle */}
+                            <div className="flex items-center justify-between">
+                                <div>
+                                    <label className="text-xs text-gray-300">Batch State Updates</label>
+                                    <p className="text-xs text-gray-500">Save DB writes (recommended)</p>
+                                </div>
+                                <button
+                                    onClick={() => updateField('turbo_batch_state_updates', !(formData.turbo_batch_state_updates ?? true))}
+                                    className={`w-14 h-8 rounded-full transition-colors ${
+                                        (formData.turbo_batch_state_updates ?? true) ? 'bg-green-600' : 'bg-gray-600'
+                                    }`}
+                                >
+                                    <div className={`w-6 h-6 bg-white rounded-full transition-transform mx-1 ${
+                                        (formData.turbo_batch_state_updates ?? true) ? 'translate-x-6' : 'translate-x-0'
+                                    }`} />
+                                </button>
+                            </div>
+                        </div>
+                    </details>
+
+                    {/* Performance Estimate */}
+                    <div className="bg-green-900/20 border border-green-700/50 rounded-lg p-3 mt-4">
+                        <div className="flex items-start gap-2">
+                            <span className="text-lg">⚡</span>
+                            <div>
+                                <p className="text-sm font-semibold text-green-400">Estimated Performance</p>
+                                <p className="text-xs text-gray-300 mt-1">
+                                    ~{Math.floor((formData.turbo_cycle_size_buys ?? 8) * 2 * 60 / (formData.turbo_job_interval_seconds ?? 15))} trades/min
+                                    ({Math.floor(((formData.turbo_cycle_size_buys ?? 8) * 2 * 60 / (formData.turbo_job_interval_seconds ?? 15)) / 10)}x faster than Simple mode)
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                </motion.div>
+            )}
 
             {/* Save Button (Fixed at bottom) */}
             <motion.div
