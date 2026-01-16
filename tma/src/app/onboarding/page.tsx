@@ -160,7 +160,6 @@ export default function OnboardingPage() {
         if (isCreating) return; // Prevent double-clicks
         setIsCreating(true);
         hapticFeedback('medium');
-        setStep('creating_wallets');
         setError(null);
 
         try {
@@ -175,8 +174,12 @@ export default function OnboardingPage() {
                 } else {
                     setStep('delegate_dev');
                 }
+                setIsCreating(false); // Reset state before returning
                 return;
             }
+
+            // Only set step to 'creating_wallets' if actually creating wallets
+            setStep('creating_wallets');
 
             let devWalletCreated = false;
             let opsWalletCreated = false;
