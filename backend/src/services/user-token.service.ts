@@ -122,6 +122,18 @@ function mapPrismaTokenToPrivyTokenWithConfig(token: any): PrivyTokenWithConfig 
       updated_at: token.config.updatedAt.toISOString(),
       buy_percent: token.config.buyPercent ?? 20,
       sell_percent: token.config.sellPercent ?? 20,
+
+      // Algorithm mode (CRITICAL - missing this causes turbo mode to fail)
+      algorithm_mode: token.config.algorithmMode as any,
+
+      // Turbo mode configuration fields
+      turbo_job_interval_seconds: token.config.turboJobIntervalSeconds ?? undefined,
+      turbo_cycle_size_buys: token.config.turboCycleSizeBuys ?? undefined,
+      turbo_cycle_size_sells: token.config.turboCycleSizeSells ?? undefined,
+      turbo_inter_token_delay_ms: token.config.turboInterTokenDelayMs ?? undefined,
+      turbo_global_rate_limit: token.config.turboGlobalRateLimit ?? undefined,
+      turbo_confirmation_timeout: token.config.turboConfirmationTimeout ?? undefined,
+      turbo_batch_state_updates: token.config.turboBatchStateUpdates ?? undefined,
     } : undefined as any,
     privy_flywheel_state: token.flywheelState ? {
       id: token.flywheelState.id,
@@ -366,6 +378,18 @@ export async function getPrivyTokenConfig(privyTokenId: string): Promise<UserTok
       updated_at: config.updatedAt.toISOString(),
       buy_percent: config.buyPercent ?? 20,
       sell_percent: config.sellPercent ?? 20,
+
+      // Algorithm mode
+      algorithm_mode: config.algorithmMode as any,
+
+      // Turbo mode configuration fields
+      turbo_job_interval_seconds: config.turboJobIntervalSeconds ?? undefined,
+      turbo_cycle_size_buys: config.turboCycleSizeBuys ?? undefined,
+      turbo_cycle_size_sells: config.turboCycleSizeSells ?? undefined,
+      turbo_inter_token_delay_ms: config.turboInterTokenDelayMs ?? undefined,
+      turbo_global_rate_limit: config.turboGlobalRateLimit ?? undefined,
+      turbo_confirmation_timeout: config.turboConfirmationTimeout ?? undefined,
+      turbo_batch_state_updates: config.turboBatchStateUpdates ?? undefined,
     }
   } catch (error) {
     loggers.user.error({ error: String(error), privyTokenId }, 'Failed to get Privy token config')
@@ -397,6 +421,18 @@ export async function updatePrivyTokenConfig(
     if (updates.buy_percent !== undefined) prismaUpdates.buyPercent = updates.buy_percent
     if (updates.sell_percent !== undefined) prismaUpdates.sellPercent = updates.sell_percent
 
+    // Algorithm mode
+    if (updates.algorithm_mode !== undefined) prismaUpdates.algorithmMode = updates.algorithm_mode
+
+    // Turbo mode configuration fields
+    if (updates.turbo_job_interval_seconds !== undefined) prismaUpdates.turboJobIntervalSeconds = updates.turbo_job_interval_seconds
+    if (updates.turbo_cycle_size_buys !== undefined) prismaUpdates.turboCycleSizeBuys = updates.turbo_cycle_size_buys
+    if (updates.turbo_cycle_size_sells !== undefined) prismaUpdates.turboCycleSizeSells = updates.turbo_cycle_size_sells
+    if (updates.turbo_inter_token_delay_ms !== undefined) prismaUpdates.turboInterTokenDelayMs = updates.turbo_inter_token_delay_ms
+    if (updates.turbo_global_rate_limit !== undefined) prismaUpdates.turboGlobalRateLimit = updates.turbo_global_rate_limit
+    if (updates.turbo_confirmation_timeout !== undefined) prismaUpdates.turboConfirmationTimeout = updates.turbo_confirmation_timeout
+    if (updates.turbo_batch_state_updates !== undefined) prismaUpdates.turboBatchStateUpdates = updates.turbo_batch_state_updates
+
     const config = await prisma.privyTokenConfig.update({
       where: { privyTokenId },
       data: prismaUpdates,
@@ -414,6 +450,18 @@ export async function updatePrivyTokenConfig(
       updated_at: config.updatedAt.toISOString(),
       buy_percent: config.buyPercent ?? 20,
       sell_percent: config.sellPercent ?? 20,
+
+      // Algorithm mode
+      algorithm_mode: config.algorithmMode as any,
+
+      // Turbo mode configuration fields
+      turbo_job_interval_seconds: config.turboJobIntervalSeconds ?? undefined,
+      turbo_cycle_size_buys: config.turboCycleSizeBuys ?? undefined,
+      turbo_cycle_size_sells: config.turboCycleSizeSells ?? undefined,
+      turbo_inter_token_delay_ms: config.turboInterTokenDelayMs ?? undefined,
+      turbo_global_rate_limit: config.turboGlobalRateLimit ?? undefined,
+      turbo_confirmation_timeout: config.turboConfirmationTimeout ?? undefined,
+      turbo_batch_state_updates: config.turboBatchStateUpdates ?? undefined,
     }
   } catch (error) {
     loggers.user.error({ error: String(error), privyTokenId }, 'Failed to update Privy token config')

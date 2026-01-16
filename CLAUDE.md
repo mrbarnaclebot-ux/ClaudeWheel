@@ -129,6 +129,454 @@ npm run lint         # Run Next.js linting
 
 Jobs can be enabled/disabled via environment variables and manually triggered for testing.
 
+## Adding New MM Modes
+
+This section provides a comprehensive guide for implementing new market-making algorithm modes. Following this checklist prevents common errors and ensures complete integration across all system components.
+
+### Overview of MM Algorithm Modes
+
+Market-making (MM) algorithm modes control how the flywheel executes buy/sell cycles for tokens:
+- **simple**: Default mode - 5 buys followed by 5 sells in sequence
+- **turbo_lite**: High-frequency mode - 8 buys + 8 sells with configurable intervals and rate limits
+- **rebalance**: Balance-focused mode for maintaining token/SOL ratios
+- Additional modes: twap_vwap, dynamic (for specific use cases)
+
+Algorithm modes are stored in `PrivyTokenConfig.algorithm_mode` and executed by the flywheel service (`backend/src/services/multi-user-mm.service.ts`).
+
+### Implementation Checklist
+
+**Backend Changes:**
+- [ ] Update Zod validation schemas (3 endpoints: MM-only, launches, token config)
+- [ ] Add config field defaults to deposit monitor (2 functions: `activateMmToken()`, `handleSuccessfulLaunch()`)
+- [ ] Implement algorithm logic in flywheel service
+- [ ] Update Prisma schema if new fields needed
+- [ ] Add database migration if schema changed
+
+**Frontend Changes:**
+- [ ] Update TypeScript interfaces (3 files: mm/page, token/[id]/page, token/[id]/settings/page)
+- [ ] Add UI option to algorithm selectors
+- [ ] Update algorithm display helper functions
+- [ ] Add configuration panel if mode has settings
+- [ ] Update cycle size helper if different from simple mode
+
+**Testing:**
+- [ ] Backend compilation and startup
+- [ ] API endpoint validation (all 3 endpoints)
+- [ ] Frontend UI integration
+- [ ] End-to-end activation flow
+- [ ] Database state verification
+
+### Step-by-Step Guide
+
+#### Step 1: Backend Validation Schemas
+
+Update all three API endpoints that accept MM algorithm modes:
+
+**File**: [backend/src/routes/privy-mm.routes.ts](backend/src/routes/privy-mm.routes.ts#L75) (line ~75)
+```typescript
+const startMmSchema = z.object({
+  tokenMint: z.string().min(32).max(64),
+  mmAlgorithm: z.enum(['simple', 'turbo_lite', 'YOUR_NEW_MODE', 'rebalance']).default('simple'),
+})
+```
+
+**File**: [backend/src/routes/privy-launches.routes.ts](backend/src/routes/privy-launches.routes.ts#L196) (line ~196)
+```typescript
+mmAlgorithm: z.enum(['simple', 'turbo_lite', 'YOUR_NEW_MODE', 'rebalance']).default('simple'),
+```
+
+**File**: [backend/src/routes/privy-tokens.routes.ts](backend/src/routes/privy-tokens.routes.ts#L597) (line ~597)
+```typescript
+algorithmMode: z.enum(['simple', 'turbo_lite', 'YOUR_NEW_MODE', 'rebalance', 'twap_vwap', 'dynamic']).optional(),
+```
+
+#### Step 2: Deposit Monitor Config Creation
+
+**CRITICAL**: The deposit monitor has TWO functions that create token configs. Both must be updated!
+
+**File**: [backend/src/jobs/deposit-monitor.job.ts](backend/src/jobs/deposit-monitor.job.ts#L719-L744)
+
+**Function 1**: `activateMmToken()` (line ~719-744)
+```typescript
+const algorithmMode = pending.mmAlgorithm || 'simple'
+const configData: any = {
+  privyTokenId: token.id,
+  flywheelActive: true,
+  autoClaimEnabled: false,  // MM-only users can't claim fees
+  algorithmMode,
+  minBuyAmountSol: 0.01,
+  maxBuyAmountSol: 0.05,
+  slippageBps: 300,
+  tradingRoute: 'auto',
+}
+
+// Add mode-specific defaults
+if (algorithmMode === 'YOUR_NEW_MODE') {
+  configData.yourConfigField1 = defaultValue1
+  configData.yourConfigField2 = defaultValue2
+  // ... add all mode-specific fields
+}
+
+await tx.privyTokenConfig.create({ data: configData })
+```
+
+**Function 2**: `handleSuccessfulLaunch()` (line ~323-348)
+```typescript
+const launchAlgorithmMode = launch.mmAlgorithm || 'simple'
+const launchConfigData: any = {
+  privyTokenId: userToken.id,
+  flywheelActive: true,
+  autoClaimEnabled: launch.mmAutoClaimEnabled ?? true,
+  algorithmMode: launchAlgorithmMode,
+  minBuyAmountSol: Number(launch.mmMinBuySol) || 0.01,
+  maxBuyAmountSol: Number(launch.mmMaxBuySol) || 0.05,
+  slippageBps: 300,
+  tradingRoute: 'auto',
+}
+
+// Add mode-specific defaults
+if (launchAlgorithmMode === 'YOUR_NEW_MODE') {
+  launchConfigData.yourConfigField1 = defaultValue1
+  launchConfigData.yourConfigField2 = defaultValue2
+  // ... add all mode-specific fields
+}
+
+await prisma.privyTokenConfig.create({ data: launchConfigData })
+```
+
+#### Step 3: Prisma Schema (if new fields needed)
+
+**File**: [backend/prisma/schema.prisma](backend/prisma/schema.prisma#L158) (add to PrivyTokenConfig model around line 158)
+```prisma
+model PrivyTokenConfig {
+  // ... existing fields ...
+
+  // Your new mode configuration
+  yourConfigField1  Int?     @default(value1) @map("your_config_field_1")
+  yourConfigField2  String?  @default("value2") @map("your_config_field_2")
+  // ... add all mode-specific fields with snake_case mapping
+}
+```
+
+Then run:
+```bash
+cd backend
+npm run db:generate  # Generate Prisma client
+npm run db:migrate   # Create and apply migration
+```
+
+#### Step 4: Flywheel Service Implementation
+
+**File**: [backend/src/services/multi-user-mm.service.ts](backend/src/services/multi-user-mm.service.ts#L422)
+
+Add algorithm case to switch statement (around line 422):
+```typescript
+switch (algorithmMode) {
+  case 'simple':
+    return await this.runSimpleAlgorithm(...)
+  case 'turbo_lite':
+    return await this.runTurboLiteAlgorithm(...)
+  case 'YOUR_NEW_MODE':
+    return await this.runYourNewModeAlgorithm(...)
+  default:
+    return await this.runSimpleAlgorithm(...)
+}
+```
+
+Implement your algorithm function:
+```typescript
+private async runYourNewModeAlgorithm(
+  token: PrivyUserTokenWithRelations,
+  config: PrivyTokenConfig,
+  state: PrivyFlywheelState
+): Promise<void> {
+  // Your algorithm implementation
+  // Access config fields: config.your_config_field_1
+  // Update state as needed
+}
+```
+
+#### Step 5: Frontend TypeScript Interfaces
+
+Update algorithm mode types in all relevant files:
+
+Files to update:
+- [tma/src/app/mm/page.tsx](tma/src/app/mm/page.tsx#L14) (line ~14)
+- [tma/src/app/token/[id]/page.tsx](tma/src/app/token/[id]/page.tsx)
+- [tma/src/app/token/[id]/settings/page.tsx](tma/src/app/token/[id]/settings/page.tsx)
+
+```typescript
+type AlgorithmMode = 'simple' | 'turbo_lite' | 'YOUR_NEW_MODE' | 'rebalance'
+```
+
+#### Step 6: Frontend UI - Algorithm Selector
+
+Add your mode to the algorithm selection UI:
+
+**File**: [tma/src/app/mm/page.tsx](tma/src/app/mm/page.tsx#L284-L290) (around line 284-290)
+```tsx
+<div className="grid grid-cols-3 gap-3">  {/* Adjust cols if needed */}
+  {/* Simple mode */}
+  <button ...>⚡ Simple</button>
+
+  {/* Turbo mode */}
+  <button ...>🚀 Turbo</button>
+
+  {/* Your new mode */}
+  <button
+    onClick={() => setFormData({ ...formData, mmAlgorithm: 'YOUR_NEW_MODE' })}
+    className={formData.mmAlgorithm === 'YOUR_NEW_MODE' ? 'border-blue-500' : ''}
+  >
+    <div className="text-2xl mb-2">🎯</div>  {/* Choose appropriate emoji */}
+    <div className="font-semibold">Your Mode</div>
+    <div className="text-xs text-muted-foreground">
+      Description of your mode
+    </div>
+  </button>
+
+  {/* Rebalance mode */}
+  <button ...>⚖️ Rebalance</button>
+</div>
+```
+
+#### Step 7: Frontend Display Helpers
+
+Add display logic for your mode:
+
+**File**: [tma/src/app/token/[id]/page.tsx](tma/src/app/token/[id]/page.tsx) (create helper function)
+```typescript
+const getAlgorithmDisplay = (mode: string | null): string => {
+  switch (mode) {
+    case 'simple': return '⚡ Simple'
+    case 'turbo_lite': return '🚀 Turbo Lite'
+    case 'YOUR_NEW_MODE': return '🎯 Your Mode Name'
+    case 'rebalance': return '⚖️ Rebalance'
+    default: return '⚡ Simple'
+  }
+}
+```
+
+If your mode has different cycle sizes:
+```typescript
+const getCycleSize = (mode: string | null): number => {
+  if (mode === 'turbo_lite') return 8
+  if (mode === 'YOUR_NEW_MODE') return YOUR_CYCLE_SIZE
+  return 5  // default for simple mode
+}
+```
+
+#### Step 8: Settings Page Configuration UI
+
+If your mode has configurable parameters, add a configuration panel:
+
+**File**: [tma/src/app/token/[id]/settings/page.tsx](tma/src/app/token/[id]/settings/page.tsx)
+```tsx
+{config.algorithm_mode === 'YOUR_NEW_MODE' && (
+  <Card>
+    <CardHeader>
+      <CardTitle>🎯 Your Mode Configuration</CardTitle>
+    </CardHeader>
+    <CardContent className="space-y-4">
+      <div>
+        <Label>Your Config Field 1</Label>
+        <Input
+          type="number"
+          value={config.your_config_field_1}
+          onChange={(e) => handleUpdate('your_config_field_1', parseInt(e.target.value))}
+        />
+        <p className="text-xs text-muted-foreground">
+          Description of what this field does
+        </p>
+      </div>
+
+      {/* Add more config fields as needed */}
+    </CardContent>
+  </Card>
+)}
+```
+
+### Common Pitfalls
+
+**Pitfall 1: Validation Schemas Diverging**
+- **Problem**: Three separate API endpoints validate algorithm modes independently
+- **Solution**: Update all three schemas in a single commit to ensure consistency
+- **Files**: [privy-mm.routes.ts](backend/src/routes/privy-mm.routes.ts), [privy-launches.routes.ts](backend/src/routes/privy-launches.routes.ts), [privy-tokens.routes.ts](backend/src/routes/privy-tokens.routes.ts)
+
+**Pitfall 2: Missing Config Fields in Deposit Monitor**
+- **Problem**: Deposit monitor has TWO functions that create token configs, easy to miss one
+- **Solution**: Update both `activateMmToken()` AND `handleSuccessfulLaunch()` functions
+- **Result**: Without this, MM-only tokens fail to activate with error "⚠️ Failed to activate MM"
+
+**Pitfall 3: Forgetting Default Values**
+- **Problem**: If mode-specific fields are undefined, algorithm execution crashes
+- **Solution**: Always provide default values in both Prisma schema and deposit monitor
+- **Example**: Turbo mode needs 7 config fields with specific defaults
+
+**Pitfall 4: TypeScript Type Mismatches**
+- **Problem**: Frontend types don't match backend enum, causing silent failures
+- **Solution**: Update TypeScript interfaces in all 3 TMA pages simultaneously
+- **Files**: [mm/page.tsx](tma/src/app/mm/page.tsx), [token/[id]/page.tsx](tma/src/app/token/[id]/page.tsx), [token/[id]/settings/page.tsx](tma/src/app/token/[id]/settings/page.tsx)
+
+**Pitfall 5: UI Display Not Updated**
+- **Problem**: New mode works but shows as "Simple" in UI or shows wrong cycle counts
+- **Solution**: Update both `getAlgorithmDisplay()` and `getCycleSize()` helper functions
+- **Impact**: User sees incorrect status indicators and cycle progress
+
+**Pitfall 6: Database Schema Not Migrated**
+- **Problem**: New config fields exist in Prisma schema but not in database
+- **Solution**: Always run `npm run db:migrate` after schema changes, not just `db:push`
+- **Result**: Production deployments fail without proper migrations
+
+### Testing Requirements
+
+**Phase 1: Backend Validation**
+```bash
+cd backend
+
+# Compile TypeScript
+npm run build
+# Expected: No compilation errors
+
+# Start server
+npm run dev
+# Expected: Server starts on port 3001 without errors
+```
+
+**Phase 2: API Endpoint Testing**
+
+Test all three endpoints accept your new mode:
+
+```bash
+# Test 1: MM-only token creation
+curl -X POST http://localhost:3001/api/privy/mm/start \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"tokenMint": "VALID_MINT", "mmAlgorithm": "YOUR_NEW_MODE"}'
+# Expected: 200 OK with pending MM data
+
+# Test 2: Token launch
+curl -X POST http://localhost:3001/api/privy/launches \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Test",
+    "symbol": "TEST",
+    "description": "Test",
+    "mmAlgorithm": "YOUR_NEW_MODE"
+  }'
+# Expected: 200 OK with launch data
+
+# Test 3: Token config update
+curl -X PUT http://localhost:3001/api/privy/tokens/TOKEN_ID/config \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"algorithmMode": "YOUR_NEW_MODE"}'
+# Expected: 200 OK with updated config
+
+# Test 4: Invalid mode (negative test)
+curl -X POST http://localhost:3001/api/privy/mm/start \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"tokenMint": "VALID_MINT", "mmAlgorithm": "invalid_mode"}'
+# Expected: 400 Bad Request with validation error
+```
+
+**Phase 3: Frontend Integration**
+
+```bash
+cd tma
+npm run dev
+```
+
+1. Navigate to `/mm` page
+2. Verify your mode appears in algorithm selector with correct emoji and description
+3. Select your mode and create MM-only token
+4. Verify review screen shows correct `mmAlgorithm` value
+5. Click "Start MM" - should succeed (not "invalid request" error)
+
+**Phase 4: End-to-End Activation**
+
+1. **Deposit SOL** to activate MM-only token (0.1 SOL minimum)
+2. **Wait 30 seconds** for deposit monitor to detect
+3. **Verify token activates** and appears in dashboard
+4. **Check algorithm badge** shows your mode with correct emoji
+5. **Verify cycle counts** if your mode has different cycle size
+6. **Check settings page** shows your mode selected
+7. **Verify config panel** appears if your mode has settings
+
+**Phase 5: Database Verification**
+
+```bash
+cd backend
+npm run db:studio
+```
+
+Navigate to `PrivyTokenConfig` table and verify:
+- `algorithm_mode` = 'YOUR_NEW_MODE'
+- All mode-specific config fields have correct default values
+- No null values where defaults should exist
+
+**Phase 6: Flywheel Execution**
+
+```bash
+cd backend
+tail -f logs/combined.log | grep -i "your mode"
+```
+
+Expected output (adjust based on your algorithm):
+```
+🎯 [Your Mode] Starting cycle for token [MINT]
+🎯 [Your Mode] Executing operation 1/N
+🎯 [Your Mode] Executing operation 2/N
+...
+```
+
+**Phase 7: Regression Testing**
+
+Ensure existing modes still work:
+- Create MM-only token with 'simple' mode - should work
+- Create MM-only token with 'turbo_lite' mode - should work
+- Update existing token config to different mode - should work
+- Invalid algorithm values properly rejected with 400 error
+
+### Success Criteria
+
+Your new MM mode is fully implemented when:
+
+- ✅ Backend compiles without TypeScript errors
+- ✅ All three API endpoints accept your mode in validation
+- ✅ Deposit monitor creates mode-specific config fields
+- ✅ Token launches create mode-specific config fields
+- ✅ Prisma schema includes new fields with migrations
+- ✅ Flywheel service has algorithm implementation
+- ✅ Frontend UI shows your mode in all selectors
+- ✅ Algorithm display helper returns correct name/emoji
+- ✅ Cycle size helper returns correct value (if applicable)
+- ✅ Settings page shows mode-specific configuration (if applicable)
+- ✅ Creating MM-only token with your mode succeeds
+- ✅ Activating token with your mode succeeds
+- ✅ Flywheel executes your algorithm correctly
+- ✅ Backend logs show your mode's execution
+- ✅ Database stores correct algorithm_mode and config values
+- ✅ Existing modes continue to work (no regressions)
+
+### Reference Implementation: Turbo Mode
+
+For a complete reference implementation, see the turbo_lite mode:
+
+**Backend:**
+- Validation: [privy-mm.routes.ts:75](backend/src/routes/privy-mm.routes.ts#L75), [privy-launches.routes.ts:196](backend/src/routes/privy-launches.routes.ts#L196), [privy-tokens.routes.ts:597](backend/src/routes/privy-tokens.routes.ts#L597)
+- Config defaults: [deposit-monitor.job.ts:719-744](backend/src/jobs/deposit-monitor.job.ts#L719-L744) and [deposit-monitor.job.ts:323-348](backend/src/jobs/deposit-monitor.job.ts#L323-L348)
+- Schema: [prisma/schema.prisma:158-164](backend/prisma/schema.prisma#L158-L164) (7 config fields)
+- Algorithm: [multi-user-mm.service.ts:586](backend/src/services/multi-user-mm.service.ts#L586) (`runTurboLiteAlgorithm`)
+
+**Frontend:**
+- Types: [mm/page.tsx:14](tma/src/app/mm/page.tsx#L14), [token/[id]/page.tsx](tma/src/app/token/[id]/page.tsx), [token/[id]/settings/page.tsx](tma/src/app/token/[id]/settings/page.tsx)
+- Selector: [mm/page.tsx:286-287](tma/src/app/mm/page.tsx#L286-L287) (🚀 emoji, "8 buys, 8 sells" description)
+- Display: [token/[id]/page.tsx](tma/src/app/token/[id]/page.tsx) (`getAlgorithmDisplay` returns '🚀 Turbo Lite')
+- Cycle size: [token/[id]/page.tsx](tma/src/app/token/[id]/page.tsx) (`getCycleSize` returns 8)
+- Config panel: [token/[id]/settings/page.tsx](tma/src/app/token/[id]/settings/page.tsx) (turbo configuration card)
+
 ## Key Architecture Patterns
 
 ### Dual Database Strategy
