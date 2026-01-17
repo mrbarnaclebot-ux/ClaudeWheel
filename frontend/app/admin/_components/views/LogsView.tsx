@@ -9,6 +9,14 @@ import { fetchAuditLogs } from '../../_lib/adminApi'
 import { useRealtimeLogs } from '../../_hooks/useWebSocket'
 import { StatusBadge, ConnectionBadge } from '../shared/StatusBadge'
 import { TableSkeleton } from '../shared/LoadingSkeleton'
+import {
+  Icon,
+  RotateCw,
+  MessageCircle,
+  Settings,
+  Receipt,
+  type LucideIcon,
+} from '../shared/Icons'
 
 type LogType = 'flywheel' | 'telegram' | 'system'
 type LogLevel = 'all' | 'info' | 'warn' | 'error' | 'debug'
@@ -21,6 +29,12 @@ interface FormattedLogEntry {
   source: string
   details?: unknown
 }
+
+const tabConfig: { key: LogType; label: string; icon: LucideIcon }[] = [
+  { key: 'flywheel', label: 'Flywheel', icon: RotateCw },
+  { key: 'telegram', label: 'Telegram', icon: MessageCircle },
+  { key: 'system', label: 'System', icon: Settings },
+]
 
 export function LogsView() {
   const { isAuthenticated, getToken } = useAdminAuth()
@@ -147,6 +161,17 @@ export function LogsView() {
     })
   }
 
+  const getEmptyStateIcon = (): LucideIcon => {
+    const config = tabConfig.find((t) => t.key === activeTab)
+    return config?.icon || Receipt
+  }
+
+  const getLogCount = (type: LogType): number => {
+    if (type === 'flywheel') return flywheelLogs.length
+    if (type === 'telegram') return telegramLogs.length
+    return historicalLogs?.logs?.length || 0
+  }
+
   return (
     <div className="p-6 h-[calc(100vh-4rem)] flex flex-col">
       {/* Header */}
@@ -206,31 +231,30 @@ export function LogsView() {
 
       {/* Tabs */}
       <div className="flex gap-1 mb-4 bg-bg-secondary p-1 rounded-lg w-fit">
-        {[
-          { key: 'flywheel', label: 'Flywheel', icon: '🎡', count: flywheelLogs.length },
-          { key: 'telegram', label: 'Telegram', icon: '📱', count: telegramLogs.length },
-          { key: 'system', label: 'System', icon: '⚙️', count: historicalLogs?.logs?.length || 0 },
-        ].map((tab) => (
-          <button
-            key={tab.key}
-            onClick={() => setActiveTab(tab.key as LogType)}
-            className={`
-              flex items-center gap-2 px-4 py-2 text-sm rounded-lg transition-colors
-              ${activeTab === tab.key
-                ? 'bg-bg-card text-text-primary shadow-sm'
-                : 'text-text-muted hover:text-text-primary'
-              }
-            `}
-          >
-            <span>{tab.icon}</span>
-            <span>{tab.label}</span>
-            {tab.count > 0 && (
-              <span className="ml-1 px-1.5 py-0.5 text-xs bg-accent-primary/20 text-accent-primary rounded">
-                {tab.count}
-              </span>
-            )}
-          </button>
-        ))}
+        {tabConfig.map((tab) => {
+          const count = getLogCount(tab.key)
+          return (
+            <button
+              key={tab.key}
+              onClick={() => setActiveTab(tab.key)}
+              className={`
+                flex items-center gap-2 px-4 py-2 text-sm rounded-lg transition-colors
+                ${activeTab === tab.key
+                  ? 'bg-bg-card text-text-primary shadow-sm'
+                  : 'text-text-muted hover:text-text-primary'
+                }
+              `}
+            >
+              <Icon icon={tab.icon} size="sm" color={activeTab === tab.key ? 'accent' : 'muted'} />
+              <span>{tab.label}</span>
+              {count > 0 && (
+                <span className="ml-1 px-1.5 py-0.5 text-xs bg-accent-primary/20 text-accent-primary rounded">
+                  {count}
+                </span>
+              )}
+            </button>
+          )
+        })}
       </div>
 
       {/* Log Container */}
@@ -242,8 +266,8 @@ export function LogsView() {
           <TableSkeleton rows={10} />
         ) : displayLogs.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-text-muted">
-            <div className="text-4xl mb-4">
-              {activeTab === 'flywheel' ? '🎡' : activeTab === 'telegram' ? '📱' : '📋'}
+            <div className="mb-4">
+              <Icon icon={getEmptyStateIcon()} size="xl" color="muted" />
             </div>
             <p className="text-lg mb-2">No logs yet</p>
             <p className="text-sm">

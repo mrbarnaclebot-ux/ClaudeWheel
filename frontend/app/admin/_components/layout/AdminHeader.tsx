@@ -5,6 +5,7 @@ import { motion } from 'framer-motion'
 import { usePrivy } from '@privy-io/react-auth'
 import { useAdminAuth, useAdminUI, useAdminRefresh } from '../../_stores/adminStore'
 import { StatusBadge, ConnectionBadge } from '../shared/StatusBadge'
+import { Icon, RefreshCw } from '../shared/Icons'
 
 export function AdminHeader() {
   const { user } = usePrivy()
@@ -75,8 +76,9 @@ export function AdminHeader() {
             <motion.span
               animate={autoRefresh ? { rotate: 360 } : { rotate: 0 }}
               transition={autoRefresh ? { duration: 2, repeat: Infinity, ease: 'linear' } : {}}
+              className="flex items-center justify-center"
             >
-              🔄
+              <Icon icon={RefreshCw} size="sm" color="inherit" />
             </motion.span>
             <span className="text-xs font-mono">
               {autoRefresh ? `${refreshInterval}s` : 'Paused'}

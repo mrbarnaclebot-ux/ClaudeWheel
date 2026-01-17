@@ -12,6 +12,15 @@ import {
   enableMaintenanceMode,
   disableMaintenanceMode,
 } from '../../_lib/adminApi'
+import {
+  Icon,
+  Octagon,
+  CheckCircle,
+  Link,
+  Wrench,
+  Play,
+  type LucideIcon,
+} from '../shared/Icons'
 
 interface ActionResult {
   type: 'success' | 'error'
@@ -131,44 +140,51 @@ export function QuickActions() {
     },
   })
 
-  const actions = [
+  const actions: {
+    id: string
+    label: string
+    icon: LucideIcon
+    variant: 'error' | 'success' | 'warning'
+    description: string
+    needsReason: boolean
+  }[] = [
     {
       id: 'suspend',
       label: 'Emergency Suspend All',
-      icon: '🛑',
-      variant: 'error' as const,
+      icon: Octagon,
+      variant: 'error',
       description: 'Suspend all tokens except platform token',
       needsReason: true,
     },
     {
       id: 'unsuspend',
       label: 'Unsuspend All',
-      icon: '✅',
-      variant: 'success' as const,
+      icon: CheckCircle,
+      variant: 'success',
       description: 'Reactivate all suspended tokens',
       needsReason: false,
     },
     {
       id: 'migrate',
       label: 'Migrate Orphaned',
-      icon: '🔗',
-      variant: 'warning' as const,
+      icon: Link,
+      variant: 'warning',
       description: 'Link orphaned launches to tokens',
       needsReason: false,
     },
     {
       id: 'maintenance-on',
       label: 'Enable Maintenance',
-      icon: '🔧',
-      variant: 'warning' as const,
+      icon: Wrench,
+      variant: 'warning',
       description: 'Enable bot maintenance mode',
       needsReason: true,
     },
     {
       id: 'maintenance-off',
       label: 'Disable Maintenance',
-      icon: '🟢',
-      variant: 'success' as const,
+      icon: Play,
+      variant: 'success',
       description: 'Resume normal operations',
       needsReason: false,
     },
@@ -181,6 +197,10 @@ export function QuickActions() {
       warning: 'bg-warning/20 text-warning border-warning/30 hover:bg-warning/30',
     }
     return variants[variant as keyof typeof variants] || variants.warning
+  }
+
+  const getIconColor = (variant: string): 'error' | 'success' | 'warning' => {
+    return variant as 'error' | 'success' | 'warning'
   }
 
   const handleConfirm = () => {
@@ -228,7 +248,7 @@ export function QuickActions() {
               disabled:opacity-50 disabled:cursor-not-allowed
             `}
           >
-            <span className="text-lg">{action.icon}</span>
+            <Icon icon={action.icon} size="lg" color={getIconColor(action.variant)} />
             <div className="text-left">
               <div className="text-sm font-medium">{action.label}</div>
               <div className="text-xs opacity-70">{action.description}</div>

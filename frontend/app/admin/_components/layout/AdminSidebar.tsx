@@ -4,11 +4,21 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { useAdminUI, useAdminRefresh } from '../../_stores/adminStore'
 import type { AdminTab } from '../../_types/admin.types'
 import { ConnectionBadge } from '../shared/StatusBadge'
+import {
+  Icon,
+  Cog,
+  Receipt,
+  Search,
+  Settings,
+  ChevronLeft,
+  RotateCw,
+  type LucideIcon,
+} from '../shared/Icons'
 
 interface NavItem {
   id: AdminTab
   label: string
-  icon: string
+  icon: LucideIcon
   description: string
 }
 
@@ -16,25 +26,25 @@ const navItems: NavItem[] = [
   {
     id: 'dashboard',
     label: 'Dashboard',
-    icon: '🎡',
+    icon: RotateCw,
     description: 'WHEEL status & metrics',
   },
   {
     id: 'transactions',
     label: 'Transactions',
-    icon: '📜',
+    icon: Receipt,
     description: 'Trade history',
   },
   {
     id: 'logs',
     label: 'Logs',
-    icon: '🔍',
+    icon: Search,
     description: 'System logs',
   },
   {
     id: 'settings',
     label: 'Settings',
-    icon: '⚙️',
+    icon: Settings,
     description: 'Configuration',
   },
 ]
@@ -60,7 +70,7 @@ export function AdminSidebar() {
               exit={{ opacity: 0 }}
               className="flex items-center gap-2"
             >
-              <span className="text-2xl">🎡</span>
+              <Icon icon={RotateCw} size="lg" color="accent" className="animate-[spin_3s_linear_infinite]" />
               <span className="font-bold text-text-primary">Admin</span>
             </motion.div>
           )}
@@ -76,7 +86,7 @@ export function AdminSidebar() {
             transition={{ duration: 0.2 }}
             className="block"
           >
-            ◀
+            <Icon icon={ChevronLeft} size="sm" color="inherit" />
           </motion.span>
         </button>
       </div>
@@ -93,7 +103,7 @@ export function AdminSidebar() {
                   onClick={() => setActiveTab(item.id)}
                   className={`
                     w-full flex items-center gap-3 px-3 py-2.5 rounded-lg
-                    transition-all duration-200 text-left
+                    transition-all duration-200 text-left relative
                     ${isActive
                       ? 'bg-accent-primary/20 text-accent-primary border border-accent-primary/30'
                       : 'text-text-muted hover:bg-bg-card-hover hover:text-text-primary border border-transparent'
@@ -101,7 +111,14 @@ export function AdminSidebar() {
                   `}
                   title={sidebarCollapsed ? item.label : undefined}
                 >
-                  <span className="text-lg shrink-0">{item.icon}</span>
+                  <span className="shrink-0">
+                    <Icon
+                      icon={item.icon}
+                      size="md"
+                      color={isActive ? 'accent' : 'inherit'}
+                      className="transition-colors duration-200"
+                    />
+                  </span>
 
                   <AnimatePresence mode="wait">
                     {!sidebarCollapsed && (

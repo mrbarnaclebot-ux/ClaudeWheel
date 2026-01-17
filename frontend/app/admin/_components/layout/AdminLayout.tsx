@@ -9,6 +9,7 @@ import { useAdminStore, useAdminAuth, useHydrateStore } from '../../_stores/admi
 import { AdminSidebar } from './AdminSidebar'
 import { AdminHeader } from './AdminHeader'
 import { PageSkeleton } from '../shared/LoadingSkeleton'
+import { Icon, RotateCw } from '../shared/Icons'
 
 interface AdminLayoutProps {
   children: ReactNode
@@ -46,7 +47,9 @@ function AdminLayoutContent({ children }: AdminLayoutProps) {
     return (
       <div className="min-h-screen bg-void flex items-center justify-center">
         <div className="bg-bg-card border border-border-subtle rounded-xl p-8 max-w-md text-center">
-          <div className="text-4xl mb-4">🎡</div>
+          <div className="flex justify-center mb-4">
+            <Icon icon={RotateCw} size="xl" color="accent" className="animate-[spin_3s_linear_infinite]" />
+          </div>
           <h1 className="text-xl font-bold text-text-primary mb-2">Admin Dashboard</h1>
           <p className="text-text-muted mb-6">
             Sign in to access the admin panel

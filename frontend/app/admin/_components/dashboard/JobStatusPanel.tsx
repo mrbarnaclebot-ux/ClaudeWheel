@@ -12,12 +12,13 @@ import {
 } from '../../_lib/adminApi'
 import { JobStatusBadge } from '../shared/StatusBadge'
 import { PanelSkeleton } from '../shared/LoadingSkeleton'
+import { Icon, RotateCw, Zap, Wallet, type LucideIcon } from '../shared/Icons'
 import type { JobStatus } from '../../_types/admin.types'
 
 interface JobInfo {
   name: string
   key: string
-  icon: string
+  icon: LucideIcon
   description: string
   trigger: (token: string) => Promise<{ success: boolean; message?: string; error?: string }>
 }
@@ -26,21 +27,21 @@ const jobs: JobInfo[] = [
   {
     name: 'Flywheel',
     key: 'flywheel',
-    icon: '🎡',
+    icon: RotateCw,
     description: 'Multi-user trading cycles',
     trigger: triggerFlywheelCycle,
   },
   {
     name: 'Fast Claim',
     key: 'fastClaim',
-    icon: '⚡',
+    icon: Zap,
     description: 'Fee collection',
     trigger: triggerFastClaim,
   },
   {
     name: 'Balance Update',
     key: 'balanceUpdate',
-    icon: '💰',
+    icon: Wallet,
     description: 'Wallet balance sync',
     trigger: triggerBalanceUpdate,
   },
@@ -114,7 +115,12 @@ export function JobStatusPanel() {
             <div key={job.key} className="px-4 py-3">
               <div className="flex items-center justify-between mb-2">
                 <div className="flex items-center gap-2">
-                  <span className="text-lg">{job.icon}</span>
+                  <Icon
+                    icon={job.icon}
+                    size="lg"
+                    color={status?.running ? 'accent' : 'muted'}
+                    className={status?.running ? 'animate-spin' : ''}
+                  />
                   <div>
                     <div className="text-sm font-medium text-text-primary">{job.name}</div>
                     <div className="text-xs text-text-muted">{job.description}</div>

@@ -9,6 +9,18 @@ import { fetchWheelData, executeWheelSell, type WheelData } from '../../_lib/adm
 import { DataCard, DataCardGrid } from '../shared/DataCard'
 import { StatusBadge, FlywheelPhaseBadge } from '../shared/StatusBadge'
 import { StatsGridSkeleton, PanelSkeleton } from '../shared/LoadingSkeleton'
+import {
+  Icon,
+  RotateCw,
+  CheckCircle,
+  XCircle,
+  Wallet,
+  TrendingUp,
+  BarChart3,
+  Activity,
+  Users,
+  ExternalLink,
+} from '../shared/Icons'
 
 export function WheelView() {
   const { isAuthenticated, getToken } = useAdminAuth()
@@ -65,7 +77,9 @@ export function WheelView() {
     return (
       <div className="p-6">
         <div className="bg-bg-card border border-border-subtle rounded-xl p-8 text-center">
-          <div className="text-4xl mb-4">🎡</div>
+          <div className="flex justify-center mb-4">
+            <Icon icon={RotateCw} size="xl" color="muted" />
+          </div>
           <h3 className="text-lg font-semibold text-text-primary mb-2">Platform Token Not Found</h3>
           <p className="text-text-muted">
             The $WHEEL platform token has not been registered yet or could not be loaded.
@@ -80,11 +94,11 @@ export function WheelView() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-4">
-          <div className="w-12 h-12 rounded-full bg-accent-primary/20 flex items-center justify-center text-2xl">
+          <div className="w-12 h-12 rounded-full bg-accent-primary/20 flex items-center justify-center">
             {wheelData.tokenImage ? (
               <img src={wheelData.tokenImage} alt={wheelData.symbol} className="w-12 h-12 rounded-full" />
             ) : (
-              '🎡'
+              <Icon icon={RotateCw} size="lg" color="accent" />
             )}
           </div>
           <div>
@@ -105,9 +119,10 @@ export function WheelView() {
             href={`https://solscan.io/token/${wheelData.tokenMint}`}
             target="_blank"
             rel="noopener noreferrer"
-            className="px-4 py-2 text-sm font-mono bg-accent-primary/20 text-accent-primary border border-accent-primary/30 rounded-lg hover:bg-accent-primary/30 transition-colors"
+            className="flex items-center gap-2 px-4 py-2 text-sm font-mono bg-accent-primary/20 text-accent-primary border border-accent-primary/30 rounded-lg hover:bg-accent-primary/30 transition-colors"
           >
-            View on Solscan
+            <span>View on Solscan</span>
+            <Icon icon={ExternalLink} size="sm" color="inherit" />
           </a>
         </div>
       </div>
@@ -117,27 +132,27 @@ export function WheelView() {
         <DataCard
           title="Status"
           value={wheelData.isActive ? 'Active' : 'Inactive'}
-          icon={<span>{wheelData.isActive ? '✅' : '❌'}</span>}
+          icon={<Icon icon={wheelData.isActive ? CheckCircle : XCircle} size="lg" color={wheelData.isActive ? 'success' : 'error'} />}
           variant={wheelData.isActive ? 'success' : 'error'}
         />
         <DataCard
           title="Flywheel"
           value={wheelData.config?.flywheelActive ? 'Active' : 'Inactive'}
           subtitle={wheelData.config?.algorithmMode || 'N/A'}
-          icon={<span>🎡</span>}
+          icon={<Icon icon={RotateCw} size="lg" color={wheelData.config?.flywheelActive ? 'accent' : 'muted'} className={wheelData.config?.flywheelActive ? 'animate-spin' : ''} />}
           variant={wheelData.config?.flywheelActive ? 'accent' : 'default'}
         />
         <DataCard
           title="Total Fees Collected"
           value={`${wheelData.feeStats.totalCollected.toFixed(4)} SOL`}
-          icon={<span>💰</span>}
+          icon={<Icon icon={Wallet} size="lg" color="success" />}
           variant="success"
         />
         <DataCard
           title="Today's Fees"
           value={`${wheelData.feeStats.todayCollected.toFixed(4)} SOL`}
           subtitle={`${wheelData.feeStats.hourCollected.toFixed(4)} SOL this hour`}
-          icon={<span>📈</span>}
+          icon={<Icon icon={TrendingUp} size="lg" color="muted" />}
           variant="default"
         />
       </DataCardGrid>
@@ -150,7 +165,7 @@ export function WheelView() {
             value={wheelData.marketData.marketCap > 0
               ? `$${(wheelData.marketData.marketCap / 1000).toFixed(1)}K`
               : 'N/A'}
-            icon={<span>📊</span>}
+            icon={<Icon icon={BarChart3} size="lg" color="accent" />}
             variant="accent"
           />
           <DataCard
@@ -158,7 +173,7 @@ export function WheelView() {
             value={wheelData.marketData.volume24h > 0
               ? `$${wheelData.marketData.volume24h.toLocaleString(undefined, { maximumFractionDigits: 0 })}`
               : 'N/A'}
-            icon={<span>📉</span>}
+            icon={<Icon icon={Activity} size="lg" color="muted" />}
             variant="default"
           />
           <DataCard
@@ -167,7 +182,7 @@ export function WheelView() {
               ? 'Graduated'
               : `${(wheelData.marketData.bondingCurveProgress * 100).toFixed(1)}%`}
             subtitle={wheelData.marketData.isGraduated ? 'On Raydium' : 'On Bonding Curve'}
-            icon={<span>{wheelData.marketData.isGraduated ? '🎓' : '📈'}</span>}
+            icon={<Icon icon={wheelData.marketData.isGraduated ? CheckCircle : TrendingUp} size="lg" color={wheelData.marketData.isGraduated ? 'success' : 'warning'} />}
             variant={wheelData.marketData.isGraduated ? 'success' : 'warning'}
           />
           <DataCard
@@ -175,7 +190,7 @@ export function WheelView() {
             value={wheelData.marketData.holders > 0
               ? wheelData.marketData.holders.toLocaleString()
               : 'N/A'}
-            icon={<span>👥</span>}
+            icon={<Icon icon={Users} size="lg" color="muted" />}
             variant="default"
           />
         </DataCardGrid>

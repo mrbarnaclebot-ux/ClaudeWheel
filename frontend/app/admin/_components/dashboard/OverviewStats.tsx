@@ -6,6 +6,17 @@ import { adminQueryKeys } from '../../_lib/queryClient'
 import { fetchPlatformStats, fetchTelegramStats } from '../../_lib/adminApi'
 import { DataCard, DataCardGrid } from '../shared/DataCard'
 import { StatsGridSkeleton } from '../shared/LoadingSkeleton'
+import {
+  Icon,
+  Users,
+  Coins,
+  RotateCw,
+  AlertTriangle,
+  MessageCircle,
+  CheckCircle,
+  Clock,
+  Wallet,
+} from '../shared/Icons'
 
 export function OverviewStats() {
   const { isAuthenticated, getToken } = useAdminAuth()
@@ -54,26 +65,26 @@ export function OverviewStats() {
           <DataCard
             title="Total Users"
             value={platformStats?.users.total ?? 0}
-            icon={<span>👥</span>}
+            icon={<Icon icon={Users} size="lg" color="muted" />}
             variant="default"
           />
           <DataCard
             title="Active Tokens"
             value={platformStats?.tokens.active ?? 0}
             subtitle={`${platformStats?.tokens.total ?? 0} total`}
-            icon={<span>🪙</span>}
+            icon={<Icon icon={Coins} size="lg" color="success" />}
             variant="success"
           />
           <DataCard
             title="Active Flywheels"
             value={platformStats?.tokens.activeFlywheels ?? 0}
-            icon={<span>🎡</span>}
+            icon={<Icon icon={RotateCw} size="lg" color="accent" />}
             variant="accent"
           />
           <DataCard
             title="Suspended"
             value={platformStats?.tokens.suspended ?? 0}
-            icon={<span>⚠️</span>}
+            icon={<Icon icon={AlertTriangle} size="lg" color={platformStats?.tokens.suspended ? 'warning' : 'muted'} />}
             variant={platformStats?.tokens.suspended ? 'warning' : 'default'}
           />
         </DataCardGrid>
@@ -87,27 +98,27 @@ export function OverviewStats() {
             <DataCard
               title="Total Launches"
               value={telegramStats.total}
-              icon={<span>📱</span>}
+              icon={<Icon icon={MessageCircle} size="lg" color="muted" />}
               variant="default"
             />
             <DataCard
               title="Completed"
               value={telegramStats.completed}
               subtitle={`${((telegramStats.successRate || 0) * 100).toFixed(1)}% success`}
-              icon={<span>✅</span>}
+              icon={<Icon icon={CheckCircle} size="lg" color="success" />}
               variant="success"
             />
             <DataCard
               title="Awaiting"
               value={telegramStats.awaitingDeposit}
               subtitle={`${telegramStats.launching} launching`}
-              icon={<span>⏳</span>}
+              icon={<Icon icon={Clock} size="lg" color="warning" />}
               variant="warning"
             />
             <DataCard
               title="Total Deposits"
               value={`${(telegramStats.totalDeposits ?? 0).toFixed(2)} SOL`}
-              icon={<span>💰</span>}
+              icon={<Icon icon={Wallet} size="lg" color="accent" />}
               variant="accent"
             />
           </DataCardGrid>
