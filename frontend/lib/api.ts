@@ -181,7 +181,7 @@ export interface AdminConfig {
   max_buy_amount_sol?: number
   buy_interval_minutes?: number
   slippage_bps?: number
-  algorithm_mode?: 'simple' | 'smart' | 'rebalance'
+  algorithm_mode?: 'simple' | 'turbo_lite' | 'rebalance'
   target_sol_allocation?: number
   target_token_allocation?: number
   rebalance_threshold?: number
