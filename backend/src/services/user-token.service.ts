@@ -56,6 +56,11 @@ export interface UserFlywheelState {
   last_checked_at: string | null
   last_check_result: string | null
   updated_at: string
+  // Turbo Lite Rapid Execution State
+  rapid_buys_completed: number
+  rapid_sells_completed: number
+  tokens_bought_this_cycle: number
+  sol_spent_this_cycle: number
 }
 
 /**
@@ -150,6 +155,11 @@ function mapPrismaTokenToPrivyTokenWithConfig(token: any): PrivyTokenWithConfig 
       last_checked_at: token.flywheelState.lastCheckedAt?.toISOString() || null,
       last_check_result: token.flywheelState.lastCheckResult,
       updated_at: token.flywheelState.updatedAt.toISOString(),
+      // Turbo Lite Rapid Execution State
+      rapid_buys_completed: token.flywheelState.rapidBuysCompleted ?? 0,
+      rapid_sells_completed: token.flywheelState.rapidSellsCompleted ?? 0,
+      tokens_bought_this_cycle: Number(token.flywheelState.tokensBoughtThisCycle ?? 0),
+      sol_spent_this_cycle: Number(token.flywheelState.solSpentThisCycle ?? 0),
     } : undefined,
   }
 }
@@ -305,6 +315,11 @@ export async function getPrivyFlywheelState(privyTokenId: string): Promise<UserF
       last_checked_at: state.lastCheckedAt?.toISOString() || null,
       last_check_result: state.lastCheckResult || null,
       updated_at: state.updatedAt.toISOString(),
+      // Turbo Lite Rapid Execution State
+      rapid_buys_completed: state.rapidBuysCompleted ?? 0,
+      rapid_sells_completed: state.rapidSellsCompleted ?? 0,
+      tokens_bought_this_cycle: Number(state.tokensBoughtThisCycle ?? 0),
+      sol_spent_this_cycle: Number(state.solSpentThisCycle ?? 0),
     }
   } catch (error) {
     loggers.user.error({ error: String(error), privyTokenId }, 'Failed to get Privy flywheel state')
@@ -336,6 +351,11 @@ export async function updatePrivyFlywheelState(
     if (updates.last_failure_at !== undefined) prismaUpdates.lastFailureAt = updates.last_failure_at ? new Date(updates.last_failure_at) : null
     if (updates.paused_until !== undefined) prismaUpdates.pausedUntil = updates.paused_until ? new Date(updates.paused_until) : null
     if (updates.total_failures !== undefined) prismaUpdates.totalFailures = updates.total_failures
+    // Turbo Lite Rapid Execution State
+    if (updates.rapid_buys_completed !== undefined) prismaUpdates.rapidBuysCompleted = updates.rapid_buys_completed
+    if (updates.rapid_sells_completed !== undefined) prismaUpdates.rapidSellsCompleted = updates.rapid_sells_completed
+    if (updates.tokens_bought_this_cycle !== undefined) prismaUpdates.tokensBoughtThisCycle = updates.tokens_bought_this_cycle
+    if (updates.sol_spent_this_cycle !== undefined) prismaUpdates.solSpentThisCycle = updates.sol_spent_this_cycle
 
     await prisma.privyFlywheelState.update({
       where: { privyTokenId },
