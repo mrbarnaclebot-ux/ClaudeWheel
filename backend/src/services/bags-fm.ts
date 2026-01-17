@@ -97,6 +97,10 @@ class BagsFmService {
   private apiKey: string | null = null
   private sdk: BagsSDK | null = null
 
+  // Rate limit tracking
+  private rateLimitRemaining: number = 1000
+  private rateLimitResetTime: Date | null = null
+
   setApiKey(key: string) {
     this.apiKey = key
     this.initSdk()
@@ -138,7 +142,28 @@ class BagsFmService {
       const responseText = await response.text()
 
       if (!response.ok) {
-        loggers.bags.error({ status: response.status, statusText: response.statusText, responseBody: responseText.slice(0, 500) }, 'Bags.fm API error')
+        // Extract rate limit info from 429 responses
+        if (response.status === 429) {
+          try {
+            const errorBody = JSON.parse(responseText)
+            if (errorBody.remaining !== undefined) {
+              this.rateLimitRemaining = errorBody.remaining
+            }
+            if (errorBody.resetTime) {
+              this.rateLimitResetTime = new Date(errorBody.resetTime)
+            }
+            loggers.bags.error({
+              status: 429,
+              remaining: this.rateLimitRemaining,
+              resetTime: this.rateLimitResetTime?.toISOString(),
+              endpoint,
+            }, 'Bags.fm rate limit hit')
+          } catch {
+            loggers.bags.error({ status: 429, endpoint }, 'Bags.fm rate limit hit (no body)')
+          }
+        } else {
+          loggers.bags.error({ status: response.status, statusText: response.statusText, responseBody: responseText.slice(0, 500) }, 'Bags.fm API error')
+        }
         return null
       }
 
@@ -470,6 +495,7 @@ class BagsFmService {
   /**
    * Get a trade quote using the official Bags SDK
    * Note: side is determined by inputMint/outputMint (SOL→token = buy, token→SOL = sell)
+   * Includes exponential backoff retry logic to handle transient 429 errors
    */
   async getTradeQuote(
     inputMint: string,
@@ -491,6 +517,10 @@ class BagsFmService {
       return null
     }
 
+    // Retry configuration (exponential backoff)
+    const retryDelays = [500, 1000, 2000]
+    const maxRetries = 3
+
     loggers.bags.info({
       inputMint,
       outputMint,
@@ -500,40 +530,67 @@ class BagsFmService {
       usingSdk: !!this.sdk,
     }, 'Requesting trade quote from Bags.fm')
 
-    // Use SDK if available (preferred method)
+    // Try SDK with retries if available (preferred method)
     if (this.sdk) {
-      try {
-        const quoteResponse = await this.sdk.trade.getQuote({
-          inputMint: new PublicKey(inputMint),
-          outputMint: new PublicKey(outputMint),
-          amount: amountInt,
-          slippageMode: 'manual',
-          slippageBps,
-        })
+      for (let attempt = 0; attempt < maxRetries; attempt++) {
+        try {
+          const quoteResponse = await this.sdk.trade.getQuote({
+            inputMint: new PublicKey(inputMint),
+            outputMint: new PublicKey(outputMint),
+            amount: amountInt,
+            slippageMode: 'manual',
+            slippageBps,
+          })
 
-        loggers.bags.info({
-          inAmount: quoteResponse.inAmount,
-          outAmount: quoteResponse.outAmount,
-          priceImpactPct: quoteResponse.priceImpactPct,
-        }, 'SDK quote received')
+          loggers.bags.info({
+            inAmount: quoteResponse.inAmount,
+            outAmount: quoteResponse.outAmount,
+            priceImpactPct: quoteResponse.priceImpactPct,
+            attempt: attempt + 1,
+          }, 'SDK quote received')
 
-        return {
-          rawQuoteResponse: quoteResponse as unknown as RawQuoteResponse,
-          inputMint: quoteResponse.inputMint,
-          outputMint: quoteResponse.outputMint,
-          inputAmount: parseInt(quoteResponse.inAmount) || amountInt,
-          outputAmount: parseInt(quoteResponse.outAmount) || 0,
-          priceImpact: parseFloat(quoteResponse.priceImpactPct) || 0,
-          fee: quoteResponse.platformFee?.amount ? parseInt(quoteResponse.platformFee.amount) : 0,
+          return {
+            rawQuoteResponse: quoteResponse as unknown as RawQuoteResponse,
+            inputMint: quoteResponse.inputMint,
+            outputMint: quoteResponse.outputMint,
+            inputAmount: parseInt(quoteResponse.inAmount) || amountInt,
+            outputAmount: parseInt(quoteResponse.outAmount) || 0,
+            priceImpact: parseFloat(quoteResponse.priceImpactPct) || 0,
+            fee: quoteResponse.platformFee?.amount ? parseInt(quoteResponse.platformFee.amount) : 0,
+          }
+        } catch (error: any) {
+          const errorStr = String(error)
+          const is429 = errorStr.includes('429') || errorStr.includes('Rate limit') || errorStr.includes('rate limit') || errorStr.includes('Too Many')
+
+          if (is429 && attempt < maxRetries - 1) {
+            loggers.bags.warn({
+              attempt: attempt + 1,
+              maxRetries,
+              delay: retryDelays[attempt],
+              error: errorStr.slice(0, 200),
+            }, 'SDK quote rate limited, retrying with backoff...')
+            await this.sleep(retryDelays[attempt])
+            continue
+          }
+
+          loggers.bags.error({
+            error: errorStr.slice(0, 300),
+            errorMessage: error.message,
+            attempt: attempt + 1,
+            is429,
+          }, 'SDK quote failed')
+
+          // Exit SDK retry loop, try REST API
+          break
         }
-      } catch (error: any) {
-        loggers.bags.error({ error: String(error), errorMessage: error.message }, 'SDK quote failed')
-        // Fall through to REST API fallback
       }
     }
 
-    // Fallback to REST API
+    // Add delay before REST API fallback to avoid immediate cascade
+    await this.sleep(500)
     loggers.bags.warn('Falling back to REST API for quote')
+
+    // REST API with retries
     const params = new URLSearchParams({
       inputMint,
       outputMint,
@@ -542,19 +599,47 @@ class BagsFmService {
       slippageBps: slippageBps.toString(),
     })
 
-    const data = await this.fetch<any>(`/trade/quote?${params}`)
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      const data = await this.fetch<any>(`/trade/quote?${params}`)
 
-    if (!data) return null
+      if (data?.quote || data?.inAmount) {
+        // Handle both formats: data.quote (wrapped) or data directly (unwrapped)
+        const quoteData = data.quote || data
 
-    return {
-      rawQuoteResponse: data, // Store full response for swap
-      inputMint: data.inputMint || inputMint,
-      outputMint: data.outputMint || outputMint,
-      inputAmount: parseInt(data.inAmount) || amount,
-      outputAmount: parseInt(data.outAmount) || 0,
-      priceImpact: parseFloat(data.priceImpactPct) || 0,
-      fee: data.platformFee?.amount ? parseInt(data.platformFee.amount) : 0,
+        loggers.bags.info({
+          inAmount: quoteData.inAmount,
+          outAmount: quoteData.outAmount,
+          attempt: attempt + 1,
+        }, 'REST API quote received')
+
+        return {
+          rawQuoteResponse: data, // Store full response for swap
+          inputMint: quoteData.inputMint || inputMint,
+          outputMint: quoteData.outputMint || outputMint,
+          inputAmount: parseInt(quoteData.inAmount) || amount,
+          outputAmount: parseInt(quoteData.outAmount) || 0,
+          priceImpact: parseFloat(quoteData.priceImpactPct) || 0,
+          fee: quoteData.platformFee?.amount ? parseInt(quoteData.platformFee.amount) : 0,
+        }
+      }
+
+      // Check if we should retry
+      if (attempt < maxRetries - 1) {
+        loggers.bags.warn({
+          attempt: attempt + 1,
+          maxRetries,
+          delay: retryDelays[attempt],
+        }, 'REST quote failed, retrying with backoff...')
+        await this.sleep(retryDelays[attempt])
+      }
     }
+
+    loggers.bags.error({
+      inputMint,
+      outputMint,
+      amount: amountInt,
+    }, 'All quote attempts failed')
+    return null
   }
 
   /**
@@ -790,6 +875,40 @@ class BagsFmService {
    */
   private sleep(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms))
+  }
+
+  /**
+   * Check if currently rate limited by Bags.fm API
+   */
+  isRateLimited(): boolean {
+    if (this.rateLimitRemaining <= 0 && this.rateLimitResetTime) {
+      return new Date() < this.rateLimitResetTime
+    }
+    return false
+  }
+
+  /**
+   * Get rate limit reset time (for logging)
+   */
+  getRateLimitResetTime(): string | null {
+    return this.rateLimitResetTime?.toISOString() ?? null
+  }
+
+  /**
+   * Wait for rate limit reset if currently limited
+   * Only waits up to 60 seconds to avoid blocking too long
+   */
+  async waitForRateLimitReset(): Promise<void> {
+    if (this.rateLimitResetTime && new Date() < this.rateLimitResetTime) {
+      const waitMs = this.rateLimitResetTime.getTime() - Date.now()
+      if (waitMs > 0 && waitMs < 60000) {
+        loggers.bags.warn({ waitMs }, 'Waiting for rate limit reset')
+        await this.sleep(waitMs)
+        // Reset tracking after wait
+        this.rateLimitRemaining = 1000
+        this.rateLimitResetTime = null
+      }
+    }
   }
 
   /**

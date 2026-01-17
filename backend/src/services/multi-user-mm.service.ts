@@ -758,6 +758,15 @@ class MultiUserMMService {
     }
 
     try {
+      // Check if Bags.fm API is rate limited before starting
+      if (tradingRoute === 'bags' && bagsFmService.isRateLimited()) {
+        loggers.flywheel.warn({
+          tokenSymbol: token.token_symbol,
+          resetTime: bagsFmService.getRateLimitResetTime(),
+        }, '🚀 [Turbo Lite] Bags.fm API rate limited, skipping token')
+        return null
+      }
+
       // Resume from saved state if mid-cycle
       let rapidBuysCompleted = state.rapid_buys_completed ?? 0
       let rapidSellsCompleted = state.rapid_sells_completed ?? 0
@@ -780,6 +789,10 @@ class MultiUserMMService {
       if (rapidBuysCompleted < turboCycleSizeBuys) {
         // Get initial token balance to track purchases
         const initialTokenBalance = await getTokenBalance(opsWalletPubkey, tokenMint)
+
+        // Consecutive failure tracking to prevent infinite loops
+        let consecutiveQuoteFailures = 0
+        const maxConsecutiveQuoteFailures = 3
 
         while (rapidBuysCompleted < turboCycleSizeBuys) {
           // Check SOL balance
@@ -832,10 +845,36 @@ class MultiUserMMService {
           )
 
           if (!quote?.rawQuoteResponse) {
-            loggers.flywheel.warn({ tokenSymbol: token.token_symbol }, '🚀 [Turbo Lite] Quote failed, skipping this buy')
-            await this.sleep(interTradeDelayMs)
+            consecutiveQuoteFailures++
+            loggers.flywheel.warn({
+              tokenSymbol: token.token_symbol,
+              consecutiveFailures: consecutiveQuoteFailures,
+              maxAllowed: maxConsecutiveQuoteFailures,
+            }, '🚀 [Turbo Lite] Quote failed')
+
+            // Break out of loop if too many consecutive failures
+            if (consecutiveQuoteFailures >= maxConsecutiveQuoteFailures) {
+              loggers.flywheel.error({
+                tokenSymbol: token.token_symbol,
+                consecutiveQuoteFailures,
+              }, '🚀 [Turbo Lite] Max consecutive quote failures in buy phase, pausing token')
+              await this.recordFailure(token.id, `Turbo buy: ${consecutiveQuoteFailures} consecutive quote failures`)
+              // Persist state before returning so we can resume later
+              await updatePrivyFlywheelState(token.id, {
+                rapid_buys_completed: rapidBuysCompleted,
+                sol_spent_this_cycle: solSpentThisCycle,
+                last_trade_at: new Date().toISOString(),
+              })
+              break // Exit buy loop - will skip to sell phase or end cycle
+            }
+
+            // Increasing delay based on consecutive failures
+            await this.sleep(interTradeDelayMs * consecutiveQuoteFailures)
             continue // Skip this buy, try next
           }
+
+          // Reset consecutive failures on successful quote
+          consecutiveQuoteFailures = 0
 
           const signature = await this.executeSwapWithPrivySigning(
             connection,
@@ -905,6 +944,10 @@ class MultiUserMMService {
         // Calculate sell amount per trade: tokens_bought / number_of_sells
         const sellAmountPerTrade = tokensBoughtThisCycle / turboCycleSizeSells
 
+        // Consecutive failure tracking to prevent infinite loops
+        let consecutiveQuoteFailures = 0
+        const maxConsecutiveQuoteFailures = 3
+
         loggers.flywheel.info({
           tokenSymbol: token.token_symbol,
           tokensBoughtThisCycle,
@@ -947,10 +990,35 @@ class MultiUserMMService {
           )
 
           if (!quote?.rawQuoteResponse) {
-            loggers.flywheel.warn({ tokenSymbol: token.token_symbol }, '🚀 [Turbo Lite] Quote failed, skipping this sell')
-            await this.sleep(interTradeDelayMs)
+            consecutiveQuoteFailures++
+            loggers.flywheel.warn({
+              tokenSymbol: token.token_symbol,
+              consecutiveFailures: consecutiveQuoteFailures,
+              maxAllowed: maxConsecutiveQuoteFailures,
+            }, '🚀 [Turbo Lite] Quote failed')
+
+            // Break out of loop if too many consecutive failures
+            if (consecutiveQuoteFailures >= maxConsecutiveQuoteFailures) {
+              loggers.flywheel.error({
+                tokenSymbol: token.token_symbol,
+                consecutiveQuoteFailures,
+              }, '🚀 [Turbo Lite] Max consecutive quote failures in sell phase, pausing token')
+              await this.recordFailure(token.id, `Turbo sell: ${consecutiveQuoteFailures} consecutive quote failures`)
+              // Persist state before returning so we can resume later
+              await updatePrivyFlywheelState(token.id, {
+                rapid_sells_completed: rapidSellsCompleted,
+                last_trade_at: new Date().toISOString(),
+              })
+              break // Exit sell loop
+            }
+
+            // Increasing delay based on consecutive failures
+            await this.sleep(interTradeDelayMs * consecutiveQuoteFailures)
             continue // Skip this sell, try next
           }
+
+          // Reset consecutive failures on successful quote
+          consecutiveQuoteFailures = 0
 
           const signature = await this.executeSwapWithPrivySigning(
             connection,
