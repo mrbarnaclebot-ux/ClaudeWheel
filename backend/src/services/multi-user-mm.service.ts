@@ -10,7 +10,7 @@ import bs58 from 'bs58'
 import { prisma, isPrismaConfigured } from '../config/prisma'
 import { getConnection, getBalance, getTokenBalance } from '../config/solana'
 import { bagsFmService } from './bags-fm'
-import { jupiterService } from './jupiter.service'
+// Jupiter service removed - Bags SDK handles graduated token routing internally
 import { loggers } from '../utils/logger'
 import {
   UserTokenConfig,
@@ -249,48 +249,38 @@ class MultiUserMMService {
 
   /**
    * Determine which trading route to use
+   * Note: Bags SDK handles routing internally, including Jupiter for graduated tokens
    */
-  private getTradingRoute(token: PrivyTokenWithConfig, config: UserTokenConfig): 'bags' | 'jupiter' {
-    if (config.trading_route === 'bags') return 'bags'
-    if (config.trading_route === 'jupiter') return 'jupiter'
-    return token.is_graduated ? 'jupiter' : 'bags'
+  private getTradingRoute(_token: PrivyTokenWithConfig, _config: UserTokenConfig): 'bags' {
+    // Bags SDK handles all routing internally, including Jupiter for graduated tokens
+    // The trading_route config is now deprecated - all trades go through Bags SDK
+    return 'bags'
   }
 
   /**
-   * Get trade quote from appropriate exchange
+   * Get trade quote from Bags SDK
+   * Bags SDK automatically routes to Jupiter for graduated tokens
    */
   private async getTradeQuote(
-    route: 'bags' | 'jupiter',
     inputMint: string,
     outputMint: string,
     amount: number,
     side: 'buy' | 'sell',
     slippageBps: number
   ): Promise<{ rawQuoteResponse: unknown; outputAmount: number } | null> {
-    if (route === 'jupiter') {
-      const quote = await jupiterService.getTradeQuote(inputMint, outputMint, amount, slippageBps)
-      if (!quote) return null
-      return { rawQuoteResponse: quote.rawQuoteResponse, outputAmount: quote.outputAmount }
-    } else {
-      const quote = await bagsFmService.getTradeQuote(inputMint, outputMint, amount, side, slippageBps)
-      if (!quote) return null
-      return { rawQuoteResponse: quote.rawQuoteResponse, outputAmount: quote.outputAmount }
-    }
+    const quote = await bagsFmService.getTradeQuote(inputMint, outputMint, amount, side, slippageBps)
+    if (!quote) return null
+    return { rawQuoteResponse: quote.rawQuoteResponse, outputAmount: quote.outputAmount }
   }
 
   /**
-   * Generate swap transaction from appropriate exchange
+   * Generate swap transaction from Bags SDK
    */
   private async generateSwapTx(
-    route: 'bags' | 'jupiter',
     walletAddress: string,
     quoteResponse: unknown
   ): Promise<{ transaction: string; lastValidBlockHeight: number } | null> {
-    if (route === 'jupiter') {
-      return jupiterService.generateSwapTransaction(walletAddress, quoteResponse as any)
-    } else {
-      return bagsFmService.generateSwapTransaction(walletAddress, quoteResponse as any)
-    }
+    return bagsFmService.generateSwapTransaction(walletAddress, quoteResponse as any)
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -449,15 +439,6 @@ class MultiUserMMService {
       return null
     }
 
-    // Determine trading route (auto-detect based on graduation)
-    const tradingRoute = this.getTradingRoute(token, config)
-    loggers.flywheel.debug({
-      tokenSymbol: token.token_symbol,
-      tradingRoute,
-      isGraduated: token.is_graduated,
-      configRoute: config.trading_route,
-    }, 'Using trading route')
-
     // Collect fees from dev wallet to ops wallet
     await this.collectFees(token, connection)
 
@@ -468,21 +449,22 @@ class MultiUserMMService {
     }
 
     // Route to appropriate algorithm based on config
+    // Note: All trading goes through Bags SDK which handles routing internally
     const algorithmMode = config.algorithm_mode ?? 'simple'
 
     switch (algorithmMode) {
       case 'simple':
-        return this.runSimpleAlgorithm(token, config, state, opsWalletAddress, connection, baseResult, tradingRoute)
+        return this.runSimpleAlgorithm(token, config, state, opsWalletAddress, connection, baseResult)
       case 'turbo_lite':
-        return this.runTurboLiteAlgorithm(token, config, state, opsWalletAddress, connection, baseResult, tradingRoute)
+        return this.runTurboLiteAlgorithm(token, config, state, opsWalletAddress, connection, baseResult)
       case 'rebalance':
       case 'twap_vwap':
       case 'dynamic':
         loggers.flywheel.warn({ tokenSymbol: token.token_symbol, algorithm: algorithmMode }, 'Algorithm not implemented, falling back to simple')
-        return this.runSimpleAlgorithm(token, config, state, opsWalletAddress, connection, baseResult, tradingRoute)
+        return this.runSimpleAlgorithm(token, config, state, opsWalletAddress, connection, baseResult)
       default:
         loggers.flywheel.error({ tokenSymbol: token.token_symbol, algorithm: algorithmMode }, 'Unknown algorithm mode')
-        return this.runSimpleAlgorithm(token, config, state, opsWalletAddress, connection, baseResult, tradingRoute)
+        return this.runSimpleAlgorithm(token, config, state, opsWalletAddress, connection, baseResult)
     }
   }
 
@@ -553,6 +535,7 @@ class MultiUserMMService {
 
   /**
    * Simple algorithm: 5 buys then 5 sells using percentage of current balance
+   * All trading goes through Bags SDK which handles routing internally
    */
   private async runSimpleAlgorithm(
     token: PrivyTokenWithConfig,
@@ -560,8 +543,7 @@ class MultiUserMMService {
     state: UserFlywheelState,
     opsWalletAddress: string,
     connection: Connection,
-    baseResult: { userTokenId: string; tokenMint: string; tokenSymbol: string },
-    tradingRoute: 'bags' | 'jupiter' = 'bags'
+    baseResult: { userTokenId: string; tokenMint: string; tokenSymbol: string }
   ): Promise<TradeResult | null> {
     const tokenMint = new PublicKey(token.token_mint_address)
     const opsWalletPubkey = new PublicKey(opsWalletAddress)
@@ -595,12 +577,10 @@ class MultiUserMMService {
         solBalance,
         buyCount: state.buy_count,
         maxBuys: BUYS_PER_CYCLE,
-        route: tradingRoute,
       }, 'Executing BUY')
 
-      // Get quote
+      // Get quote from Bags SDK (handles routing internally)
       const quote = await this.getTradeQuote(
-        tradingRoute,
         SOL_MINT,
         token.token_mint_address,
         lamports,
@@ -610,19 +590,17 @@ class MultiUserMMService {
 
       if (!quote?.rawQuoteResponse) {
         // Quote failures are temporary (e.g., token not indexed yet) - don't trigger pause
-        const errorMsg = `Failed to get ${tradingRoute} quote`
-        loggers.flywheel.info({ tokenSymbol: token.token_symbol, route: tradingRoute }, 'Quote failed (temporary, no pause)')
+        loggers.flywheel.info({ tokenSymbol: token.token_symbol }, 'Quote failed (temporary, no pause)')
         await this.updateFlywheelCheck(token.id, 'quote_failed')
-        return { ...baseResult, tradeType: 'buy', success: false, amount: buyAmount, error: errorMsg }
+        return { ...baseResult, tradeType: 'buy', success: false, amount: buyAmount, error: 'Failed to get quote' }
       }
 
-      const signature = await this.executeSwapWithPrivySigning(connection, opsWalletAddress, quote.rawQuoteResponse, tradingRoute)
+      const signature = await this.executeSwapWithPrivySigning(connection, opsWalletAddress, quote.rawQuoteResponse)
 
       if (!signature) {
         // Actual swap failures should trigger pause mechanism
-        const errorMsg = `${tradingRoute} swap failed`
-        await this.recordFailure(token.id, errorMsg)
-        return { ...baseResult, tradeType: 'buy', success: false, amount: buyAmount, error: errorMsg }
+        await this.recordFailure(token.id, 'Swap failed')
+        return { ...baseResult, tradeType: 'buy', success: false, amount: buyAmount, error: 'Swap failed' }
       }
 
       // Clear failures on success
@@ -665,11 +643,9 @@ class MultiUserMMService {
         tokenBalance,
         sellCount: state.sell_count,
         maxSells: SELLS_PER_CYCLE,
-        route: tradingRoute,
       }, 'Executing SELL')
 
       const quote = await this.getTradeQuote(
-        tradingRoute,
         token.token_mint_address,
         SOL_MINT,
         tokenUnits,
@@ -679,19 +655,17 @@ class MultiUserMMService {
 
       if (!quote?.rawQuoteResponse) {
         // Quote failures are temporary (e.g., token not indexed yet) - don't trigger pause
-        const errorMsg = `Failed to get ${tradingRoute} quote`
-        loggers.flywheel.info({ tokenSymbol: token.token_symbol, route: tradingRoute }, 'Quote failed (temporary, no pause)')
+        loggers.flywheel.info({ tokenSymbol: token.token_symbol }, 'Quote failed (temporary, no pause)')
         await this.updateFlywheelCheck(token.id, 'quote_failed')
-        return { ...baseResult, tradeType: 'sell', success: false, amount: sellAmount, error: errorMsg }
+        return { ...baseResult, tradeType: 'sell', success: false, amount: sellAmount, error: 'Failed to get quote' }
       }
 
-      const signature = await this.executeSwapWithPrivySigning(connection, opsWalletAddress, quote.rawQuoteResponse, tradingRoute)
+      const signature = await this.executeSwapWithPrivySigning(connection, opsWalletAddress, quote.rawQuoteResponse)
 
       if (!signature) {
         // Actual swap failures should trigger pause mechanism
-        const errorMsg = `${tradingRoute} swap failed`
-        await this.recordFailure(token.id, errorMsg)
-        return { ...baseResult, tradeType: 'sell', success: false, amount: sellAmount, error: errorMsg }
+        await this.recordFailure(token.id, 'Swap failed')
+        return { ...baseResult, tradeType: 'sell', success: false, amount: sellAmount, error: 'Swap failed' }
       }
 
       // Clear failures on success
@@ -728,6 +702,7 @@ class MultiUserMMService {
    * - 8 rapid sells, each selling exactly tokens_bought/8
    * - Postgres advisory locks prevent concurrent execution
    * - State persistence after each trade for crash recovery
+   * - All trading goes through Bags SDK which handles routing internally
    */
   private async runTurboLiteAlgorithm(
     token: PrivyTokenWithConfig,
@@ -735,8 +710,7 @@ class MultiUserMMService {
     state: UserFlywheelState,
     opsWalletAddress: string,
     connection: Connection,
-    baseResult: { userTokenId: string; tokenMint: string; tokenSymbol: string },
-    tradingRoute: 'bags' | 'jupiter' = 'bags'
+    baseResult: { userTokenId: string; tokenMint: string; tokenSymbol: string }
   ): Promise<TradeResult | null> {
     const cycleStartTime = Date.now()
     const tokenMint = new PublicKey(token.token_mint_address)
@@ -746,6 +720,10 @@ class MultiUserMMService {
     const turboCycleSizeBuys = config.turbo_cycle_size_buys ?? 8
     const turboCycleSizeSells = config.turbo_cycle_size_sells ?? 8
     const interTradeDelayMs = config.turbo_inter_token_delay_ms ?? 500  // Conservative default: 500ms
+
+    // Batching: when enabled (default), only persist state at phase boundaries instead of after every trade
+    // This reduces DB writes from ~40 per cycle to ~4 per cycle
+    const batchStateUpdates = config.turbo_batch_state_updates ?? true
 
     // Get percentage settings
     const buyPercent = config.buy_percent || 20
@@ -759,7 +737,7 @@ class MultiUserMMService {
 
     try {
       // Check if Bags.fm API is rate limited before starting
-      if (tradingRoute === 'bags' && bagsFmService.isRateLimited()) {
+      if (bagsFmService.isRateLimited()) {
         loggers.flywheel.warn({
           tokenSymbol: token.token_symbol,
           resetTime: bagsFmService.getRateLimitResetTime(),
@@ -833,12 +811,10 @@ class MultiUserMMService {
             buyPercent,
             solBalance,
             progress: `${rapidBuysCompleted + 1}/${turboCycleSizeBuys}`,
-            route: tradingRoute,
           }, `🚀 [Turbo Lite] Buy ${rapidBuysCompleted + 1}/${turboCycleSizeBuys}`)
 
-          // Get quote
+          // Get quote from Bags SDK (handles routing internally)
           const quote = await this.getTradeQuote(
-            tradingRoute,
             SOL_MINT,
             token.token_mint_address,
             lamports,
@@ -881,15 +857,16 @@ class MultiUserMMService {
           const signature = await this.executeSwapWithPrivySigning(
             connection,
             opsWalletAddress,
-            quote.rawQuoteResponse,
-            tradingRoute
+            quote.rawQuoteResponse
           )
 
           if (signature) {
             rapidBuysCompleted++
             solSpentThisCycle += buyAmount
             await this.recordTransaction(token.id, 'buy', buyAmount, signature)
-            await this.clearFailures(token.id)
+            if (!batchStateUpdates) {
+              await this.clearFailures(token.id)
+            }
 
             loggers.flywheel.info({
               tokenSymbol: token.token_symbol,
@@ -902,15 +879,20 @@ class MultiUserMMService {
               tokenSymbol: token.token_symbol,
               rapidBuysCompleted,
             }, '🚀 [Turbo Lite] Buy swap failed, continuing')
-            await this.recordFailure(token.id, 'Turbo buy swap failed')
+            if (!batchStateUpdates) {
+              await this.recordFailure(token.id, 'Turbo buy swap failed')
+            }
           }
 
-          // Persist state after each trade for crash recovery
-          await updatePrivyFlywheelState(token.id, {
-            rapid_buys_completed: rapidBuysCompleted,
-            sol_spent_this_cycle: solSpentThisCycle,
-            last_trade_at: new Date().toISOString(),
-          })
+          // Persist state after each trade only when batching is disabled
+          // When batching is enabled, state is persisted at phase boundaries
+          if (!batchStateUpdates) {
+            await updatePrivyFlywheelState(token.id, {
+              rapid_buys_completed: rapidBuysCompleted,
+              sol_spent_this_cycle: solSpentThisCycle,
+              last_trade_at: new Date().toISOString(),
+            })
+          }
 
           // Delay between trades
           if (rapidBuysCompleted < turboCycleSizeBuys) {
@@ -989,12 +971,10 @@ class MultiUserMMService {
             sellAmount: sellAmountPerTrade,
             currentTokenBalance,
             progress: `${rapidSellsCompleted + 1}/${turboCycleSizeSells}`,
-            route: tradingRoute,
           }, `🚀 [Turbo Lite] Sell ${rapidSellsCompleted + 1}/${turboCycleSizeSells}`)
 
-          // Get quote
+          // Get quote from Bags SDK (handles routing internally)
           const quote = await this.getTradeQuote(
-            tradingRoute,
             token.token_mint_address,
             SOL_MINT,
             tokenUnits,
@@ -1036,14 +1016,15 @@ class MultiUserMMService {
           const signature = await this.executeSwapWithPrivySigning(
             connection,
             opsWalletAddress,
-            quote.rawQuoteResponse,
-            tradingRoute
+            quote.rawQuoteResponse
           )
 
           if (signature) {
             rapidSellsCompleted++
             await this.recordTransaction(token.id, 'sell', sellAmountPerTrade, signature)
-            await this.clearFailures(token.id)
+            if (!batchStateUpdates) {
+              await this.clearFailures(token.id)
+            }
 
             loggers.flywheel.info({
               tokenSymbol: token.token_symbol,
@@ -1055,14 +1036,19 @@ class MultiUserMMService {
               tokenSymbol: token.token_symbol,
               rapidSellsCompleted,
             }, '🚀 [Turbo Lite] Sell swap failed, continuing')
-            await this.recordFailure(token.id, 'Turbo sell swap failed')
+            if (!batchStateUpdates) {
+              await this.recordFailure(token.id, 'Turbo sell swap failed')
+            }
           }
 
-          // Persist state after each trade for crash recovery
-          await updatePrivyFlywheelState(token.id, {
-            rapid_sells_completed: rapidSellsCompleted,
-            last_trade_at: new Date().toISOString(),
-          })
+          // Persist state after each trade only when batching is disabled
+          // When batching is enabled, state is persisted at phase boundaries
+          if (!batchStateUpdates) {
+            await updatePrivyFlywheelState(token.id, {
+              rapid_sells_completed: rapidSellsCompleted,
+              last_trade_at: new Date().toISOString(),
+            })
+          }
 
           // Delay between trades
           if (rapidSellsCompleted < turboCycleSizeSells) {
@@ -1094,6 +1080,8 @@ class MultiUserMMService {
       }, `🎉 [Turbo Lite] Cycle complete in ${(cycleTimeMs / 1000).toFixed(1)}s`)
 
       // Reset rapid execution state for next cycle
+      // When batching is enabled, this is the only state persistence for the entire cycle
+      // (apart from the buy phase boundary update)
       await updatePrivyFlywheelState(token.id, {
         cycle_phase: 'buy',
         buy_count: 0,
@@ -1103,6 +1091,8 @@ class MultiUserMMService {
         tokens_bought_this_cycle: 0,
         sol_spent_this_cycle: 0,
         last_trade_at: new Date().toISOString(),
+        // Clear failure tracking at cycle completion when batching is enabled
+        ...(batchStateUpdates && totalTrades > 0 ? { consecutive_failures: 0 } : {}),
       })
 
       await this.updateFlywheelCheck(token.id, 'turbo_cycle_complete')
@@ -1125,63 +1115,58 @@ class MultiUserMMService {
   /**
    * Execute swap with Privy delegated signing
    * Uses sign-only + self-broadcast pattern for reliability
+   * All swaps go through Bags SDK which returns bs58-encoded transactions
    */
   private async executeSwapWithPrivySigning(
     connection: Connection,
     walletAddress: string,
     quoteResponse: unknown,
-    route: 'bags' | 'jupiter',
     maxRetries: number = 3
   ): Promise<string | null> {
     for (let attempt = 0; attempt < maxRetries; attempt++) {
       // Get fresh swap transaction for each attempt (fresh blockhash each time)
-      const swapData = await this.generateSwapTx(route, walletAddress, quoteResponse)
+      const swapData = await this.generateSwapTx(walletAddress, quoteResponse)
 
       if (!swapData) {
-        loggers.flywheel.error({ route, attempt }, 'Failed to get swap transaction')
+        loggers.flywheel.error({ attempt }, 'Failed to get swap transaction')
         return null
       }
 
-      // Deserialize the transaction
+      // Deserialize the transaction (Bags SDK returns bs58-encoded transactions)
       let transaction: VersionedTransaction
       try {
-        if (route === 'jupiter') {
-          const txBuffer = Buffer.from(swapData.transaction, 'base64')
-          transaction = VersionedTransaction.deserialize(txBuffer)
-        } else {
-          const txBuffer = bs58.decode(swapData.transaction)
-          transaction = VersionedTransaction.deserialize(txBuffer)
-        }
+        const txBuffer = bs58.decode(swapData.transaction)
+        transaction = VersionedTransaction.deserialize(txBuffer)
       } catch (error) {
-        loggers.flywheel.error({ route, error: String(error) }, 'Failed to deserialize transaction')
+        loggers.flywheel.error({ error: String(error) }, 'Failed to deserialize transaction')
         return null
       }
 
       // Use sendTransactionWithPrivySigning utility (sign-only + self-broadcast)
       const result = await sendTransactionWithPrivySigning(connection, transaction, walletAddress, {
         maxRetries: 1, // We handle retries ourselves with fresh transactions
-        logContext: { service: 'flywheel', route, attempt: attempt + 1 },
+        logContext: { service: 'flywheel', attempt: attempt + 1 },
       })
 
       if (result.success && result.signature) {
-        loggers.flywheel.info({ route, signature: result.signature, attempt: attempt + 1 }, 'Swap executed successfully')
+        loggers.flywheel.info({ signature: result.signature, attempt: attempt + 1 }, 'Swap executed successfully')
         return result.signature
       }
 
       // Check if error is retryable
       const errorMsg = result.error || 'Unknown error'
       if (errorMsg.includes('Blockhash') || errorMsg.includes('blockhash') || errorMsg.includes('block height')) {
-        loggers.flywheel.warn({ route, attempt: attempt + 1, maxRetries, error: errorMsg }, 'Blockhash issue, retrying with fresh transaction')
+        loggers.flywheel.warn({ attempt: attempt + 1, maxRetries, error: errorMsg }, 'Blockhash issue, retrying with fresh transaction')
         await new Promise(resolve => setTimeout(resolve, 300))
         continue
       }
 
       // Non-retryable error
-      loggers.flywheel.error({ route, walletAddress, error: errorMsg, attempt: attempt + 1 }, 'Swap failed')
+      loggers.flywheel.error({ walletAddress, error: errorMsg, attempt: attempt + 1 }, 'Swap failed')
       return null
     }
 
-    loggers.flywheel.error({ route, walletAddress, maxRetries }, 'Swap failed after all retries')
+    loggers.flywheel.error({ walletAddress, maxRetries }, 'Swap failed after all retries')
     return null
   }
 

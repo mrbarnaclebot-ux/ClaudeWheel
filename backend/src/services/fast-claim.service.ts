@@ -415,7 +415,8 @@ class FastClaimService {
           opsWalletAddress,
           position.claimableAmount,
           token.token_symbol,
-          token.token_mint_address
+          token.token_mint_address,
+          token.id
         )
         platformFeeSol = transferResult.platformFeeSol
         userReceivedSol = transferResult.userAmountSol
@@ -454,8 +455,37 @@ class FastClaimService {
   }
 
   /**
+   * Get platform fee percentage for a token
+   * Priority: WHEEL exemption (0%) → per-token override → global default (10%)
+   */
+  private async getPlatformFeePercent(tokenMint: string, tokenId: string): Promise<number> {
+    // WHEEL token is always exempt (hardcoded 0%)
+    if (tokenMint === PLATFORM_WHEEL_TOKEN_MINT) {
+      return 0
+    }
+
+    // Check for per-token override in config
+    try {
+      const config = await prisma.privyTokenConfig.findUnique({
+        where: { privyTokenId: tokenId },
+        select: { platformFeePercentageOverride: true },
+      })
+
+      if (config?.platformFeePercentageOverride != null) {
+        loggers.claim.debug({ tokenId, override: config.platformFeePercentageOverride }, 'Using per-token fee override')
+        return config.platformFeePercentageOverride
+      }
+    } catch (error) {
+      loggers.claim.warn({ tokenId, error: String(error) }, 'Failed to fetch per-token fee override, using global default')
+    }
+
+    // Global default from environment
+    return env.platformFeePercentage || 10
+  }
+
+  /**
    * Transfer SOL with platform fee split using Privy signing
-   * 10% goes to WHEEL ops wallet, 90% goes to user's ops wallet
+   * Fee % goes to WHEEL ops wallet, remainder goes to user's ops wallet
    * WHEEL token (platform token) is excluded from platform fees (100% goes to user)
    */
   private async transferWithPlatformFee(
@@ -464,7 +494,8 @@ class FastClaimService {
     userOpsWalletAddress: string,
     amountSol: number,
     tokenSymbol: string,
-    tokenMint: string
+    tokenMint: string,
+    tokenId: string
   ): Promise<{ success: boolean; platformFeeSol: number; userAmountSol: number }> {
     try {
       const reserveSol = 0.1
@@ -474,16 +505,15 @@ class FastClaimService {
         return { success: true, platformFeeSol: 0, userAmountSol: 0 }
       }
 
-      // Check if this is the platform WHEEL token - excluded from platform fees
-      const isWheelToken = tokenMint === PLATFORM_WHEEL_TOKEN_MINT
-
-      // Calculate platform fee (0% for WHEEL token, default 10% for others)
-      const platformFeePercent = isWheelToken ? 0 : (env.platformFeePercentage || 10)
+      // Get platform fee percentage (handles WHEEL exemption and per-token overrides)
+      const platformFeePercent = await this.getPlatformFeePercent(tokenMint, tokenId)
       const platformFeeSol = transferAmount * (platformFeePercent / 100)
       const userAmountSol = transferAmount - platformFeeSol
 
-      if (isWheelToken) {
+      if (tokenMint === PLATFORM_WHEEL_TOKEN_MINT) {
         loggers.claim.info({ tokenSymbol }, 'WHEEL token - skipping platform fee')
+      } else if (platformFeePercent !== (env.platformFeePercentage || 10)) {
+        loggers.claim.info({ tokenSymbol, platformFeePercent }, 'Using custom platform fee')
       }
 
       const devPubkey = new PublicKey(devWalletAddress)

@@ -134,6 +134,7 @@ router.get('/', async (req: PrivyRequest, res: Response) => {
         turbo_global_rate_limit: token.config.turboGlobalRateLimit,
         turbo_confirmation_timeout: token.config.turboConfirmationTimeout,
         turbo_batch_state_updates: token.config.turboBatchStateUpdates,
+        platform_fee_percentage_override: token.config.platformFeePercentageOverride,
       } : null,
       flywheel_state: token.flywheelState ? {
         cycle_phase: token.flywheelState.cyclePhase,
@@ -579,6 +580,7 @@ router.get('/:id', async (req: PrivyRequest, res: Response) => {
         turbo_global_rate_limit: token.config.turboGlobalRateLimit,
         turbo_confirmation_timeout: token.config.turboConfirmationTimeout,
         turbo_batch_state_updates: token.config.turboBatchStateUpdates,
+        platform_fee_percentage_override: token.config.platformFeePercentageOverride,
       } : null,
       state: token.flywheelState ? {
         cycle_phase: token.flywheelState.cyclePhase,
@@ -624,6 +626,8 @@ const updateConfigSchema = z.object({
   turbo_global_rate_limit: z.number().int().min(30).max(200).optional(),
   turbo_confirmation_timeout: z.number().int().min(20).max(120).optional(),
   turbo_batch_state_updates: z.boolean().optional(),
+  // Per-token platform fee override (null to use global default)
+  platform_fee_percentage_override: z.number().int().min(0).max(100).nullable().optional(),
   // TWAP/VWAP Configuration
   twap_enabled: z.boolean().optional(),
   twap_slices: z.number().int().min(2).max(20).optional(),
@@ -717,6 +721,8 @@ router.put('/:id/config', async (req: PrivyRequest, res: Response) => {
     if (config.turbo_global_rate_limit !== undefined) prismaConfig.turboGlobalRateLimit = config.turbo_global_rate_limit
     if (config.turbo_confirmation_timeout !== undefined) prismaConfig.turboConfirmationTimeout = config.turbo_confirmation_timeout
     if (config.turbo_batch_state_updates !== undefined) prismaConfig.turboBatchStateUpdates = config.turbo_batch_state_updates
+    // Per-token platform fee override
+    if (config.platform_fee_percentage_override !== undefined) prismaConfig.platformFeePercentageOverride = config.platform_fee_percentage_override
     // TWAP/VWAP config
     if (config.twap_enabled !== undefined) prismaConfig.twapEnabled = config.twap_enabled
     if (config.twap_slices !== undefined) prismaConfig.twapSlices = config.twap_slices
@@ -927,7 +933,16 @@ router.post('/:id/claim', async (req: PrivyRequest, res: Response) => {
       const transferAmount = Math.max(0, position.claimableAmount - reserveSol)
 
       if (transferAmount > 0) {
-        const platformFeePercent = env.platformFeePercentage || 10
+        // Get platform fee percentage (WHEEL exempt, then check per-token override, then global default)
+        const isWheelToken = token.tokenMintAddress === env.tokenMintAddress
+        let platformFeePercent = isWheelToken ? 0 : (env.platformFeePercentage || 10)
+
+        // Check for per-token override (only if not WHEEL)
+        if (!isWheelToken && token.config?.platformFeePercentageOverride != null) {
+          platformFeePercent = token.config.platformFeePercentageOverride
+          loggers.privy.debug({ tokenId: id, override: platformFeePercent }, 'Using per-token fee override for manual claim')
+        }
+
         platformFeeSol = transferAmount * (platformFeePercent / 100)
         userReceivedSol = transferAmount - platformFeeSol
 
@@ -945,7 +960,7 @@ router.post('/:id/claim', async (req: PrivyRequest, res: Response) => {
           // Platform token not found - skip platform fee
         }
 
-        // Transfer platform fee (10%)
+        // Transfer platform fee
         if (platformOpsWalletAddress && platformFeeSol >= 0.001) {
           const platformTx = new Transaction().add(
             SystemProgram.transfer({

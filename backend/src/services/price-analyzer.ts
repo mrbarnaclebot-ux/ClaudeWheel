@@ -1,5 +1,4 @@
 import { getTokenMint } from '../config/solana'
-import { env } from '../config/env'
 import { loggers } from '../utils/logger'
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -115,31 +114,6 @@ export class PriceAnalyzer {
       return priceData
     } catch (error) {
       loggers.solana.error({ error: String(error) }, 'Failed to fetch price')
-      return null
-    }
-  }
-
-  /**
-   * Fetch price from Jupiter for more accurate swap quotes
-   */
-  async fetchJupiterPrice(inputMint: string, outputMint: string, amount: number): Promise<number | null> {
-    try {
-      const params = new URLSearchParams({
-        inputMint,
-        outputMint,
-        amount: amount.toString(),
-        slippageBps: '50',
-      })
-
-      const response = await fetch(`${env.jupiterApiUrl}/quote?${params}`)
-      const data = await response.json() as { outAmount?: string }
-
-      if (data.outAmount) {
-        return parseInt(data.outAmount) / Math.pow(10, env.tokenDecimals)
-      }
-      return null
-    } catch (error) {
-      loggers.solana.error({ error: String(error) }, 'Failed to fetch Jupiter price')
       return null
     }
   }

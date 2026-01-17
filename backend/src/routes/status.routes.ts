@@ -130,7 +130,6 @@ router.get('/system', async (req: Request, res: Response) => {
     nodeEnv: env.nodeEnv,
     port: env.port,
     solanaRpcUrl: env.solanaRpcUrl.replace(/api-key=[\w-]+/gi, 'api-key=***'),
-    jupiterApiUrl: env.jupiterApiUrl,
     marketMakingEnabled: env.marketMakingEnabled,
     minFeeThresholdSol: env.minFeeThresholdSol,
     maxBuyAmountSol: env.maxBuyAmountSol,

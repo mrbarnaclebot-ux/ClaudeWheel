@@ -56,9 +56,6 @@ const envSchema = z.object({
   BALANCE_FETCH_DELAY_MS: z.string().default('100'),
   BALANCE_SNAPSHOT_INTERVAL: z.string().default('12'),
 
-  // Jupiter
-  JUPITER_API_URL: z.string().url().default('https://quote-api.jup.ag/v6'),
-
   // Bags.fm
   BAGS_FM_API_KEY: z.string().optional(),
 
@@ -148,9 +145,6 @@ export const env = {
   balanceUpdateBatchSize: parseInt(parsed.data.BALANCE_UPDATE_BATCH_SIZE, 10),
   balanceFetchDelayMs: parseInt(parsed.data.BALANCE_FETCH_DELAY_MS, 10),
   balanceSnapshotInterval: parseInt(parsed.data.BALANCE_SNAPSHOT_INTERVAL, 10),
-
-  // Jupiter
-  jupiterApiUrl: parsed.data.JUPITER_API_URL,
 
   // Bags.fm
   bagsFmApiKey: parsed.data.BAGS_FM_API_KEY,

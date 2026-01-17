@@ -163,6 +163,9 @@ model PrivyTokenConfig {
   turboConfirmationTimeout  Int?    @default(45) @map("turbo_confirmation_timeout")
   turboBatchStateUpdates    Boolean? @default(true) @map("turbo_batch_state_updates")
 
+  // Per-token platform fee override (null = use global default from env)
+  platformFeePercentageOverride Int? @map("platform_fee_percentage_override")
+
   token PrivyUserToken @relation(fields: [privyTokenId], references: [id], onDelete: Cascade)
 
   @@index([flywheelActive])
