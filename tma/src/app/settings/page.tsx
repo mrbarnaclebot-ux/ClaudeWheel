@@ -2,8 +2,7 @@
 
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { usePrivy, useSigners } from '@privy-io/react-auth';
-import { useWallets } from '@privy-io/react-auth/solana';
+import { usePrivyWrapper, useSignersWrapper, useWalletsWrapper } from '@/hooks/usePrivyWrapper';
 import { useTelegram } from '@/components/TelegramProvider';
 import { api } from '@/lib/api';
 import Link from 'next/link';
@@ -24,9 +23,9 @@ interface PrivyWalletInfo {
 }
 
 export default function SettingsPage() {
-    const { getAccessToken, logout, user: privyUser, ready: privyReady, authenticated } = usePrivy();
-    const { wallets } = useWallets();
-    const { addSigners } = useSigners();
+    const { getAccessToken, logout, user: privyUser, ready: privyReady, authenticated } = usePrivyWrapper();
+    const { wallets } = useWalletsWrapper();
+    const { addSigners } = useSignersWrapper();
     const { user: telegramUser, hapticFeedback } = useTelegram();
     const [isDelegating, setIsDelegating] = useState(false);
     const [delegationResult, setDelegationResult] = useState<string | null>(null);

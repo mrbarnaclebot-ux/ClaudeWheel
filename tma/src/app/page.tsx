@@ -2,13 +2,13 @@
 
 import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { usePrivy } from '@privy-io/react-auth';
+import { usePrivyWrapper } from '@/hooks/usePrivyWrapper';
 import { useTelegram } from '@/components/TelegramProvider';
 import { useOnboardingStatus } from '@/hooks/useOnboarding';
 
 export default function EntryPage() {
     const router = useRouter();
-    const { ready, authenticated } = usePrivy();
+    const { ready, authenticated } = usePrivyWrapper();
     const { isReady: telegramReady } = useTelegram();
     const { isOnboarded, isLoading } = useOnboardingStatus();
 

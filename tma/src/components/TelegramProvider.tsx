@@ -3,6 +3,20 @@
 import React, { useEffect, createContext, useContext, useState } from 'react';
 import { retrieveLaunchParams, type RetrieveLPResultCamelCased } from '@telegram-apps/bridge';
 
+// E2E Test Mode Support
+declare global {
+    interface Window {
+        __TELEGRAM_TEST_MODE__?: boolean;
+        __TELEGRAM_MOCK_USER__?: {
+            id: number;
+            firstName: string;
+            lastName?: string;
+            username?: string;
+            photoUrl?: string;
+        };
+    }
+}
+
 interface TelegramContextType {
     isReady: boolean;
     launchParams: RetrieveLPResultCamelCased | null;
@@ -28,6 +42,14 @@ export function TelegramProvider({ children }: { children: React.ReactNode }) {
     useEffect(() => {
         // Only run in browser
         if (typeof window === 'undefined') return;
+
+        // Check for E2E test mode
+        if (window.__TELEGRAM_TEST_MODE__ && window.__TELEGRAM_MOCK_USER__) {
+            console.log('[TelegramProvider] E2E test mode detected, using mock user');
+            setUser(window.__TELEGRAM_MOCK_USER__);
+            setIsReady(true);
+            return;
+        }
 
         try {
             // Get launch params (contains user info) - use camelCase version

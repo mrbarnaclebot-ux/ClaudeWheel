@@ -2,8 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
-import { usePrivy } from '@privy-io/react-auth';
-import { useWallets } from '@privy-io/react-auth/solana';
+import { usePrivyWrapper, useWalletsWrapper } from '@/hooks/usePrivyWrapper';
 import { toast } from '@/lib/toast';
 import { useTelegram } from '@/components/TelegramProvider';
 import { WalletAddress } from '@/components/WalletAddress';
@@ -90,8 +89,8 @@ function useCountdown(expiresAt: string | undefined) {
 
 export default function LaunchPage() {
     const router = useRouter();
-    const { getAccessToken } = usePrivy();
-    const { wallets } = useWallets();
+    const { getAccessToken } = usePrivyWrapper();
+    const { wallets } = useWalletsWrapper();
     const { hapticFeedback } = useTelegram();
 
     const [step, setStep] = useState<LaunchStep>('details');

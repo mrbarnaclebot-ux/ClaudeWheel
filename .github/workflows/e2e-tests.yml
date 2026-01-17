@@ -1,0 +1,84 @@
+name: E2E Tests
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'tma/**'
+      - '.github/workflows/e2e-tests.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'tma/**'
+  workflow_dispatch: # Manual trigger
+
+env:
+  # Environment variables for TMA tests
+  # NOTE: NEXT_PUBLIC_PRIVY_APP_ID is intentionally NOT set to enable E2E mock mode
+  # The MockPrivyProvider will be used instead of the real PrivyProvider
+  NEXT_PUBLIC_API_URL: http://localhost:3001
+  NEXT_PUBLIC_PRIVY_SIGNER_ID: test-signer-id
+
+jobs:
+  e2e-tests:
+    name: Run E2E Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    defaults:
+      run:
+        working-directory: tma
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: tma/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium webkit
+
+      - name: Build TMA (for production-like tests)
+        run: npm run build
+        env:
+          # Build without PRIVY_APP_ID to enable E2E mock mode
+          NEXT_PUBLIC_API_URL: http://localhost:3001
+          NEXT_PUBLIC_PRIVY_SIGNER_ID: test-signer-id
+
+      - name: Run Playwright tests
+        run: npx playwright test
+        env:
+          CI: true
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: playwright-report
+          path: tma/playwright-report/
+          retention-days: 7
+
+      - name: Upload test artifacts on failure
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: test-artifacts
+          path: |
+            tma/test-results/
+            tma/playwright-report/
+          retention-days: 7
+
+      - name: Comment test results on PR
+        uses: daun/playwright-report-summary@v3
+        if: always() && github.event_name == 'pull_request'
+        with:
+          report-file: tma/test-results/results.json
+          comment-title: 'Playwright E2E Test Results'

@@ -2,8 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
-import { usePrivy, useSigners, type WalletWithMetadata } from '@privy-io/react-auth';
-import { useWallets, useCreateWallet } from '@privy-io/react-auth/solana';
+import { usePrivyWrapper, useSignersWrapper, useWalletsWrapper, useCreateWalletWrapper, type WalletWithMetadata } from '@/hooks/usePrivyWrapper';
 import { useTelegram } from '@/components/TelegramProvider';
 import { motion, AnimatePresence } from 'framer-motion';
 import { toast } from 'sonner';
@@ -16,11 +15,11 @@ type Step = 'welcome' | 'creating_wallets' | 'delegate_dev' | 'delegate_ops' | '
 
 export default function OnboardingPage() {
     const router = useRouter();
-    const { ready, authenticated, getAccessToken, user } = usePrivy();
-    const { wallets } = useWallets();
-    const { createWallet } = useCreateWallet();
+    const { ready, authenticated, getAccessToken, user } = usePrivyWrapper();
+    const { wallets } = useWalletsWrapper();
+    const { createWallet } = useCreateWalletWrapper();
     // Use new Signers API (replaces deprecated delegateWallet)
-    const { addSigners } = useSigners();
+    const { addSigners } = useSignersWrapper();
     const { user: telegramUser, hapticFeedback } = useTelegram();
 
     const [step, setStep] = useState<Step>('welcome');
@@ -39,7 +38,7 @@ export default function OnboardingPage() {
     const isWalletDelegated = (walletAddress: string): boolean => {
         if (!user?.linkedAccounts) return false;
         return user.linkedAccounts.some(
-            (account): account is WalletWithMetadata =>
+            (account: any): account is WalletWithMetadata =>
                 account.type === 'wallet' &&
                 (account as WalletWithMetadata).address === walletAddress &&
                 (account as WalletWithMetadata).delegated === true
@@ -311,7 +310,7 @@ export default function OnboardingPage() {
 
             // Check if already delegated via user.linkedAccounts
             const isDelegated = isWalletDelegated(devWallet.address);
-            const linkedAccountsInfo = user?.linkedAccounts?.filter(a => a.type === 'wallet').map(a => ({
+            const linkedAccountsInfo = user?.linkedAccounts?.filter((a: any) => a.type === 'wallet').map((a: any) => ({
                 address: (a as WalletWithMetadata).address?.slice(0, 8),
                 delegated: (a as WalletWithMetadata).delegated,
                 walletClientType: (a as WalletWithMetadata).walletClientType,
@@ -386,7 +385,7 @@ export default function OnboardingPage() {
 
             // Check if already delegated via user.linkedAccounts
             const isDelegated = isWalletDelegated(opsWallet.address);
-            const linkedAccountsInfo = user?.linkedAccounts?.filter(a => a.type === 'wallet').map(a => ({
+            const linkedAccountsInfo = user?.linkedAccounts?.filter((a: any) => a.type === 'wallet').map((a: any) => ({
                 address: (a as WalletWithMetadata).address?.slice(0, 8),
                 delegated: (a as WalletWithMetadata).delegated,
                 walletClientType: (a as WalletWithMetadata).walletClientType,

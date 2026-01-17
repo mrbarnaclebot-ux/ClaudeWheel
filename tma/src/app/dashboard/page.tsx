@@ -1,8 +1,7 @@
 'use client';
 
 import { useQuery } from '@tanstack/react-query';
-import { usePrivy } from '@privy-io/react-auth';
-import { useWallets } from '@privy-io/react-auth/solana';
+import { usePrivyWrapper, useWalletsWrapper } from '@/hooks/usePrivyWrapper';
 import { useTelegram } from '@/components/TelegramProvider';
 import { WalletAddress } from '@/components/WalletAddress';
 import { TokenAvatar } from '@/components/TokenAvatar';
@@ -30,8 +29,8 @@ interface Token {
 }
 
 export default function DashboardPage() {
-    const { getAccessToken } = usePrivy();
-    const { wallets } = useWallets();
+    const { getAccessToken } = usePrivyWrapper();
+    const { wallets } = useWalletsWrapper();
     const { user: telegramUser, hapticFeedback } = useTelegram();
 
     // useSolanaWallets already returns only Solana wallets

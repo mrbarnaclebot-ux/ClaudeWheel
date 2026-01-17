@@ -1,9 +1,9 @@
 import { useQuery } from '@tanstack/react-query';
-import { usePrivy } from '@privy-io/react-auth';
+import { usePrivyWrapper } from '@/hooks/usePrivyWrapper';
 import { api } from '@/lib/api';
 
 export function useOnboardingStatus() {
-    const { ready, authenticated, getAccessToken } = usePrivy();
+    const { ready, authenticated, getAccessToken } = usePrivyWrapper();
 
     const { data, isLoading } = useQuery({
         queryKey: ['onboarding-status'],
