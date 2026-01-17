@@ -1,1112 +1,191 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code when working with this repository.
-
 ## Project Overview
 
-ClaudeWheel (Claude Flywheel) is an autonomous market-making engine for Solana tokens. It automates fee collection from Bags.fm and reinvests proceeds through market-making operations.
+ClaudeWheel is an autonomous market-making engine for Solana tokens on Bags.fm with fee collection and reinvestment.
 
-**Platform supports two authentication systems:**
-- **Legacy (Supabase)**: Wallet signature authentication with encrypted private keys
-- **Privy (TMA)**: Telegram Mini App authentication with delegated signing (no private keys stored)
-
-Both systems run in parallel with independent databases and job runners.
+**Dual Auth Systems:**
+- **Legacy (Supabase)**: Wallet signature auth + encrypted private keys
+- **Privy (TMA)**: Telegram Mini App + delegated signing (no keys stored)
 
 ## Repository Structure
 
 ```
-ClaudeWheel/
-├── backend/              # Express + TypeScript API server (port 3001)
-│   ├── prisma/           # Prisma schema and migrations (Privy system)
-│   │   └── schema.prisma
-│   └── src/
-│       ├── config/       # Environment, Solana, database configuration
-│       ├── jobs/         # Cron jobs (flywheel, claims, deposits)
-│       ├── routes/       # Express API routes (9 route files)
-│       ├── services/     # Business logic (17 services)
-│       ├── telegram/     # Telegram bot handlers
-│       ├── websocket/    # Admin WebSocket server
-│       ├── types/        # TypeScript type definitions
-│       ├── utils/        # Helper functions (logger, signature-verify, transaction)
-│       ├── scripts/      # Utility scripts (database audit, migrations)
-│       └── index.ts      # Server entry point
-├── frontend/             # Next.js 14 Admin Dashboard (port 3000)
-│   ├── app/
-│   │   ├── admin/        # Admin dashboard (views, components, stores)
-│   │   │   ├── _components/  # Admin UI components
-│   │   │   ├── _hooks/       # Admin hooks (useWebSocket)
-│   │   │   ├── _lib/         # Admin utilities (adminApi, queryClient)
-│   │   │   ├── _stores/      # Zustand stores
-│   │   │   └── _types/       # Admin type definitions
-│   │   ├── dashboard/    # User token dashboard
-│   │   ├── components/   # Shared React components
-│   │   ├── providers/    # Auth and wallet providers
-│   │   ├── onboarding/   # User onboarding flow
-│   │   ├── docs/         # Documentation page
-│   │   └── privacy/      # Privacy policy page
-│   └── lib/              # Utilities and API clients
-├── tma/                  # Next.js 14 Telegram Mini App (port 3002)
-│   └── src/app/
-│       ├── page.tsx              # Root/index page
-│       ├── onboarding/           # First-time user wallet setup
-│       ├── dashboard/            # Main token list & balances
-│       ├── token/[id]/           # Token details & trading
-│       │   └── settings/         # Token MM configuration
-│       ├── launch/               # Multi-step token launch wizard
-│       ├── mm/                   # MM-only mode (any Bags.fm token)
-│       ├── register/             # Import existing token
-│       ├── settings/             # User profile & preferences
-│       ├── components/           # TMA-specific components
-│       ├── hooks/                # Custom React hooks
-│       └── lib/                  # API client & utilities
-├── supabase/             # Legacy database migrations (deprecated)
-│   └── migrations/       # SQL migration files
-├── docs/                 # Project documentation
-└── .github/              # GitHub workflows and CI/CD
+backend/           # Express + TS API (port 3001)
+├── prisma/        # Prisma schema (Privy system)
+├── src/
+│   ├── config/    # env, solana, database
+│   ├── jobs/      # cron (flywheel, claims, deposits)
+│   ├── routes/    # 9 route files
+│   ├── services/  # 17 services
+│   ├── telegram/  # bot handlers
+│   └── utils/     # logger, transactions
+frontend/          # Next.js 14 Admin (port 3000)
+└── app/admin/     # dashboard views, stores
+tma/               # Next.js 14 Telegram Mini App (port 3002)
+└── src/app/
+    ├── dashboard/ # token list
+    ├── token/[id]/ # details + settings
+    ├── launch/    # token launch wizard
+    └── mm/        # MM-only mode
 ```
 
-## Development Commands
+## Commands
 
-### Backend (run from `/backend`)
-
-```bash
-npm run dev          # Start dev server with hot reload (tsx watch)
-npm run build        # Compile TypeScript
-npm run start        # Run compiled JS
-npm run test         # Run tests with Vitest
-npm run test:watch   # Run tests in watch mode
-npm run lint         # Run ESLint
-
-# Prisma commands
-npm run db:generate  # Generate Prisma client
-npm run db:push      # Push schema to database
-npm run db:migrate   # Run migrations
-npm run db:studio    # Open Prisma Studio
-```
-
-### Frontend - Admin Dashboard (run from `/frontend`)
-
-```bash
-npm run dev          # Start Next.js dev server (port 3000)
-npm run build        # Build for production
-npm run start        # Start production server
-npm run test         # Run tests with Vitest
-npm run lint         # Run Next.js linting
-```
-
-### TMA - Telegram Mini App (run from `/tma`)
-
-```bash
-npm run dev          # Start Next.js dev server (port 3002)
-npm run build        # Build for production
-npm run start        # Start production server
-npm run lint         # Run linting
-```
+**Backend** (`/backend`): `npm run dev|build|test` | `npm run db:generate|push|migrate|studio`
+**Frontend** (`/frontend`): `npm run dev|build`
+**TMA** (`/tma`): `npm run dev|build`
 
 ## Tech Stack
 
-### Backend
+**Backend**: Express, TypeScript, @solana/web3.js, Prisma, Supabase, @privy-io/server-auth, @bagsfm/bags-sdk, Telegraf, Pino, Zod
+**Frontend/TMA**: Next.js 14, React, Tailwind, Zustand, TanStack Query, @privy-io/react-auth
 
-| Technology              | Purpose                    | Version |
-| ----------------------- | -------------------------- | ------- |
-| Express.js              | API framework              | 4.21.2  |
-| TypeScript              | Language                   | 5.7.2   |
-| @solana/web3.js         | Blockchain                 | 1.98.0  |
-| Supabase                | Legacy database            | 2.47.12 |
-| Prisma                  | Privy database ORM         | 6.19.1  |
-| @privy-io/server-auth   | Privy authentication       | 1.32.5  |
-| @bagsfm/bags-sdk        | Bags.fm integration        | 1.2.4   |
-| Telegraf                | Telegram bot               | 4.16.3  |
-| node-cron               | Job scheduling             | 3.0.3   |
-| Pino                    | Structured logging         | 10.1.0  |
-| Zod                     | Runtime validation         | 3.24.1  |
-| Vitest                  | Testing                    | 2.1.8   |
+## Core Jobs
 
-### Frontend (Admin Dashboard)
+| Job | Interval | Purpose |
+|-----|----------|---------|
+| Multi-Flywheel | 1 min | MM for all active tokens |
+| Fast Claim | 30 sec | Claims fees ≥0.15 SOL (10% platform, 90% user) |
+| Balance Update | 5 min | Update cached wallet balances |
+| Deposit Monitor | 30 sec | Watch deposits, trigger activations |
 
-| Technology            | Purpose                | Version |
-| --------------------- | ---------------------- | ------- |
-| Next.js               | Framework (App Router) | 14.2.21 |
-| React                 | UI library             | 18.3.1  |
-| Tailwind CSS          | Styling                | 3.4.17  |
-| Zustand               | Client state           | 5.0.9   |
-| TanStack Query        | Server state           | 5.90.16 |
-| Solana Wallet Adapter | Wallet integration     | -       |
-| Recharts              | Charts                 | 3.6.0   |
-| Framer Motion         | Animation              | 11.15.0 |
-| Vitest                | Testing                | 2.1.8   |
+Jobs: `MULTI_USER_FLYWHEEL_ENABLED`, `FAST_CLAIM_JOB_ENABLED`, etc.
 
-### TMA (Telegram Mini App)
+## MM Algorithm Modes
 
-| Technology            | Purpose                | Version |
-| --------------------- | ---------------------- | ------- |
-| Next.js               | Framework (App Router) | 14.2.21 |
-| React                 | UI library             | 18.3.1  |
-| Tailwind CSS          | Styling                | 3.4.17  |
-| Zustand               | Client state           | 5.0.9   |
-| TanStack Query        | Server state           | 5.90.16 |
-| @privy-io/react-auth  | Privy authentication   | 3.10.1  |
-| @telegram-apps/sdk    | Telegram integration   | 3.3.9   |
-| Sonner                | Toast notifications    | 1.7.1   |
+- **simple**: 5 buys → 5 sells (default)
+- **turbo_lite**: 8 buys → 8 sells with rate limits, auto-switches to sell if SOL <0.1
+- **rebalance**: Token/SOL ratio balancing
 
-## Core Jobs & Automation
+Stored in `PrivyTokenConfig.algorithm_mode`, executed by `multi-user-mm.service.ts`
 
-| Job                    | Frequency       | Purpose                                                                           |
-| ---------------------- | --------------- | --------------------------------------------------------------------------------- |
-| Multi-Flywheel         | Every 1 min     | Core market-making for ALL active tokens (simple & turbo_lite modes)              |
-| Fast Claim             | Every 30 sec*   | Claims accumulated fees when >= 0.15 SOL threshold (10% platform, 90% user)       |
-| Balance Update         | Every 5 min     | Updates cached wallet balances for all tokens (batched requests)                  |
-| Deposit Monitor        | Every 30 sec    | Watches pending launches & MM-only tokens for SOL deposits, triggers activation   |
+### Adding New MM Mode - Checklist
 
-*Fast Claim interval is configurable via admin dashboard (10-300 seconds, default 30s).
+**Backend (3 validation schemas):**
+- [ ] `privy-mm.routes.ts:75` - startMmSchema
+- [ ] `privy-launches.routes.ts:196` - launch schema
+- [ ] `privy-tokens.routes.ts:597` - config update schema
 
-**Job Configuration Environment Variables:**
-```
-MULTI_USER_FLYWHEEL_ENABLED=true
-MULTI_USER_FLYWHEEL_INTERVAL_MINUTES=1
-FAST_CLAIM_JOB_ENABLED=true
-FAST_CLAIM_INTERVAL_SECONDS=30
-BALANCE_UPDATE_JOB_ENABLED=true
-BALANCE_UPDATE_INTERVAL_SECONDS=300
-DEPOSIT_MONITOR_ENABLED=true
-DEPOSIT_MONITOR_INTERVAL_MS=30000
-```
+**Deposit Monitor (2 config creators):**
+- [ ] `deposit-monitor.job.ts:719` - `activateMmToken()`
+- [ ] `deposit-monitor.job.ts:323` - `handleSuccessfulLaunch()`
 
-Jobs can be enabled/disabled via environment variables and manually triggered via admin dashboard.
+**Flywheel:**
+- [ ] `multi-user-mm.service.ts:422` - Add switch case + algorithm function
 
-## Adding New MM Modes
+**Prisma (if new fields):**
+- [ ] `prisma/schema.prisma:158` - Add fields to PrivyTokenConfig
+- [ ] Run `npm run db:migrate`
 
-This section provides a comprehensive guide for implementing new market-making algorithm modes. Following this checklist prevents common errors and ensures complete integration across all system components.
+**TMA Frontend (3 type definitions):**
+- [ ] `mm/page.tsx:14` - AlgorithmMode type
+- [ ] `token/[id]/page.tsx` - type + display helpers
+- [ ] `token/[id]/settings/page.tsx` - type + config panel
 
-### Overview of MM Algorithm Modes
+**Common Pitfalls:**
+1. Missing one of 3 validation schemas → 400 errors
+2. Missing deposit monitor function → "Failed to activate MM"
+3. Missing default values → algorithm crash
+4. Frontend types don't match backend → silent failures
 
-Market-making (MM) algorithm modes control how the flywheel executes buy/sell cycles for tokens:
-- **simple**: Default mode - 5 buys followed by 5 sells in sequence
-- **turbo_lite**: High-frequency mode - 8 buys + 8 sells with configurable intervals and rate limits
-- **rebalance**: Balance-focused mode for maintaining token/SOL ratios
-- Additional modes: twap_vwap, dynamic (for specific use cases)
+## Architecture
 
-Algorithm modes are stored in `PrivyTokenConfig.algorithm_mode` and executed by the flywheel service (`backend/src/services/multi-user-mm.service.ts`).
-
-### Turbo Lite Mode Behavior
-
-The turbo_lite algorithm has the following special behaviors:
-
-1. **State Persistence**: State is ALWAYS persisted after each trade (not batched) because each job run only processes one trade per token. This ensures cycle progress is never lost between runs.
-
-2. **Low SOL Auto-Switch**: If SOL balance drops below 0.1 during buy phase, the algorithm automatically switches to sell phase to recover funds instead of getting stuck.
-
-3. **Configurable Parameters**:
-   - `turbo_cycle_size_buys` (default: 8) - Number of buys per cycle
-   - `turbo_cycle_size_sells` (default: 8) - Number of sells per cycle
-   - `turbo_inter_token_delay_ms` (default: 200) - Delay between tokens
-   - `turbo_global_rate_limit` (default: 60) - Max trades per minute
-   - `turbo_confirmation_timeout` (default: 45) - Transaction timeout
-   - `turbo_job_interval_seconds` (default: 15) - Unused, reserved for future
-   - `turbo_batch_state_updates` (default: true) - Unused, state always persists
-
-### Implementation Checklist
-
-**Backend Changes:**
-- [ ] Update Zod validation schemas (3 endpoints: MM-only, launches, token config)
-- [ ] Add config field defaults to deposit monitor (2 functions: `activateMmToken()`, `handleSuccessfulLaunch()`)
-- [ ] Implement algorithm logic in flywheel service
-- [ ] Update Prisma schema if new fields needed
-- [ ] Add database migration if schema changed
-
-**Frontend Changes:**
-- [ ] Update TypeScript interfaces (3 files: mm/page, token/[id]/page, token/[id]/settings/page)
-- [ ] Add UI option to algorithm selectors
-- [ ] Update algorithm display helper functions
-- [ ] Add configuration panel if mode has settings
-- [ ] Update cycle size helper if different from simple mode
-
-**Testing:**
-- [ ] Backend compilation and startup
-- [ ] API endpoint validation (all 3 endpoints)
-- [ ] Frontend UI integration
-- [ ] End-to-end activation flow
-- [ ] Database state verification
-
-### Step-by-Step Guide
-
-#### Step 1: Backend Validation Schemas
-
-Update all three API endpoints that accept MM algorithm modes:
-
-**File**: [backend/src/routes/privy-mm.routes.ts](backend/src/routes/privy-mm.routes.ts#L75) (line ~75)
-```typescript
-const startMmSchema = z.object({
-  tokenMint: z.string().min(32).max(64),
-  mmAlgorithm: z.enum(['simple', 'turbo_lite', 'YOUR_NEW_MODE', 'rebalance']).default('simple'),
-})
-```
-
-**File**: [backend/src/routes/privy-launches.routes.ts](backend/src/routes/privy-launches.routes.ts#L196) (line ~196)
-```typescript
-mmAlgorithm: z.enum(['simple', 'turbo_lite', 'YOUR_NEW_MODE', 'rebalance']).default('simple'),
-```
-
-**File**: [backend/src/routes/privy-tokens.routes.ts](backend/src/routes/privy-tokens.routes.ts#L597) (line ~597)
-```typescript
-algorithmMode: z.enum(['simple', 'turbo_lite', 'YOUR_NEW_MODE', 'rebalance', 'twap_vwap', 'dynamic']).optional(),
-```
-
-#### Step 2: Deposit Monitor Config Creation
-
-**CRITICAL**: The deposit monitor has TWO functions that create token configs. Both must be updated!
-
-**File**: [backend/src/jobs/deposit-monitor.job.ts](backend/src/jobs/deposit-monitor.job.ts#L719-L744)
-
-**Function 1**: `activateMmToken()` (line ~719-744)
-```typescript
-const algorithmMode = pending.mmAlgorithm || 'simple'
-const configData: any = {
-  privyTokenId: token.id,
-  flywheelActive: true,
-  autoClaimEnabled: false,  // MM-only users can't claim fees
-  algorithmMode,
-  minBuyAmountSol: 0.01,
-  maxBuyAmountSol: 0.05,
-  slippageBps: 300,
-  tradingRoute: 'auto',
-}
-
-// Add mode-specific defaults
-if (algorithmMode === 'YOUR_NEW_MODE') {
-  configData.yourConfigField1 = defaultValue1
-  configData.yourConfigField2 = defaultValue2
-  // ... add all mode-specific fields
-}
-
-await tx.privyTokenConfig.create({ data: configData })
-```
-
-**Function 2**: `handleSuccessfulLaunch()` (line ~323-348)
-```typescript
-const launchAlgorithmMode = launch.mmAlgorithm || 'simple'
-const launchConfigData: any = {
-  privyTokenId: userToken.id,
-  flywheelActive: true,
-  autoClaimEnabled: launch.mmAutoClaimEnabled ?? true,
-  algorithmMode: launchAlgorithmMode,
-  minBuyAmountSol: Number(launch.mmMinBuySol) || 0.01,
-  maxBuyAmountSol: Number(launch.mmMaxBuySol) || 0.05,
-  slippageBps: 300,
-  tradingRoute: 'auto',
-}
-
-// Add mode-specific defaults
-if (launchAlgorithmMode === 'YOUR_NEW_MODE') {
-  launchConfigData.yourConfigField1 = defaultValue1
-  launchConfigData.yourConfigField2 = defaultValue2
-  // ... add all mode-specific fields
-}
-
-await prisma.privyTokenConfig.create({ data: launchConfigData })
-```
-
-#### Step 3: Prisma Schema (if new fields needed)
-
-**File**: [backend/prisma/schema.prisma](backend/prisma/schema.prisma#L158) (add to PrivyTokenConfig model around line 158)
-```prisma
-model PrivyTokenConfig {
-  // ... existing fields ...
-
-  // Your new mode configuration
-  yourConfigField1  Int?     @default(value1) @map("your_config_field_1")
-  yourConfigField2  String?  @default("value2") @map("your_config_field_2")
-  // ... add all mode-specific fields with snake_case mapping
-}
-```
-
-Then run:
-```bash
-cd backend
-npm run db:generate  # Generate Prisma client
-npm run db:migrate   # Create and apply migration
-```
-
-#### Step 4: Flywheel Service Implementation
-
-**File**: [backend/src/services/multi-user-mm.service.ts](backend/src/services/multi-user-mm.service.ts#L422)
-
-Add algorithm case to switch statement (around line 422):
-```typescript
-switch (algorithmMode) {
-  case 'simple':
-    return await this.runSimpleAlgorithm(...)
-  case 'turbo_lite':
-    return await this.runTurboLiteAlgorithm(...)
-  case 'YOUR_NEW_MODE':
-    return await this.runYourNewModeAlgorithm(...)
-  default:
-    return await this.runSimpleAlgorithm(...)
-}
-```
-
-Implement your algorithm function:
-```typescript
-private async runYourNewModeAlgorithm(
-  token: PrivyUserTokenWithRelations,
-  config: PrivyTokenConfig,
-  state: PrivyFlywheelState
-): Promise<void> {
-  // Your algorithm implementation
-  // Access config fields: config.your_config_field_1
-  // Update state as needed
-}
-```
-
-#### Step 5: Frontend TypeScript Interfaces
-
-Update algorithm mode types in all relevant files:
-
-Files to update:
-- [tma/src/app/mm/page.tsx](tma/src/app/mm/page.tsx#L14) (line ~14)
-- [tma/src/app/token/[id]/page.tsx](tma/src/app/token/[id]/page.tsx)
-- [tma/src/app/token/[id]/settings/page.tsx](tma/src/app/token/[id]/settings/page.tsx)
-
-```typescript
-type AlgorithmMode = 'simple' | 'turbo_lite' | 'YOUR_NEW_MODE' | 'rebalance'
-```
-
-#### Step 6: Frontend UI - Algorithm Selector
-
-Add your mode to the algorithm selection UI:
-
-**File**: [tma/src/app/mm/page.tsx](tma/src/app/mm/page.tsx#L284-L290) (around line 284-290)
-```tsx
-<div className="grid grid-cols-3 gap-3">  {/* Adjust cols if needed */}
-  {/* Simple mode */}
-  <button ...>⚡ Simple</button>
-
-  {/* Turbo mode */}
-  <button ...>🚀 Turbo</button>
-
-  {/* Your new mode */}
-  <button
-    onClick={() => setFormData({ ...formData, mmAlgorithm: 'YOUR_NEW_MODE' })}
-    className={formData.mmAlgorithm === 'YOUR_NEW_MODE' ? 'border-blue-500' : ''}
-  >
-    <div className="text-2xl mb-2">🎯</div>  {/* Choose appropriate emoji */}
-    <div className="font-semibold">Your Mode</div>
-    <div className="text-xs text-muted-foreground">
-      Description of your mode
-    </div>
-  </button>
-
-  {/* Rebalance mode */}
-  <button ...>⚖️ Rebalance</button>
-</div>
-```
-
-#### Step 7: Frontend Display Helpers
-
-Add display logic for your mode:
-
-**File**: [tma/src/app/token/[id]/page.tsx](tma/src/app/token/[id]/page.tsx) (create helper function)
-```typescript
-const getAlgorithmDisplay = (mode: string | null): string => {
-  switch (mode) {
-    case 'simple': return '⚡ Simple'
-    case 'turbo_lite': return '🚀 Turbo Lite'
-    case 'YOUR_NEW_MODE': return '🎯 Your Mode Name'
-    case 'rebalance': return '⚖️ Rebalance'
-    default: return '⚡ Simple'
-  }
-}
-```
-
-If your mode has different cycle sizes:
-```typescript
-const getCycleSize = (mode: string | null): number => {
-  if (mode === 'turbo_lite') return 8
-  if (mode === 'YOUR_NEW_MODE') return YOUR_CYCLE_SIZE
-  return 5  // default for simple mode
-}
-```
-
-#### Step 8: Settings Page Configuration UI
-
-If your mode has configurable parameters, add a configuration panel:
-
-**File**: [tma/src/app/token/[id]/settings/page.tsx](tma/src/app/token/[id]/settings/page.tsx)
-```tsx
-{config.algorithm_mode === 'YOUR_NEW_MODE' && (
-  <Card>
-    <CardHeader>
-      <CardTitle>🎯 Your Mode Configuration</CardTitle>
-    </CardHeader>
-    <CardContent className="space-y-4">
-      <div>
-        <Label>Your Config Field 1</Label>
-        <Input
-          type="number"
-          value={config.your_config_field_1}
-          onChange={(e) => handleUpdate('your_config_field_1', parseInt(e.target.value))}
-        />
-        <p className="text-xs text-muted-foreground">
-          Description of what this field does
-        </p>
-      </div>
-
-      {/* Add more config fields as needed */}
-    </CardContent>
-  </Card>
-)}
-```
-
-### Common Pitfalls
-
-**Pitfall 1: Validation Schemas Diverging**
-- **Problem**: Three separate API endpoints validate algorithm modes independently
-- **Solution**: Update all three schemas in a single commit to ensure consistency
-- **Files**: [privy-mm.routes.ts](backend/src/routes/privy-mm.routes.ts), [privy-launches.routes.ts](backend/src/routes/privy-launches.routes.ts), [privy-tokens.routes.ts](backend/src/routes/privy-tokens.routes.ts)
-
-**Pitfall 2: Missing Config Fields in Deposit Monitor**
-- **Problem**: Deposit monitor has TWO functions that create token configs, easy to miss one
-- **Solution**: Update both `activateMmToken()` AND `handleSuccessfulLaunch()` functions
-- **Result**: Without this, MM-only tokens fail to activate with error "⚠️ Failed to activate MM"
-
-**Pitfall 3: Forgetting Default Values**
-- **Problem**: If mode-specific fields are undefined, algorithm execution crashes
-- **Solution**: Always provide default values in both Prisma schema and deposit monitor
-- **Example**: Turbo mode needs 7 config fields with specific defaults
-
-**Pitfall 4: TypeScript Type Mismatches**
-- **Problem**: Frontend types don't match backend enum, causing silent failures
-- **Solution**: Update TypeScript interfaces in all 3 TMA pages simultaneously
-- **Files**: [mm/page.tsx](tma/src/app/mm/page.tsx), [token/[id]/page.tsx](tma/src/app/token/[id]/page.tsx), [token/[id]/settings/page.tsx](tma/src/app/token/[id]/settings/page.tsx)
-
-**Pitfall 5: UI Display Not Updated**
-- **Problem**: New mode works but shows as "Simple" in UI or shows wrong cycle counts
-- **Solution**: Update both `getAlgorithmDisplay()` and `getCycleSize()` helper functions
-- **Impact**: User sees incorrect status indicators and cycle progress
-
-**Pitfall 6: Database Schema Not Migrated**
-- **Problem**: New config fields exist in Prisma schema but not in database
-- **Solution**: Always run `npm run db:migrate` after schema changes, not just `db:push`
-- **Result**: Production deployments fail without proper migrations
-
-### Testing Requirements
-
-**Phase 1: Backend Validation**
-```bash
-cd backend
-
-# Compile TypeScript
-npm run build
-# Expected: No compilation errors
-
-# Start server
-npm run dev
-# Expected: Server starts on port 3001 without errors
-```
-
-**Phase 2: API Endpoint Testing**
-
-Test all three endpoints accept your new mode:
-
-```bash
-# Test 1: MM-only token creation
-curl -X POST http://localhost:3001/api/privy/mm/start \
-  -H "Authorization: Bearer YOUR_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"tokenMint": "VALID_MINT", "mmAlgorithm": "YOUR_NEW_MODE"}'
-# Expected: 200 OK with pending MM data
-
-# Test 2: Token launch
-curl -X POST http://localhost:3001/api/privy/launches \
-  -H "Authorization: Bearer YOUR_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "Test",
-    "symbol": "TEST",
-    "description": "Test",
-    "mmAlgorithm": "YOUR_NEW_MODE"
-  }'
-# Expected: 200 OK with launch data
-
-# Test 3: Token config update
-curl -X PUT http://localhost:3001/api/privy/tokens/TOKEN_ID/config \
-  -H "Authorization: Bearer YOUR_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"algorithmMode": "YOUR_NEW_MODE"}'
-# Expected: 200 OK with updated config
-
-# Test 4: Invalid mode (negative test)
-curl -X POST http://localhost:3001/api/privy/mm/start \
-  -H "Authorization: Bearer YOUR_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"tokenMint": "VALID_MINT", "mmAlgorithm": "invalid_mode"}'
-# Expected: 400 Bad Request with validation error
-```
-
-**Phase 3: Frontend Integration**
-
-```bash
-cd tma
-npm run dev
-```
-
-1. Navigate to `/mm` page
-2. Verify your mode appears in algorithm selector with correct emoji and description
-3. Select your mode and create MM-only token
-4. Verify review screen shows correct `mmAlgorithm` value
-5. Click "Start MM" - should succeed (not "invalid request" error)
-
-**Phase 4: End-to-End Activation**
-
-1. **Deposit SOL** to activate MM-only token (0.1 SOL minimum)
-2. **Wait 30 seconds** for deposit monitor to detect
-3. **Verify token activates** and appears in dashboard
-4. **Check algorithm badge** shows your mode with correct emoji
-5. **Verify cycle counts** if your mode has different cycle size
-6. **Check settings page** shows your mode selected
-7. **Verify config panel** appears if your mode has settings
-
-**Phase 5: Database Verification**
-
-```bash
-cd backend
-npm run db:studio
-```
-
-Navigate to `PrivyTokenConfig` table and verify:
-- `algorithm_mode` = 'YOUR_NEW_MODE'
-- All mode-specific config fields have correct default values
-- No null values where defaults should exist
-
-**Phase 6: Flywheel Execution**
-
-```bash
-cd backend
-tail -f logs/combined.log | grep -i "your mode"
-```
-
-Expected output (adjust based on your algorithm):
-```
-🎯 [Your Mode] Starting cycle for token [MINT]
-🎯 [Your Mode] Executing operation 1/N
-🎯 [Your Mode] Executing operation 2/N
-...
-```
-
-**Phase 7: Regression Testing**
-
-Ensure existing modes still work:
-- Create MM-only token with 'simple' mode - should work
-- Create MM-only token with 'turbo_lite' mode - should work
-- Update existing token config to different mode - should work
-- Invalid algorithm values properly rejected with 400 error
-
-### Success Criteria
-
-Your new MM mode is fully implemented when:
-
-- ✅ Backend compiles without TypeScript errors
-- ✅ All three API endpoints accept your mode in validation
-- ✅ Deposit monitor creates mode-specific config fields
-- ✅ Token launches create mode-specific config fields
-- ✅ Prisma schema includes new fields with migrations
-- ✅ Flywheel service has algorithm implementation
-- ✅ Frontend UI shows your mode in all selectors
-- ✅ Algorithm display helper returns correct name/emoji
-- ✅ Cycle size helper returns correct value (if applicable)
-- ✅ Settings page shows mode-specific configuration (if applicable)
-- ✅ Creating MM-only token with your mode succeeds
-- ✅ Activating token with your mode succeeds
-- ✅ Flywheel executes your algorithm correctly
-- ✅ Backend logs show your mode's execution
-- ✅ Database stores correct algorithm_mode and config values
-- ✅ Existing modes continue to work (no regressions)
-
-### Reference Implementation: Turbo Mode
-
-For a complete reference implementation, see the turbo_lite mode:
-
-**Backend:**
-- Validation: [privy-mm.routes.ts:75](backend/src/routes/privy-mm.routes.ts#L75), [privy-launches.routes.ts:196](backend/src/routes/privy-launches.routes.ts#L196), [privy-tokens.routes.ts:597](backend/src/routes/privy-tokens.routes.ts#L597)
-- Config defaults: [deposit-monitor.job.ts:719-744](backend/src/jobs/deposit-monitor.job.ts#L719-L744) and [deposit-monitor.job.ts:323-348](backend/src/jobs/deposit-monitor.job.ts#L323-L348)
-- Schema: [prisma/schema.prisma:158-164](backend/prisma/schema.prisma#L158-L164) (7 config fields)
-- Algorithm: [multi-user-mm.service.ts:586](backend/src/services/multi-user-mm.service.ts#L586) (`runTurboLiteAlgorithm`)
-
-**Frontend:**
-- Types: [mm/page.tsx:14](tma/src/app/mm/page.tsx#L14), [token/[id]/page.tsx](tma/src/app/token/[id]/page.tsx), [token/[id]/settings/page.tsx](tma/src/app/token/[id]/settings/page.tsx)
-- Selector: [mm/page.tsx:286-287](tma/src/app/mm/page.tsx#L286-L287) (🚀 emoji, "8 buys, 8 sells" description)
-- Display: [token/[id]/page.tsx](tma/src/app/token/[id]/page.tsx) (`getAlgorithmDisplay` returns '🚀 Turbo Lite')
-- Cycle size: [token/[id]/page.tsx](tma/src/app/token/[id]/page.tsx) (`getCycleSize` returns 8)
-- Config panel: [token/[id]/settings/page.tsx](tma/src/app/token/[id]/settings/page.tsx) (turbo configuration card)
-
-## Key Architecture Patterns
-
-### Dual Database Strategy
-
-**Legacy System (Supabase)**:
-- Wallet signature authentication
-- Encrypted private keys stored in database (AES-256-GCM)
-- Tables: `users`, `user_tokens`, `user_token_config`, `user_flywheel_state`
-- Backend decrypts keys for transaction signing
-
-**Privy System (Render Postgres + Prisma)**:
-- Privy JWT token authentication
-- **No private keys stored** - uses delegated signing
-- Tables: `PrivyUser`, `PrivyWallet`, `PrivyUserToken`, `PrivyTokenConfig`, etc.
-- Backend delegates signing to Privy API via `PRIVY_AUTHORIZATION_KEY`
+### Dual Database
+- **Legacy (Supabase)**: `users`, `user_tokens`, `user_token_config` - encrypted keys
+- **Privy (Prisma)**: `PrivyUser`, `PrivyWallet`, `PrivyUserToken`, `PrivyTokenConfig` - NO keys
 
 ### Privy Delegated Signing
+1. User delegates wallet via TMA
+2. Backend stores only wallet addresses
+3. Signing via Privy API with `PRIVY_AUTHORIZATION_KEY`
 
-Privy embedded wallets use server-side delegated signing:
-1. User authenticates via TMA and delegates wallet authority to ClaudeWheel
-2. Backend stores only wallet addresses (no private keys)
-3. When signing needed, backend calls Privy API with authorization key
-4. Privy signs transaction on user's behalf
+Key service: `privy.service.ts` → `signAndSendSolanaTransaction()`, `verifyAuthToken()`
 
-Key service: `backend/src/services/privy.service.ts`
-- `signAndSendSolanaTransaction()` - Sign and broadcast in one call
-- `signSolanaTransaction()` - Sign only
-- `verifyAuthToken()` - Validate Privy JWT
-
-### TMA Authentication Flow
-
-1. User opens Telegram Mini App
-2. Privy SDK authenticates user (Telegram, email, or wallet)
-3. Backend verifies Privy auth token
-4. If new user: `needsOnboarding: true` → TMA creates embedded wallets
-5. User delegates wallet signing to ClaudeWheel
-6. Backend calls `POST /api/users/complete-onboarding` to store wallet IDs
-
-### Backend Services
-
-- Services are singleton instances exported from their modules
-- Jobs use `node-cron` for scheduling automated tasks
-- Admin WebSocket provides real-time updates to the dashboard
-- Structured logging with Pino using emoji prefixes
-
-### Discord Error Reporting
-
-All errors are automatically sent to a Discord webhook with rich context:
-- **Rate limiting**: Same error only sent once per configurable interval (default 60s)
-- **Deduplication**: Errors hashed by message + stack + module to prevent spam
-- **Rich embeds**: Formatted with module, operation, stack trace, system info
-- **Severity levels**: Error (red), Fatal (dark red), Warning (orange), Critical (magenta)
-- **Global handlers**: Uncaught exceptions and unhandled rejections auto-reported
-
-Key files:
-- `backend/src/services/discord-error.service.ts` - Core Discord integration
-- `backend/src/utils/logger.ts` - Logger utilities with Discord hooks
-
-Usage in code:
-```typescript
-import { logErrorWithDiscord, logFatalWithDiscord, reportToDiscord } from '../utils/logger'
-
-// Log error and send to Discord
-await logErrorWithDiscord(loggers.myModule, error, 'Operation failed', {
-  userId: 'user123',
-  tokenMint: 'mint...',
-  additionalInfo: { context: 'value' }
-})
-
-// For critical errors (bypasses rate limit)
-await logFatalWithDiscord(loggers.myModule, error, 'Critical failure', context)
-
-// Report to Discord without local logging
-reportToDiscord(error, { module: 'myModule', operation: 'task' })
-```
-
-Admin endpoints:
-- `GET /api/admin/discord/stats` - Get reporting stats
-- `POST /api/admin/discord/test` - Send test error to verify webhook
-
-### Frontend State
-
-- Zustand stores in `_stores/` directories for local state
-- TanStack Query for API data fetching and caching
-- Supabase real-time subscriptions for live updates
-- Wallet context via Solana Wallet Adapter providers
-
-### Multi-User Architecture
-
-- Platform-level fee collection (10% of claims, 90% to user)
-- Independent token & configuration per user
-- Separate flywheel cycles for legacy vs Privy tokens
-
-### Security
-
-- AES-256-GCM encryption for legacy private keys
-- Privy system stores NO private keys (delegated signing)
-- Wallet signature verification for admin endpoints
-- Row-level security (RLS) in Supabase
-- Service role key required for backend operations
+### TMA Auth Flow
+1. User opens TMA → Privy auth → Backend verifies token
+2. If new: create embedded wallets → delegate to ClaudeWheel
+3. Complete via `POST /api/users/complete-onboarding`
 
 ## API Routes
 
-### Status Endpoints (Public)
+**Public**: `/api/status`, `/api/status/health|wallets|transactions`
 
-- `GET /api/status` - Platform status
-- `GET /api/status/health` - Health check
-- `GET /api/status/wallets` - Wallet balances
-- `GET /api/status/transactions` - Transaction history
+**Admin** (signature auth): `/api/admin/config|tokens|platform-settings|flywheel|fast-claim|wheel`
 
-### Admin Endpoints (Signature-authenticated)
+**Privy Auth**: `/api/privy/verify|status`
 
-- `GET /api/admin/nonce` - Get signature nonce
-- `POST /api/admin/config` - Update configuration
-- `GET /api/admin/platform-settings` - Get platform settings
-- `PUT /api/admin/platform-settings` - Update platform settings
-- `GET /api/admin/tokens` - List all tokens
-- `GET /api/admin/tokens/:id` - Token details
-- `POST /api/admin/tokens/:id/verify` - Verify token
-- `POST /api/admin/tokens/:id/suspend` - Suspend token
-- `POST /api/admin/tokens/:id/unsuspend` - Unsuspend token
-- `PUT /api/admin/tokens/:id/limits` - Update trading limits
-- `GET /api/admin/platform-stats` - Platform statistics
-- `POST /api/admin/fast-claim/trigger` - Trigger fast claim
-- `GET /api/admin/fast-claim/status` - Fast claim status
-- `POST /api/admin/fast-claim/restart` - Restart fast claim
-- `GET /api/admin/balance-update/status` - Balance update status
-- `POST /api/admin/balance-update/trigger` - Trigger balance update
-- `GET /api/admin/flywheel-status` - Flywheel status
-- `POST /api/admin/flywheel/trigger` - Manual flywheel trigger
-- `GET /api/admin/wheel` - WHEEL token status (live from Solana)
-- `POST /api/admin/wheel/sell` - WHEEL manual sell
-- `GET /api/admin/wheel/claimable` - WHEEL claimable fees
-- `POST /api/admin/wheel/claim` - WHEEL manual claim
-- `POST /api/admin/manual-sell` - Manual sell any token
-- `GET /api/admin/telegram/stats` - Telegram bot stats
-- `GET /api/admin/telegram/launches` - Telegram launches
-- `GET /api/admin/telegram/refunds` - Pending refunds
-- `POST /api/admin/telegram/refund/:id` - Process refund
-- `POST /api/admin/discord/test` - Test Discord webhook
-- `GET /api/admin/discord/stats` - Discord reporting stats
+**Users**: `/api/users/complete-onboarding|profile|onboarding-status`
 
-### Legacy User Token Endpoints (Deprecated)
+**Tokens**: `/api/privy/tokens` - CRUD, claim, transactions, claimable
 
-- `GET /api/user/tokens` - List user's tokens
-- `POST /api/user/tokens` - Register new token
-- `GET /api/user/tokens/:tokenId` - Token details
-- `PUT /api/user/tokens/:tokenId/config` - Update token config
-- `POST /api/user/tokens/:tokenId/claim` - Claim fees
-- `POST /api/user/tokens/:tokenId/sell` - Manual sell
+**Launches**: `/api/privy/launches` - create, upload-image, pending, history, devbuy
 
-### Privy Authentication Endpoints
+**MM-Only**: `/api/privy/mm/start|pending|withdraw`
 
-- `POST /api/privy/verify` - Verify Privy auth token, check onboarding status
-- `GET /api/privy/status` - Check if Privy is configured
-
-### Privy User Endpoints
-
-- `POST /api/users/complete-onboarding` - Complete TMA onboarding
-- `GET /api/users/profile` - Get user profile and wallets
-- `GET /api/users/onboarding-status` - Check if user is onboarded
-- `PUT /api/users/profile` - Update display name
-- `POST /api/users/update-delegation` - Update wallet delegation status
-
-### Privy Token Endpoints
-
-- `GET /api/privy/tokens` - List user's Privy tokens
-- `POST /api/privy/tokens` - Register existing token
-- `POST /api/privy/tokens/register-with-import` - Register with imported dev wallet
-- `GET /api/privy/tokens/:id` - Token details
-- `PUT /api/privy/tokens/:id/config` - Update token config
-- `DELETE /api/privy/tokens/:id` - Deactivate token
-- `POST /api/privy/tokens/:id/claim` - Claim fees
-- `GET /api/privy/tokens/:id/transactions` - Transaction history
-- `GET /api/privy/tokens/:id/claims` - Claim history
-- `GET /api/privy/tokens/:id/claimable` - Claimable amount
-
-### Privy Launch Endpoints
-
-- `POST /api/privy/launches` - Create pending token launch
-- `POST /api/privy/launches/upload-image` - Upload token image (Pinata)
-- `GET /api/privy/launches/pending` - Get current pending launch
-- `GET /api/privy/launches/history` - Get launch history
-- `GET /api/privy/launches/:id` - Get launch status
-- `DELETE /api/privy/launches/:id` - Cancel pending launch
-- `POST /api/privy/launches/devbuy-action` - Execute dev buy
-- `GET /api/privy/launches/devbuy-balance/:tokenId` - Dev buy balance
-
-### Privy MM-Only Endpoints
-
-- `POST /api/privy/mm/start` - Start MM-only mode on any Bags.fm token
-- `GET /api/privy/mm/pending` - Get pending MM activation
-- `DELETE /api/privy/mm/pending/:id` - Cancel pending MM
-- `POST /api/privy/mm/:tokenId/withdraw` - Withdraw from MM
-
-### Bags.fm Proxy Endpoints
-
-- `GET /api/bags/token/:mint` - Token info
-- `GET /api/bags/fees/:mint` - Fee statistics
-- `GET /api/bags/claimable/:wallet` - Claimable fees
-- `GET /api/bags/claim-stats/:wallet` - Claim statistics
-- `GET /api/bags/quote` - Price quote
-- `GET /api/bags/dashboard` - Dashboard data
-- `POST /api/bags/api-key` - Configure API key
+**Bags Proxy**: `/api/bags/token|fees|claimable|quote|dashboard`
 
 ## Database Schema
 
-### Legacy (Supabase) - Deprecated
+### Legacy (Supabase)
+`wallet_balances`, `transactions`, `fee_stats`, `config`, `users`, `user_tokens`, `user_token_config`, `user_flywheel_state`
 
-| Table                    | Purpose                                                 |
-| ------------------------ | ------------------------------------------------------- |
-| `wallet_balances`        | Platform Dev/Ops wallet state                           |
-| `transactions`           | Fee collection & trading history                        |
-| `fee_stats`              | Aggregated fee metrics                                  |
-| `config`                 | Platform configuration (includes WHEEL trading limits)  |
-| `users`                  | Wallet-based user accounts                              |
-| `user_tokens`            | User's registered tokens with encrypted dev wallet keys |
-| `user_token_config`      | Per-token market-making configuration                   |
-| `user_flywheel_state`    | Algorithm state for recovery after restarts             |
-| `pending_token_launches` | Legacy token launches awaiting deposit                  |
-| `telegram_users`         | Telegram bot user mappings                              |
-
-### Privy (Prisma) - Active System
-
-#### User & Authentication
-| Table                 | Purpose                                              |
-| --------------------- | ---------------------------------------------------- |
-| `PrivyUser`           | Privy-authenticated users (telegramId, delegation)   |
-| `PrivyWallet`         | Embedded wallets (dev/ops, NO private keys stored)   |
-| `AdminRole`           | Admin role-based access control                      |
-
-#### Tokens & Trading
-| Table                 | Purpose                                              |
-| --------------------- | ---------------------------------------------------- |
-| `PrivyUserToken`      | Token registrations for Privy users                  |
-| `PrivyTokenConfig`    | Per-token MM config (includes turbo mode settings)   |
-| `PrivyFlywheelState`  | Algorithm state with failure tracking                |
-
-#### Launches & MM
-| Table                 | Purpose                                              |
-| --------------------- | ---------------------------------------------------- |
-| `PrivyPendingLaunch`  | Token launches awaiting deposit (with devBuy option) |
-| `PrivyMmPending`      | MM-only mode pending tokens                          |
-
-#### Trading History
-| Table                 | Purpose                                              |
-| --------------------- | ---------------------------------------------------- |
-| `PrivyTransaction`    | All trades (buy/sell/transfer/claim)                 |
-| `PrivyClaimHistory`   | Fee claims with 10/90 platform split tracking        |
-
-#### Platform Management
-| Table                    | Purpose                                           |
-| ------------------------ | ------------------------------------------------- |
-| `PlatformConfig`         | Global platform settings (trading limits, etc.)   |
-| `PlatformWalletBalance`  | Platform wallet balances (dev/ops)                |
-| `PlatformFeeStats`       | Aggregated fee collection statistics              |
-| `AuditLog`               | Admin action audit trail                          |
-
-#### Telegram Integration
-| Table                       | Purpose                                        |
-| --------------------------- | ---------------------------------------------- |
-| `TelegramUser`              | Maps Telegram IDs to Privy users               |
-| `TelegramAlertSubscriber`   | Maintenance alert subscribers                  |
-| `BotStatus`                 | Maintenance mode singleton                     |
-
-## Environment Configuration
-
-### Core Variables
-
-| Variable                | Purpose                                 |
-| ----------------------- | --------------------------------------- |
-| `PORT`                  | Server port (default: 3001)             |
-| `NODE_ENV`              | development/production/test             |
-| `SOLANA_RPC_URL`        | Solana RPC endpoint                     |
-| `SOLANA_WS_URL`         | Solana WebSocket URL                    |
-| `HELIUS_API_KEY`        | Helius API access                       |
-| `TOKEN_MINT_ADDRESS`    | Default token for single-token mode     |
-
-### Legacy (Supabase) Variables
-
-| Variable                | Purpose                            |
-| ----------------------- | ---------------------------------- |
-| `SUPABASE_URL`          | Supabase project URL               |
-| `SUPABASE_SERVICE_KEY`  | Supabase service role key          |
-| `ENCRYPTION_MASTER_KEY` | AES-256 key (hex string, 32 bytes) |
-
-### Privy Variables
-
-| Variable                  | Purpose                                     |
-| ------------------------- | ------------------------------------------- |
-| `PRIVY_APP_ID`            | Privy application ID                        |
-| `PRIVY_APP_SECRET`        | Privy API secret                            |
-| `PRIVY_AUTHORIZATION_KEY` | Hex-encoded key for delegated wallet signing|
-| `PRIVY_DATABASE_URL`      | Render Postgres connection string           |
-| `TMA_URL`                 | Telegram Mini App URL for notifications     |
-
-### Other Variables
-
-| Variable                | Purpose                                 |
-| ----------------------- | --------------------------------------- |
-| `BAGS_FM_API_KEY`       | Bags.fm API access                      |
-| `TELEGRAM_BOT_TOKEN`    | Bot token from @BotFather               |
-| `PLATFORM_FEE_PERCENTAGE` | Platform fee (default: 10%)           |
-| `ENABLE_*_JOB`          | Flags to enable/disable individual jobs |
-
-### Discord Error Reporting Variables
-
-| Variable                          | Purpose                                              |
-| --------------------------------- | ---------------------------------------------------- |
-| `DISCORD_ERROR_WEBHOOK_URL`       | Discord webhook URL for error notifications          |
-| `DISCORD_ERROR_RATE_LIMIT_SECONDS`| Min seconds between same error (default: 60)         |
-| `DISCORD_ERROR_ENABLED`           | Enable/disable Discord error reporting (default: true)|
-
-## Admin Dashboard Settings
-
-The admin dashboard at `/admin` provides configuration for various platform settings.
-
-### Platform Settings (`/api/admin/settings`)
-
-| Setting                  | Type    | Description                                           |
-| ------------------------ | ------- | ----------------------------------------------------- |
-| `fastClaimIntervalSeconds` | number | Fast claim job interval (10-300 seconds)             |
-| `fastClaimEnabled`       | boolean | Enable/disable fast claim job                         |
-| `flywheelJobEnabled`     | boolean | Enable/disable flywheel job                           |
-| `wheelMinBuySol`         | number  | WHEEL token minimum buy amount (in SOL)               |
-| `wheelMaxBuySol`         | number  | WHEEL token maximum buy amount (in SOL)               |
-| `wheelMinSellSol`        | number  | WHEEL token minimum sell amount (in SOL)              |
-| `wheelMaxSellSol`        | number  | WHEEL token maximum sell amount (in SOL)              |
-
-### WHEEL Token Special Handling
-
-- WHEEL token (platform token) is excluded from platform fees (0% fee vs 10% for others)
-- WHEEL wallet balances are fetched LIVE from Solana on each request (not cached)
-- WHEEL has separate claim threshold (0.05 SOL) vs regular tokens (0.15 SOL)
-- Dev wallet maintains 0.1 SOL reserve, transfers excess to ops wallet after claims
+### Privy (Prisma)
+**Users**: `PrivyUser`, `PrivyWallet`, `AdminRole`
+**Tokens**: `PrivyUserToken`, `PrivyTokenConfig`, `PrivyFlywheelState`
+**Launches**: `PrivyPendingLaunch`, `PrivyMmPending`
+**History**: `PrivyTransaction`, `PrivyClaimHistory`
+**Platform**: `PlatformConfig`, `PlatformWalletBalance`, `AuditLog`
+**Telegram**: `TelegramUser`, `BotStatus`
 
 ## Key Files
 
-### Core Services
+| File | Purpose |
+|------|---------|
+| `backend/src/services/multi-user-mm.service.ts` | Core MM (flywheel) |
+| `backend/src/services/privy.service.ts` | Privy auth + signing |
+| `backend/src/jobs/deposit-monitor.job.ts` | Deposit → activation |
+| `backend/src/services/fast-claim.service.ts` | Fee claiming |
+| `backend/prisma/schema.prisma` | Privy database |
+| `tma/src/app/mm/page.tsx` | MM-only mode UI |
+| `tma/src/app/token/[id]/settings/page.tsx` | Token config UI |
 
-| File                                            | Purpose                                   |
-| ----------------------------------------------- | ----------------------------------------- |
-| `backend/src/index.ts`                          | Server entry point, route registration    |
-| `backend/src/config/env.ts`                     | Environment validation schema (Zod)       |
-| `backend/src/config/prisma.ts`                  | Prisma client configuration               |
-| `backend/src/config/database.ts`                | Supabase client configuration             |
-| `backend/src/services/discord-error.service.ts` | Discord webhook error reporting           |
-| `backend/src/utils/logger.ts`                   | Pino logging with Discord integration     |
+## Environment Variables
 
-### Market Making
+**Core**: `PORT`, `NODE_ENV`, `SOLANA_RPC_URL`, `HELIUS_API_KEY`
+**Legacy**: `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`, `ENCRYPTION_MASTER_KEY`
+**Privy**: `PRIVY_APP_ID`, `PRIVY_APP_SECRET`, `PRIVY_AUTHORIZATION_KEY`, `PRIVY_DATABASE_URL`
+**Other**: `BAGS_FM_API_KEY`, `TELEGRAM_BOT_TOKEN`, `DISCORD_ERROR_WEBHOOK_URL`
 
-| File                                               | Purpose                                |
-| -------------------------------------------------- | -------------------------------------- |
-| `backend/src/services/multi-user-mm.service.ts`    | Core market-making (legacy + Privy)    |
-| `backend/src/services/fast-claim.service.ts`       | Fee claiming automation                |
-| `backend/src/services/token-launcher.ts`           | Token launch on Bags.fm                |
-| `backend/src/jobs/deposit-monitor.job.ts`          | Monitors deposits, triggers launches   |
+## TMA Pages
 
-### Privy Integration
+| Path | Purpose |
+|------|---------|
+| `/onboarding` | Create wallets, delegate signing |
+| `/dashboard` | Token list, balances |
+| `/token/[id]` | Details, MM status, trading |
+| `/token/[id]/settings` | Algorithm config |
+| `/launch` | Token launch wizard |
+| `/mm` | MM-only mode |
 
-| File                                            | Purpose                                |
-| ----------------------------------------------- | -------------------------------------- |
-| `backend/src/services/privy.service.ts`         | Privy auth & delegated signing         |
-| `backend/src/routes/privy-auth.routes.ts`       | Privy authentication endpoints         |
-| `backend/src/routes/privy-users.routes.ts`      | User profile and onboarding            |
-| `backend/src/routes/privy-tokens.routes.ts`     | Privy token management                 |
-| `backend/src/routes/privy-launches.routes.ts`   | Token launch endpoints                 |
-| `backend/src/routes/privy-mm.routes.ts`         | MM-only mode endpoints                 |
-| `backend/prisma/schema.prisma`                  | Privy database schema                  |
-
-### Admin & Frontend
-
-| File                                            | Purpose                                |
-| ----------------------------------------------- | -------------------------------------- |
-| `backend/src/routes/admin.routes.ts`            | Admin API endpoints                    |
-| `backend/src/telegram/bot.ts`                   | Telegram bot (notification-only)       |
-| `frontend/app/admin/_stores/adminStore.ts`      | Admin UI state                         |
-| `frontend/app/admin/_lib/adminApi.ts`           | Admin API client with types            |
-| `frontend/app/admin/_components/views/SettingsView.tsx` | Admin settings configuration UI |
-| `frontend/app/components/PriceChart.tsx`        | DexScreener price chart component      |
-| `frontend/lib/api.ts`                           | API client utilities                   |
-
-### TMA (Telegram Mini App)
-
-| File                                            | Purpose                                |
-| ----------------------------------------------- | -------------------------------------- |
-| `tma/src/app/page.tsx`                          | Root/index page                        |
-| `tma/src/app/onboarding/page.tsx`               | First-time wallet setup                |
-| `tma/src/app/dashboard/page.tsx`                | Main token list & balances             |
-| `tma/src/app/token/[id]/page.tsx`               | Token details & trading                |
-| `tma/src/app/token/[id]/settings/page.tsx`      | Token MM configuration                 |
-| `tma/src/app/launch/page.tsx`                   | Multi-step token launch wizard         |
-| `tma/src/app/mm/page.tsx`                       | MM-only mode (any Bags.fm token)       |
-| `tma/src/app/register/page.tsx`                 | Import existing token                  |
-| `tma/src/app/settings/page.tsx`                 | User profile & preferences             |
-
-## TMA Pages & Features
-
-| Page | Path | Features |
-|------|------|----------|
-| **Index** | `/` | Welcome/entry point, redirects to dashboard |
-| **Onboarding** | `/onboarding` | Create dev/ops wallets, delegate signing to backend |
-| **Dashboard** | `/dashboard` | List tokens, view balances, quick actions, algorithm badges |
-| **Token Details** | `/token/[id]` | Token info, balance, MM status, cycle progress, manual trading |
-| **Token Settings** | `/token/[id]/settings` | Configure algorithm mode, trading parameters, turbo settings |
-| **Launch Token** | `/launch` | Multi-step wizard: details → socials → MM config → review → deposit |
-| **MM Mode** | `/mm` | Start market-making on any Bags.fm token (no launch needed) |
-| **Register Token** | `/register` | Import existing token to portfolio |
-| **Settings** | `/settings` | User profile, wallet info, preferences |
-
-**Token Source Types:**
-- `launched` - Token created via ClaudeWheel launch wizard
-- `registered` - Existing token imported to portfolio
-- `mm_only` - Market-making only (no launch, no fee claiming)
-
-## Testing Conventions
-
-- Test files use `.test.ts` suffix and co-locate with source files
-- Use Vitest's `describe/it/expect` syntax
-- Backend tests mock external services (Supabase, Solana RPC, Privy)
-- Frontend tests use Testing Library for component testing
+**Token Sources**: `launched` (wizard), `registered` (imported), `mm_only` (no claiming)
 
 ## Code Style
-
-- TypeScript strict mode enabled
-- Functional patterns preferred over classes (except singleton services)
-- Async/await for all asynchronous operations
-- Zod schemas for runtime validation of external data
-- Structured logging with Pino using emoji prefixes for visual clarity
-- Section headers with ASCII art separators in larger files
-
-## Planned Changes
-
-The following changes are planned but not yet implemented:
-
-1. **Per-Token Platform Fees**: Make platform fee percentage configurable per token (currently hardcoded 10%). Add `platform_fee_percentage` column to config tables.
-
-2. **Remove Jupiter Service**: Since Bags SDK handles routing through Jupiter automatically for graduated tokens, the separate `jupiter.service.ts` can be removed and `multi-user-mm.service.ts` refactored to use Bags SDK directly.
-
-3. **Simplify Trading Route**: The `trading_route` config option (bags/jupiter/auto) can be deprecated since Bags SDK auto-routes.
+- TypeScript strict, functional patterns, async/await
+- Zod for runtime validation
+- Pino logging with emoji prefixes
+- Vitest for testing
 
 ## Claude Rules
 
-After completing a task that involves tool use, provide a quick summary of the work you've done
-
 <default_to_action>
-By default, implement changes rather than only suggesting them, If the user's intent is unclear, infer the most useful likely action and procceed, using tools to discover any missing details instead of guessing try to infer the user's intent about whether a tool call (e.g. file edit or read) is intended or not, and act accordingly.
+Implement changes rather than suggesting. Infer user intent and proceed with tool calls.
 </default_to_action>
 
 <use_parallel_tool_calls>
-If you intend to call multiple tools and there are no dependencies
-between the tool calls, make all of the independent tool calls in
-parallel. Prioritize calling tools simultaneously whenever the
-actions can be done in parallel rather than sequentially. For
-example, when reading 3 files, run 3 tool calls in parallel to read
-all 3 files into context at the same time. Maximize use of parallel
-tool calls where possible to increase speed and efficiency.
-However, if some tool calls depend on previous calls to inform
-dependent values like the parameters, do not call these tools in
-parallel and instead call them sequentially. Never use placeholders
-or guess missing parameters in tool calls.
+Run independent tool calls in parallel. Never use placeholders.
 </use_parallel_tool_calls>
 
 <investigate_before_answering>
-Never speculate about code you have not opened. If the user
-references a specific file, you MUST read the file before
-answering. Make sure to investigate and read relevant files BEFORE
-answering questions about the codebase. Never make any claims about
-code before investigating unless you are certain of the correct
-answer - give grounded and hallucination-free answers.
+Never speculate - read files before answering. Grounded, hallucination-free answers.
 </investigate_before_answering>

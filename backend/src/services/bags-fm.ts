@@ -152,6 +152,11 @@ class BagsFmService {
             if (errorBody.resetTime) {
               this.rateLimitResetTime = new Date(errorBody.resetTime)
             }
+            // Set minimum cooldown if no resetTime provided
+            if (!this.rateLimitResetTime) {
+              this.rateLimitResetTime = new Date(Date.now() + 30000)  // 30s cooldown
+              this.rateLimitRemaining = 0
+            }
             loggers.bags.error({
               status: 429,
               remaining: this.rateLimitRemaining,
@@ -159,7 +164,10 @@ class BagsFmService {
               endpoint,
             }, 'Bags.fm rate limit hit')
           } catch {
-            loggers.bags.error({ status: 429, endpoint }, 'Bags.fm rate limit hit (no body)')
+            // Set minimum cooldown even if no body
+            this.rateLimitResetTime = new Date(Date.now() + 30000)  // 30s cooldown
+            this.rateLimitRemaining = 0
+            loggers.bags.error({ status: 429, endpoint, resetTime: this.rateLimitResetTime.toISOString() }, 'Bags.fm rate limit hit (no body, using 30s cooldown)')
           }
         } else {
           loggers.bags.error({ status: response.status, statusText: response.statusText, responseBody: responseText.slice(0, 500) }, 'Bags.fm API error')
@@ -504,6 +512,11 @@ class BagsFmService {
     _side?: 'buy' | 'sell', // Kept for API compatibility but not sent to Bags.fm
     slippageBps: number = 300 // Default 3% slippage for bonding curve trades
   ): Promise<TradeQuote | null> {
+    // Pre-request rate limit check - wait if we're currently rate limited
+    if (this.isRateLimited()) {
+      await this.waitForRateLimitReset()
+    }
+
     // Validate amount - must be positive integer (lamports/smallest units)
     if (!amount || amount <= 0 || !Number.isFinite(amount)) {
       loggers.bags.error({ amount }, 'Invalid amount for trade quote - must be positive number')
@@ -517,8 +530,8 @@ class BagsFmService {
       return null
     }
 
-    // Retry configuration (exponential backoff)
-    const retryDelays = [500, 1000, 2000]
+    // Retry configuration (exponential backoff) - longer delays for rate limit recovery
+    const retryDelays = [2000, 5000, 10000]  // 2s, 5s, 10s
     const maxRetries = 3
 
     loggers.bags.info({

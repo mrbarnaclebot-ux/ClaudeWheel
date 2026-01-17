@@ -336,7 +336,7 @@ class MultiUserMMService {
         const config = token.privy_token_config
         const algorithmMode = config?.algorithm_mode ?? 'simple'
         const tokenRateLimit = algorithmMode === 'turbo_lite'
-          ? (config?.turbo_global_rate_limit ?? 60)
+          ? (config?.turbo_global_rate_limit ?? 30)  // Conservative default: 30 trades/min
           : maxTradesPerMinute
 
         // Check rate limit
@@ -361,7 +361,7 @@ class MultiUserMMService {
 
           // Algorithm-specific delay between tokens
           const interTokenDelay = algorithmMode === 'turbo_lite'
-            ? (config?.turbo_inter_token_delay_ms ?? 200)
+            ? (config?.turbo_inter_token_delay_ms ?? 500)  // Conservative default: 500ms
             : 500
           await this.sleep(interTokenDelay)
         } catch (error: any) {
@@ -745,7 +745,7 @@ class MultiUserMMService {
     // Get turbo mode configuration with defaults
     const turboCycleSizeBuys = config.turbo_cycle_size_buys ?? 8
     const turboCycleSizeSells = config.turbo_cycle_size_sells ?? 8
-    const interTradeDelayMs = config.turbo_inter_token_delay_ms ?? 300
+    const interTradeDelayMs = config.turbo_inter_token_delay_ms ?? 500  // Conservative default: 500ms
 
     // Get percentage settings
     const buyPercent = config.buy_percent || 20
@@ -792,7 +792,7 @@ class MultiUserMMService {
 
         // Consecutive failure tracking to prevent infinite loops
         let consecutiveQuoteFailures = 0
-        const maxConsecutiveQuoteFailures = 3
+        const maxConsecutiveQuoteFailures = 5  // Allow more transient failures before pausing
 
         while (rapidBuysCompleted < turboCycleSizeBuys) {
           // Check SOL balance
@@ -946,7 +946,7 @@ class MultiUserMMService {
 
         // Consecutive failure tracking to prevent infinite loops
         let consecutiveQuoteFailures = 0
-        const maxConsecutiveQuoteFailures = 3
+        const maxConsecutiveQuoteFailures = 5  // Allow more transient failures before pausing
 
         loggers.flywheel.info({
           tokenSymbol: token.token_symbol,
