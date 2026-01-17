@@ -265,7 +265,7 @@ export default function Dashboard() {
                 </h3>
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                   <a
-                    href="https://bags.fm/token/8JLGQ7RqhsvhsDhvjMuJUeeuaQ53GTJqSHNaBWf4BAGS"
+                    href="https://bags.fm/8JLGQ7RqhsvhsDhvjMuJUeeuaQ53GTJqSHNaBWf4BAGS"
                     target="_blank"
                     rel="noopener noreferrer"
                     className="flex items-center gap-3 p-4 rounded-xl bg-bg-secondary/50 border border-border-subtle hover:border-wood-light/30 hover:bg-bg-card transition-all duration-300 group"
