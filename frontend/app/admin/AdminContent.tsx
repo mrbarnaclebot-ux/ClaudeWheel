@@ -63,7 +63,7 @@ interface Config {
   buy_interval_minutes: number
   slippage_bps: number
   // Advanced algorithm settings
-  algorithm_mode: 'simple' | 'smart' | 'rebalance'
+  algorithm_mode: 'simple' | 'turbo_lite' | 'rebalance'
   target_sol_allocation: number
   target_token_allocation: number
   rebalance_threshold: number
@@ -2263,7 +2263,7 @@ export default function AdminContent() {
               Algorithm Mode
             </label>
             <div className="grid grid-cols-3 gap-2">
-              {(['simple', 'smart', 'rebalance'] as const).map((mode) => (
+              {(['simple', 'turbo_lite', 'rebalance'] as const).map((mode) => (
                 <button
                   key={mode}
                   onClick={() => setConfig({ ...config, algorithm_mode: mode })}
@@ -2273,10 +2273,10 @@ export default function AdminContent() {
                       : 'bg-bg-secondary text-text-secondary border-border-subtle hover:border-text-muted'
                   }`}
                 >
-                  <div className="font-semibold capitalize">{mode}</div>
+                  <div className="font-semibold capitalize">{mode === 'turbo_lite' ? 'Turbo Lite' : mode}</div>
                   <div className="text-xs mt-1 text-text-muted">
                     {mode === 'simple' && 'Basic threshold'}
-                    {mode === 'smart' && 'RSI + trends'}
+                    {mode === 'turbo_lite' && '8 buys/sells + rate limits'}
                     {mode === 'rebalance' && 'Portfolio balance'}
                   </div>
                 </button>
@@ -2284,7 +2284,7 @@ export default function AdminContent() {
             </div>
             <p className="text-text-muted font-mono text-xs mt-2">
               {config.algorithm_mode === 'simple' && 'Simple: Buys when SOL balance exceeds threshold, basic percentage trades'}
-              {config.algorithm_mode === 'smart' && 'Smart: Uses price trend analysis, RSI, and confidence scoring'}
+              {config.algorithm_mode === 'turbo_lite' && 'Turbo Lite: 8 buys then 8 sells with rate limits, auto-switches to sell if SOL <0.1'}
               {config.algorithm_mode === 'rebalance' && 'Rebalance: Maintains target SOL/token allocation percentages'}
             </p>
           </div>

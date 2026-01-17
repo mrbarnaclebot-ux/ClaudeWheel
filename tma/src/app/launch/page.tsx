@@ -23,7 +23,7 @@ interface TokenData {
     website?: string;
     devBuy?: number;
     // MM Config
-    mmAlgorithm: 'simple' | 'smart' | 'rebalance';
+    mmAlgorithm: 'simple' | 'turbo_lite' | 'rebalance';
     mmAutoClaimEnabled: boolean;
 }
 
@@ -479,7 +479,7 @@ export default function LaunchPage() {
                             <div className="grid grid-cols-3 gap-2 mb-4">
                                 {[
                                     { value: 'simple', label: 'Simple', desc: '5 buys, 5 sells', disabled: false },
-                                    { value: 'smart', label: 'Smart', desc: 'Coming Soon', disabled: true },
+                                    { value: 'turbo_lite', label: 'Turbo Lite', desc: '8 buys, 8 sells', disabled: false },
                                     { value: 'rebalance', label: 'Rebalance', desc: 'Portfolio %', disabled: false },
                                 ].map(opt => (
                                     <button

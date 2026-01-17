@@ -121,7 +121,7 @@ const ConfigUpdateSchema = z.object({
   max_buy_amount_sol: z.number().min(0).optional(),
   buy_interval_minutes: z.number().min(1).optional(),
   slippage_bps: z.number().min(1).max(5000).optional(),
-  algorithm_mode: z.enum(['simple', 'smart', 'rebalance']).optional(),
+  algorithm_mode: z.enum(['simple', 'turbo_lite', 'rebalance']).optional(),
   target_sol_allocation: z.number().min(0).max(100).optional(),
   target_token_allocation: z.number().min(0).max(100).optional(),
   rebalance_threshold: z.number().min(1).max(50).optional(),
@@ -146,20 +146,25 @@ router.post('/config', requireAdmin, requirePermission('update_config'), async (
 
     const config = parseResult.data
 
-    // Update config in database (using service key)
-    if (!supabase) {
-      return res.status(500).json({ error: 'Database not configured' })
-    }
+    // Convert snake_case request fields to camelCase for PlatformConfig
+    const platformConfigUpdates: Record<string, any> = {}
+    if (config.token_mint_address !== undefined) platformConfigUpdates.tokenMintAddress = config.token_mint_address
+    if (config.token_symbol !== undefined) platformConfigUpdates.tokenSymbol = config.token_symbol
+    if (config.token_decimals !== undefined) platformConfigUpdates.tokenDecimals = config.token_decimals
+    if (config.flywheel_active !== undefined) platformConfigUpdates.flywheelActive = config.flywheel_active
+    if (config.market_making_enabled !== undefined) platformConfigUpdates.marketMakingEnabled = config.market_making_enabled
+    if (config.fee_collection_enabled !== undefined) platformConfigUpdates.feeCollectionEnabled = config.fee_collection_enabled
+    if (config.fee_threshold_sol !== undefined) platformConfigUpdates.feeThresholdSol = config.fee_threshold_sol
+    if (config.fee_percentage !== undefined) platformConfigUpdates.feePercentage = config.fee_percentage
+    if (config.min_buy_amount_sol !== undefined) platformConfigUpdates.minBuyAmountSol = config.min_buy_amount_sol
+    if (config.max_buy_amount_sol !== undefined) platformConfigUpdates.maxBuyAmountSol = config.max_buy_amount_sol
+    if (config.buy_interval_minutes !== undefined) platformConfigUpdates.buyIntervalMinutes = config.buy_interval_minutes
+    if (config.slippage_bps !== undefined) platformConfigUpdates.slippageBps = config.slippage_bps
 
-    const { error: dbError } = await supabase
-      .from('config')
-      .upsert({
-        id: 'main',
-        ...config,
-        updated_at: new Date().toISOString(),
-      })
-
-    if (dbError) {
+    // Update config in database using Prisma via platformConfigService
+    try {
+      await platformConfigService.updateConfig(platformConfigUpdates)
+    } catch (dbError) {
       loggers.server.error({ error: String(dbError) }, 'Database error updating config')
       return res.status(500).json({ error: 'Failed to update configuration' })
     }

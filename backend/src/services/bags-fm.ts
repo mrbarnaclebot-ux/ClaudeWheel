@@ -436,51 +436,119 @@ class BagsFmService {
   /**
    * Get claimable fee positions for a wallet
    * Uses SDK if available, falls back to REST API
+   * Includes retry logic for transient 500/502/503 errors
    */
   async getClaimablePositions(walletAddress: string): Promise<ClaimablePosition[]> {
-    // Try SDK first (preferred method)
+    const retryDelays = [1000, 2000, 4000]  // 1s, 2s, 4s exponential backoff
+    const maxRetries = 3
+
+    // Helper to check if error is transient (should retry)
+    const isTransientError = (error: any): boolean => {
+      const errorStr = String(error)
+      return errorStr.includes('502') || errorStr.includes('500') || errorStr.includes('503') ||
+             errorStr.includes('Bad Gateway') || errorStr.includes('Service Unavailable')
+    }
+
+    // Try SDK with retries if available (preferred method)
     if (this.sdk) {
-      try {
-        const positions = await this.sdk.fee.getAllClaimablePositions(
-          new PublicKey(walletAddress)
-        )
+      for (let attempt = 0; attempt < maxRetries; attempt++) {
+        try {
+          const positions = await this.sdk.fee.getAllClaimablePositions(
+            new PublicKey(walletAddress)
+          )
 
-        loggers.bags.info({
-          wallet: walletAddress,
-          positionsCount: positions.length,
-          positions: positions.map(p => ({
-            baseMint: p.baseMint,
-            claimableLamports: p.totalClaimableLamportsUserShare,
-            claimableSOL: p.totalClaimableLamportsUserShare / 1e9,
-          })),
-        }, 'SDK claimable positions fetched')
+          loggers.bags.info({
+            wallet: walletAddress,
+            positionsCount: positions.length,
+            positions: positions.map(p => ({
+              baseMint: p.baseMint,
+              claimableLamports: p.totalClaimableLamportsUserShare,
+              claimableSOL: p.totalClaimableLamportsUserShare / 1e9,
+            })),
+            attempt: attempt + 1,
+          }, 'SDK claimable positions fetched')
 
-        return positions.map(p => ({
-          tokenMint: p.baseMint || '',
-          tokenSymbol: '', // SDK doesn't return symbol
-          claimableAmount: p.totalClaimableLamportsUserShare / 1e9, // Convert lamports to SOL
-          claimableAmountUsd: 0, // SDK doesn't return USD value
-          lastClaimTime: null,
-          // Store raw position for claim transaction generation
-          _rawPosition: p,
-        })) as ClaimablePosition[]
-      } catch (error) {
-        loggers.bags.error({ error: String(error) }, 'SDK getAllClaimablePositions failed, falling back to REST API')
+          return positions.map(p => ({
+            tokenMint: p.baseMint || '',
+            tokenSymbol: '', // SDK doesn't return symbol
+            claimableAmount: p.totalClaimableLamportsUserShare / 1e9, // Convert lamports to SOL
+            claimableAmountUsd: 0, // SDK doesn't return USD value
+            lastClaimTime: null,
+            // Store raw position for claim transaction generation
+            _rawPosition: p,
+          })) as ClaimablePosition[]
+        } catch (error: any) {
+          const isTransient = isTransientError(error)
+
+          if (isTransient && attempt < maxRetries - 1) {
+            loggers.bags.warn({
+              wallet: walletAddress,
+              attempt: attempt + 1,
+              maxRetries,
+              delay: retryDelays[attempt],
+              error: String(error).slice(0, 200),
+            }, 'SDK claimable positions transient error, retrying...')
+            await this.sleep(retryDelays[attempt])
+            continue
+          }
+
+          loggers.bags.error({
+            error: String(error),
+            attempt: attempt + 1,
+            isTransient,
+          }, 'SDK getAllClaimablePositions failed, falling back to REST API')
+          break  // Exit SDK retry loop, try REST API
+        }
       }
     }
 
-    // Fallback to REST API
-    const data = await this.fetch<any[]>(`/token-launch/claimable-positions?wallet=${walletAddress}`)
+    // Fallback to REST API with retry
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        const data = await this.fetch<any[]>(`/token-launch/claimable-positions?wallet=${walletAddress}`)
 
-    if (!data || !Array.isArray(data)) return []
+        if (!data || !Array.isArray(data)) {
+          if (attempt < maxRetries - 1) {
+            loggers.bags.warn({
+              wallet: walletAddress,
+              attempt: attempt + 1,
+              delay: retryDelays[attempt],
+            }, 'REST API claimable positions returned invalid data, retrying...')
+            await this.sleep(retryDelays[attempt])
+            continue
+          }
+          return []
+        }
 
-    return data.map(item => ({
-      tokenMint: item.tokenMint || '',
-      tokenSymbol: item.tokenSymbol || '',
-      claimableAmount: item.claimableAmount || 0,
-      claimableAmountUsd: item.claimableAmountUsd || 0,
-      lastClaimTime: item.lastClaimTime || null,
-    }))
+        return data.map(item => ({
+          tokenMint: item.tokenMint || '',
+          tokenSymbol: item.tokenSymbol || '',
+          claimableAmount: item.claimableAmount || 0,
+          claimableAmountUsd: item.claimableAmountUsd || 0,
+          lastClaimTime: item.lastClaimTime || null,
+        }))
+      } catch (error: any) {
+        const isTransient = isTransientError(error)
+
+        if (isTransient && attempt < maxRetries - 1) {
+          loggers.bags.warn({
+            wallet: walletAddress,
+            attempt: attempt + 1,
+            delay: retryDelays[attempt],
+            error: String(error).slice(0, 200),
+          }, 'REST API claimable positions transient error, retrying...')
+          await this.sleep(retryDelays[attempt])
+          continue
+        }
+
+        loggers.bags.error({
+          error: String(error),
+          attempt: attempt + 1,
+        }, 'REST API getAllClaimablePositions failed')
+      }
+    }
+
+    return []  // All retries exhausted
   }
 
   /**
@@ -658,56 +726,125 @@ class BagsFmService {
   /**
    * Generate a swap transaction for bonding curve trades using SDK
    * Requires the full quote response from getTradeQuote()
+   * Includes retry logic for transient 500/502/503 errors
    */
   async generateSwapTransaction(
     walletAddress: string,
     quoteResponse: RawQuoteResponse
   ): Promise<SwapTransaction | null> {
+    const retryDelays = [1000, 2000, 4000]  // 1s, 2s, 4s exponential backoff
+    const maxRetries = 3
+
+    // Helper to check if error is transient (should retry)
+    const isTransientError = (error: any): boolean => {
+      const errorStr = String(error)
+      return errorStr.includes('502') || errorStr.includes('500') || errorStr.includes('503') ||
+             errorStr.includes('Bad Gateway') || errorStr.includes('Service Unavailable')
+    }
+
     loggers.bags.info({ walletAddress, usingSdk: !!this.sdk }, 'Generating swap transaction')
 
-    // Use SDK if available (preferred method)
+    // Try SDK with retries if available (preferred method)
     if (this.sdk) {
-      try {
-        const result = await this.sdk.trade.createSwapTransaction({
-          quoteResponse: quoteResponse as any, // SDK expects full TradeQuoteResponse
-          userPublicKey: new PublicKey(walletAddress),
-        })
+      for (let attempt = 0; attempt < maxRetries; attempt++) {
+        try {
+          const result = await this.sdk.trade.createSwapTransaction({
+            quoteResponse: quoteResponse as any, // SDK expects full TradeQuoteResponse
+            userPublicKey: new PublicKey(walletAddress),
+          })
 
-        // SDK returns a VersionedTransaction, serialize to bs58 for compatibility
-        const serializedTx = bs58.encode(result.transaction.serialize())
+          // SDK returns a VersionedTransaction, serialize to bs58 for compatibility
+          const serializedTx = bs58.encode(result.transaction.serialize())
 
-        loggers.bags.info({
-          lastValidBlockHeight: result.lastValidBlockHeight,
-          computeUnitLimit: result.computeUnitLimit,
-        }, 'SDK swap transaction created')
+          loggers.bags.info({
+            lastValidBlockHeight: result.lastValidBlockHeight,
+            computeUnitLimit: result.computeUnitLimit,
+            attempt: attempt + 1,
+          }, 'SDK swap transaction created')
 
-        return {
-          transaction: serializedTx,
-          lastValidBlockHeight: result.lastValidBlockHeight,
+          return {
+            transaction: serializedTx,
+            lastValidBlockHeight: result.lastValidBlockHeight,
+          }
+        } catch (error: any) {
+          const isTransient = isTransientError(error)
+
+          if (isTransient && attempt < maxRetries - 1) {
+            loggers.bags.warn({
+              walletAddress,
+              attempt: attempt + 1,
+              maxRetries,
+              delay: retryDelays[attempt],
+              error: String(error).slice(0, 200),
+            }, 'SDK swap transaction transient error, retrying...')
+            await this.sleep(retryDelays[attempt])
+            continue
+          }
+
+          loggers.bags.error({
+            error: String(error),
+            errorMessage: error.message,
+            attempt: attempt + 1,
+            isTransient,
+          }, 'SDK swap transaction failed')
+          break  // Exit SDK retry loop, try REST API
         }
-      } catch (error: any) {
-        loggers.bags.error({ error: String(error), errorMessage: error.message }, 'SDK swap transaction failed')
-        // Fall through to REST API fallback
       }
     }
 
-    // Fallback to REST API
+    // Fallback to REST API with retry
     loggers.bags.warn('Falling back to REST API for swap transaction')
-    const data = await this.fetch<any>('/trade/swap', {
-      method: 'POST',
-      body: JSON.stringify({
-        userPublicKey: walletAddress,
-        quoteResponse,
-      }),
-    })
 
-    // Response has swapTransaction field (not transaction)
-    if (!data || !data.swapTransaction) return null
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        const data = await this.fetch<any>('/trade/swap', {
+          method: 'POST',
+          body: JSON.stringify({
+            userPublicKey: walletAddress,
+            quoteResponse,
+          }),
+        })
 
-    return {
-      transaction: data.swapTransaction,
-      lastValidBlockHeight: data.lastValidBlockHeight || 0,
+        // Response has swapTransaction field (not transaction)
+        if (!data || !data.swapTransaction) {
+          if (attempt < maxRetries - 1) {
+            loggers.bags.warn({
+              walletAddress,
+              attempt: attempt + 1,
+              delay: retryDelays[attempt],
+            }, 'REST API swap transaction returned invalid data, retrying...')
+            await this.sleep(retryDelays[attempt])
+            continue
+          }
+          return null
+        }
+
+        return {
+          transaction: data.swapTransaction,
+          lastValidBlockHeight: data.lastValidBlockHeight || 0,
+        }
+      } catch (error: any) {
+        const isTransient = isTransientError(error)
+
+        if (isTransient && attempt < maxRetries - 1) {
+          loggers.bags.warn({
+            walletAddress,
+            attempt: attempt + 1,
+            delay: retryDelays[attempt],
+            error: String(error).slice(0, 200),
+          }, 'REST API swap transaction transient error, retrying...')
+          await this.sleep(retryDelays[attempt])
+          continue
+        }
+
+        loggers.bags.error({
+          error: String(error),
+          attempt: attempt + 1,
+        }, 'REST API swap transaction failed')
+      }
     }
+
+    return null  // All retries exhausted
   }
 
   /**
