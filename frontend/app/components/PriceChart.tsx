@@ -355,7 +355,7 @@ export default function PriceChart({
             DexScreener
           </a>
           <a
-            href={`https://bags.fm/token/${tokenAddress}`}
+            href={`https://bags.fm/${tokenAddress}`}
             target="_blank"
             rel="noopener noreferrer"
             className="text-xs font-mono text-text-muted hover:text-accent-primary transition-colors"

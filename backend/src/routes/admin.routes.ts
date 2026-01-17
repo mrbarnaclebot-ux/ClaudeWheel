@@ -2966,6 +2966,15 @@ router.get('/wheel', requireAdmin, async (_req: AdminRequest, res: Response) => 
     })
     const todayCollected = Number(todayClaimStats._sum.totalAmountSol || 0)
 
+    // Get hourly fees
+    const hourStart = new Date()
+    hourStart.setMinutes(0, 0, 0)
+    const hourClaimStats = await prisma.privyClaimHistory.aggregate({
+      where: { privyTokenId: wheelToken.id, claimedAt: { gte: hourStart } },
+      _sum: { totalAmountSol: true },
+    })
+    const hourCollected = Number(hourClaimStats._sum.totalAmountSol || 0)
+
     // Fetch market data from DexScreener via Bags.fm service
     let marketData = {
       marketCap: 0,
@@ -3012,6 +3021,7 @@ router.get('/wheel', requireAdmin, async (_req: AdminRequest, res: Response) => 
         feeStats: {
           totalCollected,
           todayCollected,
+          hourCollected,
         },
         flywheelState: wheelToken.flywheelState ? {
           phase: wheelToken.flywheelState.cyclePhase,
@@ -3021,9 +3031,9 @@ router.get('/wheel', requireAdmin, async (_req: AdminRequest, res: Response) => 
         } : null,
         config: wheelToken.config ? {
           flywheelActive: wheelToken.config.flywheelActive,
-          autoClaimEnabled: wheelToken.config.autoClaimEnabled,
-          buyPercent: wheelToken.config.buyPercent,
-          sellPercent: wheelToken.config.sellPercent,
+          algorithmMode: wheelToken.config.algorithmMode || 'simple',
+          minBuySol: Number(wheelToken.config.minBuyAmountSol) || 0.01,
+          maxBuySol: Number(wheelToken.config.maxBuyAmountSol) || 0.05,
           slippageBps: wheelToken.config.slippageBps,
         } : null,
         marketData,

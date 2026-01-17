@@ -293,7 +293,7 @@ export default function Dashboard() {
                     </div>
                   </a>
                   <a
-                    href="https://t.me/claude_wheel_bot"
+                    href="https://t.me/ClaudeWheelBot"
                     target="_blank"
                     rel="noopener noreferrer"
                     className="flex items-center gap-3 p-4 rounded-xl bg-bg-secondary/50 border border-border-subtle hover:border-accent-cyan/30 hover:bg-bg-card transition-all duration-300 group"

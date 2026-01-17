@@ -1136,7 +1136,7 @@ export default function AdminContent() {
               <div className="flex items-center justify-between bg-bg-secondary rounded-lg p-3">
                 <span className="text-text-muted font-mono text-sm">Launch tokens & claim fees on Bags.fm</span>
                 <a
-                  href="https://bags.fm"
+                  href="https://bags.fm/8JLGQ7RqhsvhsDhvjMuJUeeuaQ53GTJqSHNaBWf4BAGS"
                   target="_blank"
                   rel="noopener noreferrer"
                   className="px-3 py-1 bg-accent-primary/20 text-accent-primary border border-accent-primary/30 rounded-lg font-mono text-sm hover:bg-accent-primary/30 transition-colors"
