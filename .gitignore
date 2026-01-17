@@ -140,3 +140,4 @@ dist
 
 # Private documentation
 private-docs/
+.mcp.json
