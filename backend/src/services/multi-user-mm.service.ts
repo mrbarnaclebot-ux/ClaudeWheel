@@ -99,7 +99,7 @@ class MultiUserMMService {
     try {
       const lockKey = this.hashTokenId(tokenId)
       const result = await prisma.$queryRaw<[{ pg_try_advisory_lock: boolean }]>`
-        SELECT pg_try_advisory_lock(${TURBO_LOCK_NAMESPACE}, ${lockKey})
+        SELECT pg_try_advisory_lock(${TURBO_LOCK_NAMESPACE}::int, ${lockKey}::int)
       `
       return result[0].pg_try_advisory_lock
     } catch (error) {
@@ -117,7 +117,7 @@ class MultiUserMMService {
     try {
       const lockKey = this.hashTokenId(tokenId)
       await prisma.$queryRaw`
-        SELECT pg_advisory_unlock(${TURBO_LOCK_NAMESPACE}, ${lockKey})
+        SELECT pg_advisory_unlock(${TURBO_LOCK_NAMESPACE}::int, ${lockKey}::int)
       `
     } catch (error) {
       loggers.flywheel.warn({ tokenId, error: String(error) }, 'Failed to release advisory lock')
@@ -772,6 +772,7 @@ class MultiUserMMService {
       let rapidSellsCompleted = state.rapid_sells_completed ?? 0
       let tokensBoughtThisCycle = state.tokens_bought_this_cycle ?? 0
       let solSpentThisCycle = state.sol_spent_this_cycle ?? 0
+      let emergencySellAll = false // Flag to sell ALL tokens when SOL < 0.1
 
       loggers.flywheel.info({
         tokenSymbol: token.token_symbol,
@@ -800,14 +801,15 @@ class MultiUserMMService {
           const minReserve = 0.01
           const availableForTrade = Math.max(0, solBalance - minReserve)
 
-          // If SOL balance < 0.1, stop buying early and move to sell phase
+          // If SOL balance < 0.1, stop buying early and trigger emergency sell of ALL tokens
           if (solBalance < 0.1) {
+            emergencySellAll = true
             loggers.flywheel.info({
               tokenSymbol: token.token_symbol,
               solBalance,
               rapidBuysCompleted,
               turboCycleSizeBuys,
-            }, '🚀 [Turbo Lite] Low SOL (<0.1), ending buy phase early')
+            }, '🚨 [Turbo Lite] Low SOL (<0.1), triggering emergency sell of ALL tokens')
             break
           }
 
@@ -938,23 +940,34 @@ class MultiUserMMService {
       }
 
       // ═══════════════════════════════════════════════════════════════════
-      // SELL PHASE - Sell exactly what was bought
+      // SELL PHASE - Sell exactly what was bought (or ALL tokens in emergency mode)
       // ═══════════════════════════════════════════════════════════════════
-      if (tokensBoughtThisCycle > 0 && rapidSellsCompleted < turboCycleSizeSells) {
-        // Calculate sell amount per trade: tokens_bought / number_of_sells
-        const sellAmountPerTrade = tokensBoughtThisCycle / turboCycleSizeSells
+      if (emergencySellAll || (tokensBoughtThisCycle > 0 && rapidSellsCompleted < turboCycleSizeSells)) {
+        // In emergency mode, sell ALL tokens; otherwise sell only what was bought this cycle
+        const currentTokenBalance = await getTokenBalance(opsWalletPubkey, tokenMint)
+        const tokensToSell = emergencySellAll ? currentTokenBalance : tokensBoughtThisCycle
+        const sellAmountPerTrade = tokensToSell / turboCycleSizeSells
 
         // Consecutive failure tracking to prevent infinite loops
         let consecutiveQuoteFailures = 0
         const maxConsecutiveQuoteFailures = 5  // Allow more transient failures before pausing
 
-        loggers.flywheel.info({
-          tokenSymbol: token.token_symbol,
-          tokensBoughtThisCycle,
-          sellAmountPerTrade,
-          rapidSellsCompleted,
-          turboCycleSizeSells,
-        }, '🚀 [Turbo Lite] Starting sell phase')
+        if (emergencySellAll) {
+          loggers.flywheel.info({
+            tokenSymbol: token.token_symbol,
+            currentTokenBalance,
+            sellAmountPerTrade,
+            turboCycleSizeSells,
+          }, '🚨 [Turbo Lite] Emergency sell: liquidating ALL held tokens')
+        } else {
+          loggers.flywheel.info({
+            tokenSymbol: token.token_symbol,
+            tokensBoughtThisCycle,
+            sellAmountPerTrade,
+            rapidSellsCompleted,
+            turboCycleSizeSells,
+          }, '🚀 [Turbo Lite] Starting sell phase')
+        }
 
         while (rapidSellsCompleted < turboCycleSizeSells) {
           // Check if we have enough tokens
