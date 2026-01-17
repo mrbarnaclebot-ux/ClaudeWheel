@@ -836,7 +836,7 @@ router.post('/:id/claim', async (req: PrivyRequest, res: Response) => {
 
     const { id } = req.params
 
-    // Get token with wallet info
+    // Get token with wallet info and config
     const token = await prisma.privyUserToken.findFirst({
       where: {
         id,
@@ -845,6 +845,7 @@ router.post('/:id/claim', async (req: PrivyRequest, res: Response) => {
       include: {
         devWallet: true,
         opsWallet: true,
+        config: true,
       },
     })
 
