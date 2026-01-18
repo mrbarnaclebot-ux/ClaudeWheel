@@ -6,48 +6,48 @@ import { Rocket, Zap, Coins, ArrowRight } from 'lucide-react'
 const steps = [
   {
     number: '01',
-    title: 'Launch Token',
-    description: 'Create your token on Bags.fm through our Telegram bot. Set up socials, description, and initial parameters.',
+    title: 'Deploy or Register',
+    description: 'Use the Telegram bot to launch a new token or register an existing Bags.fm token.',
     icon: Rocket,
-    color: 'cyan',
+    color: 'orange',
   },
   {
     number: '02',
-    title: 'Enable Flywheel',
-    description: 'Automated market making begins. The flywheel buys and sells to maintain healthy trading activity.',
-    icon: Zap,
-    color: 'violet',
+    title: 'Fund the Wheel',
+    description: 'Let the bot auto-claim Bags fees or self-fund to power the flywheel.',
+    icon: Coins,
+    color: 'copper',
   },
   {
     number: '03',
-    title: 'Collect Fees',
-    description: 'Earn trading fees automatically. Claim your earnings anytime, or let them compound.',
-    icon: Coins,
-    color: 'emerald',
+    title: 'Kick Start',
+    description: 'Activate the wheel and watch automated market making begin.',
+    icon: Zap,
+    color: 'warm',
   },
 ]
 
 const colorMap = {
-  cyan: {
-    bg: 'bg-cyan-500/10',
-    border: 'border-cyan-500/20',
-    text: 'text-cyan-400',
-    glow: 'shadow-[0_0_30px_rgba(34,211,238,0.2)]',
-    line: 'from-cyan-500/50',
+  orange: {
+    bg: 'bg-[#e67428]/10',
+    border: 'border-[#e67428]/20',
+    text: 'text-[#e67428]',
+    glow: 'shadow-[0_0_30px_rgba(230,116,40,0.2)]',
+    line: 'from-[#e67428]/50',
   },
-  violet: {
-    bg: 'bg-violet-500/10',
-    border: 'border-violet-500/20',
-    text: 'text-violet-400',
-    glow: 'shadow-[0_0_30px_rgba(139,92,246,0.2)]',
-    line: 'from-violet-500/50',
+  copper: {
+    bg: 'bg-[#e2aa84]/10',
+    border: 'border-[#e2aa84]/20',
+    text: 'text-[#e2aa84]',
+    glow: 'shadow-[0_0_30px_rgba(226,170,132,0.2)]',
+    line: 'from-[#e2aa84]/50',
   },
-  emerald: {
-    bg: 'bg-emerald-500/10',
-    border: 'border-emerald-500/20',
-    text: 'text-emerald-400',
-    glow: 'shadow-[0_0_30px_rgba(52,211,153,0.2)]',
-    line: 'from-emerald-500/50',
+  warm: {
+    bg: 'bg-[#e67428]/10',
+    border: 'border-[#e67428]/20',
+    text: 'text-[#e67428]',
+    glow: 'shadow-[0_0_30px_rgba(230,116,40,0.2)]',
+    line: 'from-[#e67428]/50',
   },
 }
 
@@ -62,11 +62,11 @@ export default function HowItWorks() {
         transition={{ duration: 0.5 }}
         className="text-center mb-12"
       >
-        <h2 className="text-3xl sm:text-4xl font-semibold text-white mb-3">
+        <h2 className="text-3xl sm:text-4xl font-semibold text-[#f8f0ec] mb-3">
           How It Works
         </h2>
-        <p className="text-neutral-400 max-w-lg mx-auto">
-          Three simple steps to automated market making and passive income
+        <p className="text-[#e2aa84]/60 max-w-lg mx-auto">
+          Three steps to automated market making
         </p>
       </motion.div>
 
@@ -75,7 +75,7 @@ export default function HowItWorks() {
         {/* Connecting line - desktop */}
         <div className="hidden lg:block absolute top-1/2 left-[16.67%] right-[16.67%] h-px">
           <motion.div
-            className="h-full bg-gradient-to-r from-cyan-500/30 via-violet-500/30 to-emerald-500/30"
+            className="h-full bg-gradient-to-r from-[#e67428]/30 via-[#e2aa84]/30 to-[#e67428]/30"
             initial={{ scaleX: 0 }}
             whileInView={{ scaleX: 1 }}
             viewport={{ once: true }}
@@ -86,7 +86,7 @@ export default function HowItWorks() {
         {/* Connecting line - mobile */}
         <div className="lg:hidden absolute left-8 top-[15%] bottom-[15%] w-px">
           <motion.div
-            className="h-full w-full bg-gradient-to-b from-cyan-500/30 via-violet-500/30 to-emerald-500/30"
+            className="h-full w-full bg-gradient-to-b from-[#e67428]/30 via-[#e2aa84]/30 to-[#e67428]/30"
             initial={{ scaleY: 0 }}
             whileInView={{ scaleY: 1 }}
             viewport={{ once: true }}
@@ -115,7 +115,7 @@ export default function HowItWorks() {
               >
                 {/* Card */}
                 <div
-                  className={`relative p-6 rounded-2xl bg-white/[0.02] border border-white/5 hover:border-white/10 transition-all duration-300 hover:${colors.glow}`}
+                  className={`relative p-6 rounded-2xl bg-[#f8f0ec]/[0.02] border border-[#e2aa84]/10 hover:border-[#e2aa84]/20 transition-all duration-300 hover:${colors.glow}`}
                 >
                   {/* Step number */}
                   <div
@@ -134,10 +134,10 @@ export default function HowItWorks() {
                   </div>
 
                   {/* Content */}
-                  <h3 className="text-lg font-semibold text-white mb-2">
+                  <h3 className="text-lg font-semibold text-[#f8f0ec] mb-2">
                     {step.title}
                   </h3>
-                  <p className="text-sm text-neutral-400 leading-relaxed">
+                  <p className="text-sm text-[#e2aa84]/60 leading-relaxed">
                     {step.description}
                   </p>
 

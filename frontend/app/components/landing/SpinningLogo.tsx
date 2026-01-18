@@ -15,7 +15,7 @@ export default function SpinningLogo({ isActive = true, size = 280 }: SpinningLo
       <motion.div
         className="absolute inset-0 rounded-full"
         style={{
-          background: `radial-gradient(circle, transparent 40%, rgba(34, 211, 238, 0.15) 70%, transparent 100%)`,
+          background: `radial-gradient(circle, transparent 40%, rgba(230, 116, 40, 0.15) 70%, transparent 100%)`,
         }}
         animate={{
           opacity: isActive ? [0.5, 1, 0.5] : 0.2,
@@ -33,8 +33,8 @@ export default function SpinningLogo({ isActive = true, size = 280 }: SpinningLo
         className="absolute inset-4 rounded-full"
         style={{
           boxShadow: isActive
-            ? '0 0 60px rgba(34, 211, 238, 0.3), inset 0 0 40px rgba(34, 211, 238, 0.1)'
-            : '0 0 20px rgba(34, 211, 238, 0.1)',
+            ? '0 0 60px rgba(230, 116, 40, 0.3), inset 0 0 40px rgba(230, 116, 40, 0.1)'
+            : '0 0 20px rgba(226, 170, 132, 0.1)',
         }}
         animate={{
           opacity: isActive ? [0.6, 1, 0.6] : 0.3,
@@ -65,8 +65,8 @@ export default function SpinningLogo({ isActive = true, size = 280 }: SpinningLo
             width: size * 0.75,
             height: size * 0.75,
             filter: isActive
-              ? 'drop-shadow(0 0 30px rgba(34, 211, 238, 0.4))'
-              : 'drop-shadow(0 0 10px rgba(255, 255, 255, 0.1))',
+              ? 'drop-shadow(0 0 30px rgba(230, 116, 40, 0.4))'
+              : 'drop-shadow(0 0 10px rgba(248, 240, 236, 0.1))',
           }}
         >
           <Image
@@ -85,13 +85,13 @@ export default function SpinningLogo({ isActive = true, size = 280 }: SpinningLo
           {[0, 1, 2].map((i) => (
             <motion.div
               key={i}
-              className="absolute w-2 h-2 rounded-full bg-cyan-400"
+              className="absolute w-2 h-2 rounded-full bg-[#e67428]"
               style={{
                 top: '50%',
                 left: '50%',
                 marginTop: -4,
                 marginLeft: -4,
-                boxShadow: '0 0 10px rgba(34, 211, 238, 0.8)',
+                boxShadow: '0 0 10px rgba(230, 116, 40, 0.8)',
               }}
               animate={{
                 x: [
@@ -118,9 +118,9 @@ export default function SpinningLogo({ isActive = true, size = 280 }: SpinningLo
       {/* Center status indicator */}
       <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
         <motion.div
-          className={`w-3 h-3 rounded-full ${isActive ? 'bg-cyan-400' : 'bg-neutral-600'}`}
+          className={`w-3 h-3 rounded-full ${isActive ? 'bg-[#e67428]' : 'bg-neutral-600'}`}
           style={{
-            boxShadow: isActive ? '0 0 20px rgba(34, 211, 238, 0.8)' : 'none',
+            boxShadow: isActive ? '0 0 20px rgba(230, 116, 40, 0.8)' : 'none',
           }}
           animate={{
             scale: isActive ? [1, 1.3, 1] : 1,

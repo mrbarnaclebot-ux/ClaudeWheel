@@ -10,7 +10,7 @@ const actions = [
     description: 'Buy or sell on Bags.fm',
     href: 'https://bags.fm/8JLGQ7RqhsvhsDhvjMuJUeeuaQ53GTJqSHNaBWf4BAGS',
     icon: Wallet,
-    color: 'cyan',
+    color: 'orange',
     external: true,
   },
   {
@@ -18,7 +18,7 @@ const actions = [
     description: 'Start via Telegram bot',
     href: 'https://t.me/ClaudeWheelBot',
     icon: Bot,
-    color: 'violet',
+    color: 'copper',
     external: true,
   },
   {
@@ -26,7 +26,7 @@ const actions = [
     description: 'Real-time on DexScreener',
     href: 'https://dexscreener.com/solana/8JLGQ7RqhsvhsDhvjMuJUeeuaQ53GTJqSHNaBWf4BAGS',
     icon: BarChart3,
-    color: 'emerald',
+    color: 'warm',
     external: true,
   },
   {
@@ -34,35 +34,35 @@ const actions = [
     description: 'Learn how it works',
     href: '/docs',
     icon: BookOpen,
-    color: 'amber',
+    color: 'tan',
     external: false,
   },
 ]
 
 const colorMap = {
-  cyan: {
-    bg: 'bg-cyan-500/10',
-    border: 'border-cyan-500/20 hover:border-cyan-500/40',
-    text: 'text-cyan-400',
-    glow: 'hover:shadow-[0_0_40px_rgba(34,211,238,0.15)]',
+  orange: {
+    bg: 'bg-[#e67428]/10',
+    border: 'border-[#e67428]/20 hover:border-[#e67428]/40',
+    text: 'text-[#e67428]',
+    glow: 'hover:shadow-[0_0_40px_rgba(230,116,40,0.15)]',
   },
-  violet: {
-    bg: 'bg-violet-500/10',
-    border: 'border-violet-500/20 hover:border-violet-500/40',
-    text: 'text-violet-400',
-    glow: 'hover:shadow-[0_0_40px_rgba(139,92,246,0.15)]',
+  copper: {
+    bg: 'bg-[#e2aa84]/10',
+    border: 'border-[#e2aa84]/20 hover:border-[#e2aa84]/40',
+    text: 'text-[#e2aa84]',
+    glow: 'hover:shadow-[0_0_40px_rgba(226,170,132,0.15)]',
   },
-  emerald: {
-    bg: 'bg-emerald-500/10',
-    border: 'border-emerald-500/20 hover:border-emerald-500/40',
-    text: 'text-emerald-400',
-    glow: 'hover:shadow-[0_0_40px_rgba(52,211,153,0.15)]',
+  warm: {
+    bg: 'bg-[#e67428]/10',
+    border: 'border-[#e67428]/20 hover:border-[#e67428]/40',
+    text: 'text-[#e67428]',
+    glow: 'hover:shadow-[0_0_40px_rgba(230,116,40,0.15)]',
   },
-  amber: {
-    bg: 'bg-amber-500/10',
-    border: 'border-amber-500/20 hover:border-amber-500/40',
-    text: 'text-amber-400',
-    glow: 'hover:shadow-[0_0_40px_rgba(251,191,36,0.15)]',
+  tan: {
+    bg: 'bg-[#e2aa84]/10',
+    border: 'border-[#e2aa84]/20 hover:border-[#e2aa84]/40',
+    text: 'text-[#e2aa84]',
+    glow: 'hover:shadow-[0_0_40px_rgba(226,170,132,0.15)]',
   },
 }
 
@@ -84,10 +84,10 @@ export default function QuickActions() {
               ease: [0.22, 1, 0.36, 1],
             }}
             whileHover={{ y: -4 }}
-            className={`group relative p-5 rounded-2xl bg-white/[0.02] border ${colors.border} transition-all duration-300 ${colors.glow} cursor-pointer`}
+            className={`group relative p-5 rounded-2xl bg-[#f8f0ec]/[0.02] border ${colors.border} transition-all duration-300 ${colors.glow} cursor-pointer`}
           >
             {/* Gradient overlay on hover */}
-            <div className="absolute inset-0 rounded-2xl bg-gradient-to-br from-white/[0.03] to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
+            <div className="absolute inset-0 rounded-2xl bg-gradient-to-br from-[#f8f0ec]/[0.03] to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
 
             <div className="relative flex items-start justify-between">
               <div className="flex-1">
@@ -99,10 +99,10 @@ export default function QuickActions() {
                 </div>
 
                 {/* Text */}
-                <h3 className="text-base font-semibold text-white mb-1 group-hover:text-white/90">
+                <h3 className="text-base font-semibold text-[#f8f0ec] mb-1 group-hover:text-[#f8f0ec]/90">
                   {action.title}
                 </h3>
-                <p className="text-sm text-neutral-500 group-hover:text-neutral-400 transition-colors">
+                <p className="text-sm text-[#e2aa84]/50 group-hover:text-[#e2aa84]/70 transition-colors">
                   {action.description}
                 </p>
               </div>
