@@ -6,6 +6,7 @@ export const dynamic = 'force-dynamic'
 import { useState, useEffect, useCallback } from 'react'
 import { motion } from 'framer-motion'
 import Image from 'next/image'
+import Header from './components/Header'
 import WheelHero from './components/WheelHero'
 import WheelStats from './components/WheelStats'
 import PlatformStats from './components/PlatformStats'
@@ -128,6 +129,7 @@ export default function Dashboard() {
   const [tokenMintAddress, setTokenMintAddress] = useState<string>('')
   const [tokenSymbol, setTokenSymbol] = useState<string>('WHEEL')
   const [platformStats, setPlatformStats] = useState(defaultPlatformStats)
+  const [isFlywheelActive, setIsFlywheelActive] = useState(false)
 
   // Load initial data from both endpoints
   const loadData = useCallback(async () => {
@@ -143,10 +145,11 @@ export default function Dashboard() {
 
       // Process WHEEL status
       if (wheelJson.success && wheelJson.data) {
-        const { token, wallets, feeStats: fees } = wheelJson.data
+        const { token, wallets, feeStats: fees, flywheel } = wheelJson.data
 
         setTokenMintAddress(token.mintAddress)
         setTokenSymbol(token.symbol)
+        setIsFlywheelActive(flywheel.isActive)
 
         setWalletData({
           devWallet: {
@@ -202,6 +205,9 @@ export default function Dashboard() {
       <div className="fixed inset-0 -z-10 opacity-30">
         <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-wood-dark/20 via-transparent to-transparent" />
       </div>
+
+      {/* Header */}
+      <Header isActive={isFlywheelActive} />
 
       {/* Main Content */}
       <main className="max-w-7xl mx-auto px-4 py-8">

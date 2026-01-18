@@ -440,12 +440,14 @@ export default function DocsPage() {
           <p className="text-text-muted font-mono text-sm mb-4">
             Ready to get started?
           </p>
-          <Link
-            href="/onboarding"
+          <a
+            href="https://t.me/ClaudeWheelBot"
+            target="_blank"
+            rel="noopener noreferrer"
             className="inline-flex items-center gap-2 px-6 py-3 bg-accent-primary text-bg-primary font-semibold rounded-lg hover:bg-accent-primary/90 transition-colors"
           >
-            Connect Your Token
-          </Link>
+            Launch via Telegram Bot
+          </a>
         </div>
 
         {/* Footer */}
