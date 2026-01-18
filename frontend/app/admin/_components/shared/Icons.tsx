@@ -46,6 +46,11 @@ import {
   Filter,
   MoreVertical,
   Bell,
+  Bot,
+  ArrowUpRight,
+  Github,
+  Twitter,
+  Send,
   type LucideIcon,
   type LucideProps,
 } from 'lucide-react'
@@ -314,6 +319,11 @@ export {
   Filter,
   MoreVertical,
   Bell,
+  Bot,
+  ArrowUpRight,
+  Github,
+  Twitter,
+  Send,
 }
 
 export type { LucideIcon }

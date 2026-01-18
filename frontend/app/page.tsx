@@ -4,11 +4,19 @@
 export const dynamic = 'force-dynamic'
 
 import { useState, useEffect, useCallback } from 'react'
+import { motion } from 'framer-motion'
 import Image from 'next/image'
 import WheelHero from './components/WheelHero'
 import WheelStats from './components/WheelStats'
 import PlatformStats from './components/PlatformStats'
 import PriceChart from './components/PriceChart'
+import {
+  Wallet,
+  BarChart3,
+  Bot,
+  Users,
+  ArrowUpRight,
+} from './admin/_components/shared/Icons'
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3002'
 
@@ -259,120 +267,193 @@ export default function Dashboard() {
 
             {/* Quick Links */}
             <section className="mb-12">
-              <div className="rounded-2xl bg-bg-card/50 border border-border-subtle p-6 backdrop-blur-sm">
-                <h3 className="text-xs font-mono font-semibold text-text-muted uppercase tracking-widest mb-6">
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.6, ease: [0.23, 1, 0.32, 1] }}
+                className="relative rounded-2xl bg-bg-card/40 border border-border-subtle p-6 backdrop-blur-md overflow-hidden"
+              >
+                {/* Subtle gradient overlay */}
+                <div className="absolute inset-0 bg-gradient-to-br from-wood-light/5 via-transparent to-accent-cyan/5 pointer-events-none" />
+
+                <h3 className="relative text-xs font-mono font-semibold text-text-muted uppercase tracking-widest mb-6 flex items-center gap-2">
+                  <span className="w-8 h-px bg-gradient-to-r from-wood-light/50 to-transparent" />
                   Quick Links
+                  <span className="w-8 h-px bg-gradient-to-l from-wood-light/50 to-transparent" />
                 </h3>
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                  <a
+
+                <div className="relative grid grid-cols-2 md:grid-cols-4 gap-4">
+                  {/* Bags.fm */}
+                  <motion.a
                     href="https://bags.fm/8JLGQ7RqhsvhsDhvjMuJUeeuaQ53GTJqSHNaBWf4BAGS"
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="flex items-center gap-3 p-4 rounded-xl bg-bg-secondary/50 border border-border-subtle hover:border-wood-light/30 hover:bg-bg-card transition-all duration-300 group"
+                    whileHover={{ y: -4, scale: 1.02 }}
+                    whileTap={{ scale: 0.98 }}
+                    className="flex items-center gap-3 p-4 rounded-xl bg-bg-secondary/60 border border-border-subtle hover:border-wood-light/40 hover:bg-bg-card/80 transition-all duration-300 group backdrop-blur-sm"
                   >
-                    <div className="w-10 h-10 rounded-lg bg-wood-medium/20 flex items-center justify-center group-hover:bg-wood-medium/30 transition-colors">
-                      <span className="text-xl">💰</span>
+                    <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-wood-medium/30 to-wood-dark/20 flex items-center justify-center group-hover:from-wood-medium/50 group-hover:to-wood-dark/30 transition-all duration-300 shadow-lg shadow-wood-dark/20">
+                      <Wallet className="w-5 h-5 text-wood-light" strokeWidth={1.75} />
                     </div>
-                    <div>
-                      <div className="text-sm font-mono font-medium text-text-primary group-hover:text-wood-light transition-colors">Bags.fm</div>
+                    <div className="flex-1">
+                      <div className="text-sm font-mono font-medium text-text-primary group-hover:text-wood-light transition-colors flex items-center gap-1">
+                        Bags.fm
+                        <ArrowUpRight className="w-3 h-3 opacity-0 -translate-x-1 group-hover:opacity-100 group-hover:translate-x-0 transition-all duration-300" />
+                      </div>
                       <div className="text-xs font-mono text-text-muted">Trade WHEEL</div>
                     </div>
-                  </a>
-                  <a
+                  </motion.a>
+
+                  {/* DexScreener */}
+                  <motion.a
                     href="https://dexscreener.com/solana/8JLGQ7RqhsvhsDhvjMuJUeeuaQ53GTJqSHNaBWf4BAGS"
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="flex items-center gap-3 p-4 rounded-xl bg-bg-secondary/50 border border-border-subtle hover:border-wood-light/30 hover:bg-bg-card transition-all duration-300 group"
+                    whileHover={{ y: -4, scale: 1.02 }}
+                    whileTap={{ scale: 0.98 }}
+                    className="flex items-center gap-3 p-4 rounded-xl bg-bg-secondary/60 border border-border-subtle hover:border-copper/40 hover:bg-bg-card/80 transition-all duration-300 group backdrop-blur-sm"
                   >
-                    <div className="w-10 h-10 rounded-lg bg-copper/20 flex items-center justify-center group-hover:bg-copper/30 transition-colors">
-                      <span className="text-xl">📊</span>
+                    <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-copper/30 to-bronze/20 flex items-center justify-center group-hover:from-copper/50 group-hover:to-bronze/30 transition-all duration-300 shadow-lg shadow-copper/20">
+                      <BarChart3 className="w-5 h-5 text-copper-light" strokeWidth={1.75} />
                     </div>
-                    <div>
-                      <div className="text-sm font-mono font-medium text-text-primary group-hover:text-copper-light transition-colors">DexScreener</div>
+                    <div className="flex-1">
+                      <div className="text-sm font-mono font-medium text-text-primary group-hover:text-copper-light transition-colors flex items-center gap-1">
+                        DexScreener
+                        <ArrowUpRight className="w-3 h-3 opacity-0 -translate-x-1 group-hover:opacity-100 group-hover:translate-x-0 transition-all duration-300" />
+                      </div>
                       <div className="text-xs font-mono text-text-muted">View Charts</div>
                     </div>
-                  </a>
-                  <a
+                  </motion.a>
+
+                  {/* Telegram Bot */}
+                  <motion.a
                     href="https://t.me/ClaudeWheelBot"
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="flex items-center gap-3 p-4 rounded-xl bg-bg-secondary/50 border border-border-subtle hover:border-accent-cyan/30 hover:bg-bg-card transition-all duration-300 group"
+                    whileHover={{ y: -4, scale: 1.02 }}
+                    whileTap={{ scale: 0.98 }}
+                    className="flex items-center gap-3 p-4 rounded-xl bg-bg-secondary/60 border border-border-subtle hover:border-accent-cyan/40 hover:bg-bg-card/80 transition-all duration-300 group backdrop-blur-sm"
                   >
-                    <div className="w-10 h-10 rounded-lg bg-accent-cyan/20 flex items-center justify-center group-hover:bg-accent-cyan/30 transition-colors">
-                      <span className="text-xl">🤖</span>
+                    <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-accent-cyan/30 to-accent-cyan/10 flex items-center justify-center group-hover:from-accent-cyan/50 group-hover:to-accent-cyan/20 transition-all duration-300 shadow-lg shadow-accent-cyan/20">
+                      <Bot className="w-5 h-5 text-accent-cyan" strokeWidth={1.75} />
                     </div>
-                    <div>
-                      <div className="text-sm font-mono font-medium text-text-primary group-hover:text-accent-cyan transition-colors">Telegram Bot</div>
+                    <div className="flex-1">
+                      <div className="text-sm font-mono font-medium text-text-primary group-hover:text-accent-cyan transition-colors flex items-center gap-1">
+                        Telegram Bot
+                        <ArrowUpRight className="w-3 h-3 opacity-0 -translate-x-1 group-hover:opacity-100 group-hover:translate-x-0 transition-all duration-300" />
+                      </div>
                       <div className="text-xs font-mono text-text-muted">Launch Tokens</div>
                     </div>
-                  </a>
-                  <a
+                  </motion.a>
+
+                  {/* Community */}
+                  <motion.a
                     href="https://x.com/i/communities/2008530158354063511"
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="flex items-center gap-3 p-4 rounded-xl bg-bg-secondary/50 border border-border-subtle hover:border-success/30 hover:bg-bg-card transition-all duration-300 group"
+                    whileHover={{ y: -4, scale: 1.02 }}
+                    whileTap={{ scale: 0.98 }}
+                    className="flex items-center gap-3 p-4 rounded-xl bg-bg-secondary/60 border border-border-subtle hover:border-success/40 hover:bg-bg-card/80 transition-all duration-300 group backdrop-blur-sm"
                   >
-                    <div className="w-10 h-10 rounded-lg bg-success/20 flex items-center justify-center group-hover:bg-success/30 transition-colors">
-                      <span className="text-xl">🐦</span>
+                    <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-success/30 to-success/10 flex items-center justify-center group-hover:from-success/50 group-hover:to-success/20 transition-all duration-300 shadow-lg shadow-success/20">
+                      <Users className="w-5 h-5 text-success" strokeWidth={1.75} />
                     </div>
-                    <div>
-                      <div className="text-sm font-mono font-medium text-text-primary group-hover:text-success transition-colors">Community</div>
+                    <div className="flex-1">
+                      <div className="text-sm font-mono font-medium text-text-primary group-hover:text-success transition-colors flex items-center gap-1">
+                        Community
+                        <ArrowUpRight className="w-3 h-3 opacity-0 -translate-x-1 group-hover:opacity-100 group-hover:translate-x-0 transition-all duration-300" />
+                      </div>
                       <div className="text-xs font-mono text-text-muted">Join Us</div>
                     </div>
-                  </a>
+                  </motion.a>
                 </div>
-              </div>
+              </motion.div>
             </section>
 
             {/* Footer */}
-            <footer className="py-8 border-t border-border-subtle/50">
-              <div className="flex flex-col md:flex-row items-center justify-between gap-6 text-sm font-mono text-text-muted">
-                <div className="flex items-center gap-3">
-                  <Image
-                    src="/logo.png"
-                    alt="Claude Wheel"
-                    width={24}
-                    height={24}
-                    className="opacity-80"
-                  />
-                  <span className="font-display text-lg tracking-wide">
-                    CLAUDE <span className="text-wood-light">WHEEL</span>
-                  </span>
-                  <span className="text-text-muted/30">|</span>
-                  <span className="text-xs tracking-wider">Autonomous Market Making</span>
+            <motion.footer
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ duration: 0.6, delay: 0.3 }}
+              className="relative py-10 mt-4"
+            >
+              {/* Top border with gradient */}
+              <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-border-accent/50 to-transparent" />
+
+              <div className="flex flex-col md:flex-row items-center justify-between gap-8 text-sm font-mono text-text-muted">
+                {/* Brand section */}
+                <div className="flex items-center gap-4">
+                  <div className="relative">
+                    <div className="absolute inset-0 bg-wood-light/20 blur-xl rounded-full" />
+                    <Image
+                      src="/logo.png"
+                      alt="Claude Wheel"
+                      width={32}
+                      height={32}
+                      className="relative opacity-90 hover:opacity-100 transition-opacity"
+                    />
+                  </div>
+                  <div className="flex flex-col">
+                    <span className="font-display text-lg tracking-wide">
+                      CLAUDE <span className="text-wood-light">WHEEL</span>
+                    </span>
+                    <span className="text-xs tracking-wider text-text-muted/60">Autonomous Market Making</span>
+                  </div>
                 </div>
-                <div className="flex items-center gap-6">
-                  <a href="/docs" className="hover:text-wood-light transition-colors">
-                    Docs
+
+                {/* Navigation links */}
+                <div className="flex items-center gap-8">
+                  <a
+                    href="/docs"
+                    className="relative hover:text-wood-light transition-colors group"
+                  >
+                    <span>Docs</span>
+                    <span className="absolute -bottom-1 left-0 w-0 h-px bg-wood-light group-hover:w-full transition-all duration-300" />
                   </a>
-                  <a href="/privacy" className="hover:text-wood-light transition-colors">
-                    Privacy
+                  <a
+                    href="/privacy"
+                    className="relative hover:text-wood-light transition-colors group"
+                  >
+                    <span>Privacy</span>
+                    <span className="absolute -bottom-1 left-0 w-0 h-px bg-wood-light group-hover:w-full transition-all duration-300" />
                   </a>
+
+                  {/* Separator */}
+                  <div className="h-4 w-px bg-border-subtle/50" />
+
+                  {/* Social links */}
                   <a
                     href="https://github.com/mrbarnaclebot-ux/ClaudeWheel"
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="hover:text-wood-light transition-colors flex items-center gap-1.5"
+                    className="flex items-center gap-2 px-3 py-1.5 rounded-lg hover:bg-bg-card/50 hover:text-wood-light transition-all duration-300 group"
                   >
                     <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
                       <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/>
                     </svg>
-                    GitHub
+                    <span className="hidden sm:inline">GitHub</span>
                   </a>
                   <a
                     href="https://x.com/i/communities/2008530158354063511"
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="hover:text-wood-light transition-colors flex items-center gap-1.5"
+                    className="flex items-center gap-2 px-3 py-1.5 rounded-lg hover:bg-bg-card/50 hover:text-wood-light transition-all duration-300 group"
                   >
                     <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
                       <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/>
                     </svg>
-                    Community
+                    <span className="hidden sm:inline">Community</span>
                   </a>
                 </div>
               </div>
-            </footer>
+
+              {/* Copyright */}
+              <div className="mt-8 pt-6 border-t border-border-subtle/30 text-center">
+                <p className="text-xs text-text-muted/50 font-mono">
+                  Built with Claude Code
+                </p>
+              </div>
+            </motion.footer>
           </>
         )}
       </main>
