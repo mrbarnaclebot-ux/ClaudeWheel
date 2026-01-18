@@ -52,6 +52,8 @@ export default function PriceChart({
   const [selectedRange, setSelectedRange] = useState<TimeRange>('24H')
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [retryCount, setRetryCount] = useState(0)
+  const MAX_RETRIES = 3
 
   const fetchPriceData = useCallback(async () => {
     try {
@@ -136,13 +138,25 @@ export default function PriceChart({
       }
 
       setPriceData(historicalData)
+      setRetryCount(0) // Reset retry count on success
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load price data')
+      const errorMessage = err instanceof Error ? err.message : 'Failed to load price data'
       console.error('Price fetch error:', err)
+
+      // Auto-retry with exponential backoff (max 3 retries)
+      if (retryCount < MAX_RETRIES) {
+        const delay = Math.pow(2, retryCount) * 1000 // 1s, 2s, 4s
+        console.log(`Retrying in ${delay}ms (attempt ${retryCount + 1}/${MAX_RETRIES})`)
+        setTimeout(() => {
+          setRetryCount(prev => prev + 1)
+        }, delay)
+      } else {
+        setError(errorMessage)
+      }
     } finally {
       setIsLoading(false)
     }
-  }, [tokenAddress, selectedRange])
+  }, [tokenAddress, selectedRange, retryCount])
 
   useEffect(() => {
     fetchPriceData()
@@ -150,6 +164,12 @@ export default function PriceChart({
     const interval = setInterval(fetchPriceData, 30000)
     return () => clearInterval(interval)
   }, [fetchPriceData])
+
+  const handleManualRetry = () => {
+    setError(null)
+    setRetryCount(0)
+    fetchPriceData()
+  }
 
   const formatTime = (timestamp: number, range: TimeRange): string => {
     const date = new Date(timestamp)
@@ -273,8 +293,35 @@ export default function PriceChart({
             </motion.div>
           </div>
         ) : error ? (
-          <div className="h-full flex items-center justify-center">
-            <span className="text-error font-mono text-sm">{error}</span>
+          <div className="h-full flex flex-col items-center justify-center gap-4">
+            <div className="flex flex-col items-center gap-2">
+              <svg
+                className="w-8 h-8 text-error/60"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.5"
+              >
+                <circle cx="12" cy="12" r="10" />
+                <path d="M12 8v4m0 4h.01" />
+              </svg>
+              <span className="text-error font-mono text-sm">{error}</span>
+              <span className="text-text-muted font-mono text-xs">
+                Unable to load price data from DexScreener
+              </span>
+            </div>
+            <button
+              onClick={handleManualRetry}
+              className="px-4 py-2 text-sm font-mono bg-accent-primary/10 text-accent-primary
+                         border border-accent-primary/30 rounded-lg hover:bg-accent-primary/20
+                         transition-colors flex items-center gap-2"
+            >
+              <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M1 4v6h6M23 20v-6h-6" />
+                <path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15" />
+              </svg>
+              Retry
+            </button>
           </div>
         ) : (
           <ResponsiveContainer width="100%" height="100%">
