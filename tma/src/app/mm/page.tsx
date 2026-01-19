@@ -15,7 +15,7 @@ type MmStep = 'input' | 'review' | 'depositing' | 'active';
 
 interface MmData {
     tokenMint: string;
-    mmAlgorithm: 'simple' | 'turbo_lite' | 'rebalance';
+    mmAlgorithm: 'simple' | 'turbo_lite' | 'rebalance' | 'transaction_reactive';
 }
 
 interface TokenInfo {
@@ -301,9 +301,11 @@ export default function MmPage() {
                                 <span className={`text-xs px-2 py-0.5 rounded-full ${
                                     data.mmAlgorithm === 'turbo_lite'
                                         ? 'bg-accent-cyan/20 text-accent-cyan'
+                                        : data.mmAlgorithm === 'transaction_reactive'
+                                        ? 'bg-purple-500/20 text-purple-400'
                                         : 'bg-blue-500/20 text-blue-400'
                                 }`}>
-                                    {data.mmAlgorithm === 'turbo_lite' ? 'Recommended' : 'Stable'}
+                                    {data.mmAlgorithm === 'turbo_lite' ? 'Recommended' : data.mmAlgorithm === 'transaction_reactive' ? 'Advanced' : 'Stable'}
                                 </span>
                             </div>
                             <div className="space-y-2">
@@ -320,6 +322,13 @@ export default function MmPage() {
                                         label: '🚀 Turbo Lite',
                                         desc: 'High frequency',
                                         detail: '8 buys/sells, 15s cycles',
+                                        disabled: false
+                                    },
+                                    {
+                                        value: 'transaction_reactive',
+                                        label: '⚡ Reactive',
+                                        desc: 'Counter big trades',
+                                        detail: 'Real-time response',
                                         disabled: false
                                     },
                                     {

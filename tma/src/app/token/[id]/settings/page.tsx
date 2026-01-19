@@ -16,7 +16,7 @@ import { useParams, useRouter } from 'next/navigation';
 interface TokenConfig {
     flywheel_active: boolean;
     auto_claim_enabled: boolean;
-    algorithm_mode: 'simple' | 'turbo_lite' | 'rebalance';
+    algorithm_mode: 'simple' | 'turbo_lite' | 'rebalance' | 'transaction_reactive';
 
     // Turbo Lite configuration
     turbo_job_interval_seconds?: number;
@@ -26,6 +26,13 @@ interface TokenConfig {
     turbo_global_rate_limit?: number;
     turbo_confirmation_timeout?: number;
     turbo_batch_state_updates?: boolean;
+
+    // Transaction Reactive configuration
+    reactive_enabled?: boolean;
+    reactive_min_trigger_sol?: number;
+    reactive_scale_percent?: number;
+    reactive_max_response_percent?: number;
+    reactive_cooldown_ms?: number;
 }
 
 interface TokenDetails {
@@ -75,6 +82,13 @@ export default function TokenSettingsPage() {
                 turbo_global_rate_limit: token.config.turbo_global_rate_limit ?? 60,
                 turbo_confirmation_timeout: token.config.turbo_confirmation_timeout ?? 45,
                 turbo_batch_state_updates: token.config.turbo_batch_state_updates ?? true,
+
+                // Initialize reactive fields with defaults
+                reactive_enabled: token.config.reactive_enabled ?? false,
+                reactive_min_trigger_sol: token.config.reactive_min_trigger_sol ?? 0.5,
+                reactive_scale_percent: token.config.reactive_scale_percent ?? 10,
+                reactive_max_response_percent: token.config.reactive_max_response_percent ?? 80,
+                reactive_cooldown_ms: token.config.reactive_cooldown_ms ?? 5000,
             });
         }
     }, [token]);
@@ -245,6 +259,15 @@ export default function TokenSettingsPage() {
                             details: '8 buys then 8 sells per cycle, 15s intervals. Generates more volume and fees but uses more capital.',
                             badge: 'Recommended',
                             badgeColor: 'bg-success/20 text-success',
+                            disabled: false
+                        },
+                        {
+                            value: 'transaction_reactive',
+                            label: '⚡ Reactive',
+                            desc: 'Counter big trades',
+                            details: 'Monitors transactions in real-time. Sells when others buy big, buys when others sell big. Response scales with trade size.',
+                            badge: 'Advanced',
+                            badgeColor: 'bg-purple-500/20 text-purple-400',
                             disabled: false
                         },
                         {
@@ -510,6 +533,146 @@ export default function TokenSettingsPage() {
                                     ~{Math.floor((formData.turbo_cycle_size_buys ?? 8) * 2 * 60 / (formData.turbo_job_interval_seconds ?? 15))} trades/min
                                     ({Math.floor(((formData.turbo_cycle_size_buys ?? 8) * 2 * 60 / (formData.turbo_job_interval_seconds ?? 15)) / 10)}x faster than Simple mode)
                                 </p>
+                            </div>
+                        </div>
+                    </div>
+                </motion.div>
+            )}
+
+            {/* Transaction Reactive Mode Configuration */}
+            {formData.algorithm_mode === 'transaction_reactive' && (
+                <motion.div
+                    initial={{ opacity: 0, height: 0 }}
+                    animate={{ opacity: 1, height: 'auto' }}
+                    exit={{ opacity: 0, height: 0 }}
+                    transition={{ delay: 0.2 }}
+                    className="space-y-4 bg-gray-800/30 rounded-xl p-4 border border-gray-700/50 mb-6"
+                >
+                    <div className="flex items-center gap-2 mb-3">
+                        <span className="text-lg">⚡</span>
+                        <h3 className="font-semibold text-white">Reactive Mode Settings</h3>
+                    </div>
+
+                    <div className="bg-yellow-900/20 border border-yellow-700/50 rounded-lg p-3 mb-4">
+                        <p className="text-xs text-yellow-200">
+                            <strong>How it works:</strong> Monitors transactions in real-time. When someone makes a big buy,
+                            we automatically sell. When someone makes a big sell, we automatically buy.
+                            Response size scales with trade size.
+                        </p>
+                    </div>
+
+                    {/* Min Trigger Amount */}
+                    <div>
+                        <label className="block text-sm text-gray-300 mb-2">
+                            Minimum Trigger (SOL)
+                        </label>
+                        <input
+                            type="range"
+                            min={0.1}
+                            max={10}
+                            step={0.1}
+                            value={formData.reactive_min_trigger_sol ?? 0.5}
+                            onChange={(e) => updateField('reactive_min_trigger_sol', parseFloat(e.target.value))}
+                            className="w-full"
+                        />
+                        <div className="flex justify-between text-xs text-gray-400 mt-1">
+                            <span>0.1 SOL</span>
+                            <span className="text-cyan-400 font-semibold">
+                                {(formData.reactive_min_trigger_sol ?? 0.5).toFixed(1)} SOL
+                            </span>
+                            <span>10 SOL</span>
+                        </div>
+                        <p className="text-xs text-gray-500 mt-1">Ignore trades smaller than this</p>
+                    </div>
+
+                    {/* Scale Percent */}
+                    <div>
+                        <label className="block text-sm text-gray-300 mb-2">
+                            Response Scale (% per SOL)
+                        </label>
+                        <input
+                            type="range"
+                            min={1}
+                            max={50}
+                            step={1}
+                            value={formData.reactive_scale_percent ?? 10}
+                            onChange={(e) => updateField('reactive_scale_percent', parseInt(e.target.value))}
+                            className="w-full"
+                        />
+                        <div className="flex justify-between text-xs text-gray-400 mt-1">
+                            <span>1%</span>
+                            <span className="text-cyan-400 font-semibold">
+                                {formData.reactive_scale_percent ?? 10}% per SOL
+                            </span>
+                            <span>50%</span>
+                        </div>
+                        <p className="text-xs text-gray-500 mt-1">
+                            Example: {formData.reactive_scale_percent ?? 10}% × 3 SOL trade = {(formData.reactive_scale_percent ?? 10) * 3}% response
+                        </p>
+                    </div>
+
+                    {/* Max Response Percent */}
+                    <div>
+                        <label className="block text-sm text-gray-300 mb-2">
+                            Maximum Response (% of wallet)
+                        </label>
+                        <input
+                            type="range"
+                            min={10}
+                            max={100}
+                            step={5}
+                            value={formData.reactive_max_response_percent ?? 80}
+                            onChange={(e) => updateField('reactive_max_response_percent', parseInt(e.target.value))}
+                            className="w-full"
+                        />
+                        <div className="flex justify-between text-xs text-gray-400 mt-1">
+                            <span>10%</span>
+                            <span className="text-cyan-400 font-semibold">
+                                {formData.reactive_max_response_percent ?? 80}% max
+                            </span>
+                            <span>100%</span>
+                        </div>
+                        <p className="text-xs text-gray-500 mt-1">Cap response size even on huge trades</p>
+                    </div>
+
+                    {/* Cooldown */}
+                    <div>
+                        <label className="block text-sm text-gray-300 mb-2">
+                            Cooldown (seconds)
+                        </label>
+                        <input
+                            type="range"
+                            min={1}
+                            max={60}
+                            step={1}
+                            value={(formData.reactive_cooldown_ms ?? 5000) / 1000}
+                            onChange={(e) => updateField('reactive_cooldown_ms', parseInt(e.target.value) * 1000)}
+                            className="w-full"
+                        />
+                        <div className="flex justify-between text-xs text-gray-400 mt-1">
+                            <span>1s</span>
+                            <span className="text-cyan-400 font-semibold">
+                                {(formData.reactive_cooldown_ms ?? 5000) / 1000}s
+                            </span>
+                            <span>60s</span>
+                        </div>
+                        <p className="text-xs text-gray-500 mt-1">Min time between reactive trades</p>
+                    </div>
+
+                    {/* Response Preview */}
+                    <div className="bg-cyan-900/20 border border-cyan-700/50 rounded-lg p-3 mt-4">
+                        <div className="flex items-start gap-2">
+                            <span className="text-lg">📊</span>
+                            <div>
+                                <p className="text-sm font-semibold text-cyan-400">Response Formula</p>
+                                <p className="text-xs text-gray-300 mt-1">
+                                    Response % = min(SOL × {formData.reactive_scale_percent ?? 10}%, {formData.reactive_max_response_percent ?? 80}%)
+                                </p>
+                                <div className="text-xs text-gray-400 mt-2 space-y-1">
+                                    <p>• 1 SOL trade → {Math.min(1 * (formData.reactive_scale_percent ?? 10), formData.reactive_max_response_percent ?? 80)}% response</p>
+                                    <p>• 3 SOL trade → {Math.min(3 * (formData.reactive_scale_percent ?? 10), formData.reactive_max_response_percent ?? 80)}% response</p>
+                                    <p>• 10 SOL trade → {Math.min(10 * (formData.reactive_scale_percent ?? 10), formData.reactive_max_response_percent ?? 80)}% response</p>
+                                </div>
                             </div>
                         </div>
                     </div>

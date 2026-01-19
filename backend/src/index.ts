@@ -18,6 +18,7 @@ import privyMmRoutes from './routes/privy-mm.routes'
 import { bagsFmService } from './services/bags-fm'
 import { startTelegramBot, stopTelegramBot, getTelegramWebhookMiddleware } from './telegram/bot'
 import { startDepositMonitorJob, stopDepositMonitorJob } from './jobs/deposit-monitor.job'
+import { startReactiveMonitorJob, stopReactiveMonitorJob } from './jobs/reactive-monitor.job'
 import { adminWs } from './websocket/admin-ws'
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -144,6 +145,13 @@ async function initializeServices() {
     loggers.server.info('Balance update job disabled via BALANCE_UPDATE_JOB_ENABLED=false')
   }
 
+  // Start reactive monitor job for transaction_reactive MM mode
+  if (process.env.REACTIVE_MONITOR_ENABLED !== 'false') {
+    await startReactiveMonitorJob()
+  } else {
+    loggers.server.info('Reactive monitor job disabled via REACTIVE_MONITOR_ENABLED=false')
+  }
+
   // WHEEL token is processed by regular Privy flywheel (tokenSource='platform')
 
   // Start Telegram bot
@@ -206,7 +214,7 @@ process.on('unhandledRejection', async (reason: unknown, promise: Promise<unknow
 // GRACEFUL SHUTDOWN
 // ═══════════════════════════════════════════════════════════════════════════
 
-process.on('SIGTERM', () => {
+process.on('SIGTERM', async () => {
   loggers.server.info('Shutting down gracefully...')
   discordErrorService.shutdown()
   adminWs.shutdown()
@@ -214,13 +222,14 @@ process.on('SIGTERM', () => {
   stopDepositMonitorJob()
   stopFastClaimJob()
   stopBalanceUpdateJob()
+  await stopReactiveMonitorJob()
   server.close(() => {
     loggers.server.info('Server closed')
     process.exit(0)
   })
 })
 
-process.on('SIGINT', () => {
+process.on('SIGINT', async () => {
   loggers.server.info('Shutting down gracefully...')
   discordErrorService.shutdown()
   adminWs.shutdown()
@@ -228,6 +237,7 @@ process.on('SIGINT', () => {
   stopDepositMonitorJob()
   stopFastClaimJob()
   stopBalanceUpdateJob()
+  await stopReactiveMonitorJob()
   server.close(() => {
     loggers.server.info('Server closed')
     process.exit(0)

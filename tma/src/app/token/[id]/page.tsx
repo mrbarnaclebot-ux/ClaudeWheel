@@ -47,6 +47,13 @@ interface TokenDetails {
         turbo_global_rate_limit?: number;
         turbo_confirmation_timeout?: number;
         turbo_batch_state_updates?: boolean;
+
+        // Transaction Reactive configuration
+        reactive_enabled?: boolean;
+        reactive_min_trigger_sol?: number;
+        reactive_scale_percent?: number;
+        reactive_max_response_percent?: number;
+        reactive_cooldown_ms?: number;
     };
     state?: {
         cycle_phase: string;

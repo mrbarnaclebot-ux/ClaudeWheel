@@ -166,6 +166,15 @@ model PrivyTokenConfig {
   // Per-token platform fee override (null = use global default from env)
   platformFeePercentageOverride Int? @map("platform_fee_percentage_override")
 
+  // Transaction Reactive Mode Configuration
+  // Monitors token transactions in real-time and responds to large trades
+  // Formula: response_% = min(sol_amount × reactiveScalePercent, reactiveMaxResponsePercent)
+  reactiveEnabled           Boolean  @default(false) @map("reactive_enabled")
+  reactiveMinTriggerSol     Decimal  @default(0.5) @map("reactive_min_trigger_sol") @db.Decimal(20, 9)
+  reactiveScalePercent      Int      @default(10) @map("reactive_scale_percent")      // % response per 1 SOL
+  reactiveMaxResponsePercent Int     @default(80) @map("reactive_max_response_percent") // max % of wallet to trade
+  reactiveCooldownMs        Int      @default(5000) @map("reactive_cooldown_ms")       // min time between reactions
+
   token PrivyUserToken @relation(fields: [privyTokenId], references: [id], onDelete: Cascade)
 
   @@index([flywheelActive])
@@ -209,6 +218,10 @@ model PrivyFlywheelState {
   rapidSellsCompleted     Int       @default(0) @map("rapid_sells_completed")
   tokensBoughtThisCycle   Decimal   @default(0) @map("tokens_bought_this_cycle") @db.Decimal(30, 9)
   solSpentThisCycle       Decimal   @default(0) @map("sol_spent_this_cycle") @db.Decimal(20, 9)
+
+  // Transaction Reactive Mode State
+  lastReactiveTradeAt     DateTime? @map("last_reactive_trade_at")
+  reactiveTradesCount     Int       @default(0) @map("reactive_trades_count")
 
   token PrivyUserToken @relation(fields: [privyTokenId], references: [id], onDelete: Cascade)
 
