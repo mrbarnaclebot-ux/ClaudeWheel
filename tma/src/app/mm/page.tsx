@@ -8,6 +8,7 @@ import { api } from '@/lib/api';
 import { toast } from '@/lib/toast';
 import { LoadingButton } from '@/components/LoadingButton';
 import { AlgorithmBadge } from '@/components/StatusBadge';
+import { DepositProgress } from '@/components/DepositProgress';
 import { motion, AnimatePresence } from 'framer-motion';
 
 type MmStep = 'input' | 'review' | 'depositing' | 'active';
@@ -295,28 +296,58 @@ export default function MmPage() {
 
                         {/* MM Strategy Selection */}
                         <div className="bg-bg-card border border-border-subtle rounded-xl p-4">
-                            <label className="block text-sm text-text-muted mb-3">Market Making Strategy</label>
-                            <div className="grid grid-cols-3 gap-2">
+                            <div className="flex items-center justify-between mb-3">
+                                <label className="block text-sm text-text-muted">Market Making Strategy</label>
+                                <span className={`text-xs px-2 py-0.5 rounded-full ${
+                                    data.mmAlgorithm === 'turbo_lite'
+                                        ? 'bg-accent-cyan/20 text-accent-cyan'
+                                        : 'bg-blue-500/20 text-blue-400'
+                                }`}>
+                                    {data.mmAlgorithm === 'turbo_lite' ? 'Recommended' : 'Stable'}
+                                </span>
+                            </div>
+                            <div className="space-y-2">
                                 {[
-                                    { value: 'simple', label: '🐢 Simple', desc: '5 buys, 5 sells', disabled: false },
-                                    { value: 'turbo_lite', label: '🚀 Turbo', desc: '8 buys, 8 sells (8x)', disabled: false },
-                                    { value: 'rebalance', label: '⚖️ Rebalance', desc: 'Portfolio %', disabled: true },
+                                    {
+                                        value: 'simple',
+                                        label: '🐢 Simple',
+                                        desc: 'Steady & reliable',
+                                        detail: '5 buys/sells, 60s cycles',
+                                        disabled: false
+                                    },
+                                    {
+                                        value: 'turbo_lite',
+                                        label: '🚀 Turbo Lite',
+                                        desc: 'High frequency',
+                                        detail: '8 buys/sells, 15s cycles',
+                                        disabled: false
+                                    },
+                                    {
+                                        value: 'rebalance',
+                                        label: '⚖️ Rebalance',
+                                        desc: 'Auto-balance',
+                                        detail: 'Coming soon',
+                                        disabled: true
+                                    },
                                 ].map(opt => (
                                     <button
                                         key={opt.value}
                                         type="button"
                                         onClick={() => !opt.disabled && setData({ ...data, mmAlgorithm: opt.value as MmData['mmAlgorithm'] })}
                                         disabled={opt.disabled}
-                                        className={`p-3 rounded-lg text-center transition-colors ${
+                                        className={`w-full p-3 rounded-lg text-left transition-colors ${
                                             opt.disabled
-                                                ? 'bg-bg-secondary/50 text-text-muted opacity-50 cursor-not-allowed border border-border-subtle'
+                                                ? 'bg-bg-secondary/50 text-text-muted opacity-50 cursor-not-allowed'
                                                 : data.mmAlgorithm === opt.value
-                                                ? 'bg-accent-cyan text-bg-void'
+                                                ? 'bg-accent-cyan/20 border-2 border-accent-cyan text-text-primary'
                                                 : 'bg-bg-secondary text-text-secondary hover:bg-bg-card-hover border border-border-subtle'
                                         }`}
                                     >
-                                        <div className="text-sm font-medium">{opt.label}</div>
-                                        <div className="text-xs opacity-70">{opt.desc}</div>
+                                        <div className="flex items-center justify-between">
+                                            <span className="font-medium">{opt.label}</span>
+                                            <span className="text-xs text-text-muted">{opt.detail}</span>
+                                        </div>
+                                        <div className="text-xs text-text-muted mt-1">{opt.desc}</div>
                                     </button>
                                 ))}
                             </div>
@@ -441,16 +472,14 @@ export default function MmPage() {
                             </p>
                         </div>
 
-                        {/* Balance indicator */}
-                        <div className={`rounded-xl p-4 mb-4 ${depositBalance >= pendingMm.minDepositSol ? 'bg-success/20 border border-success/30' : 'bg-bg-card border border-border-subtle'}`}>
-                            <p className={`text-sm ${depositBalance >= pendingMm.minDepositSol ? 'text-success' : 'text-text-secondary'}`}>
-                                Current Balance: <span className="font-bold">{depositBalance.toFixed(4)} SOL</span>
-                            </p>
-                            {depositBalance >= pendingMm.minDepositSol && (
-                                <p className="text-xs text-success/70 mt-1">
-                                    Activating MM...
-                                </p>
-                            )}
+                        {/* Deposit Progress */}
+                        <div className="mb-4">
+                            <DepositProgress
+                                currentBalance={depositBalance}
+                                requiredAmount={pendingMm.minDepositSol}
+                                recommendedAmount={pendingMm.minDepositSol + 0.4}
+                                accentColor="cyan"
+                            />
                         </div>
 
                         {/* Status indicator */}
