@@ -1346,11 +1346,14 @@ class MultiUserMMService {
           return { ...baseResult, tradeType, success: false, amount: 0, error: 'Trade amount too small' }
         }
 
+        // Convert to smallest units (token decimals) - same as simple algorithm
+        const tokenUnits = Math.floor(tradeAmount * Math.pow(10, token.tokenDecimals))
+
         // Get quote for selling tokens
         const quote = await this.getTradeQuote(
           token.tokenMintAddress,
           SOL_MINT,
-          tradeAmount,
+          tokenUnits,
           'sell',
           slippageBps
         )
@@ -1376,11 +1379,14 @@ class MultiUserMMService {
           return { ...baseResult, tradeType, success: false, amount: 0, error: 'Trade amount too small' }
         }
 
+        // Convert to lamports - same as simple algorithm
+        const lamports = Math.floor(tradeAmount * 1e9)
+
         // Get quote for buying tokens
         const quote = await this.getTradeQuote(
           SOL_MINT,
           token.tokenMintAddress,
-          tradeAmount,
+          lamports,
           'buy',
           slippageBps
         )
