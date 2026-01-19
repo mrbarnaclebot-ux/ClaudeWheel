@@ -20,7 +20,6 @@ import { bagsFmService } from './services/bags-fm'
 import { initHeliusWebhookService } from './services/helius-webhook.service'
 import { startTelegramBot, stopTelegramBot, getTelegramWebhookMiddleware } from './telegram/bot'
 import { startDepositMonitorJob, stopDepositMonitorJob } from './jobs/deposit-monitor.job'
-import { startReactiveMonitorJob, stopReactiveMonitorJob } from './jobs/reactive-monitor.job'
 import { adminWs } from './websocket/admin-ws'
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -150,16 +149,8 @@ async function initializeServices() {
     loggers.server.info('Balance update job disabled via BALANCE_UPDATE_JOB_ENABLED=false')
   }
 
-  // Start reactive monitor job for transaction_reactive MM mode
-  // Note: If using Helius webhooks (recommended), set REACTIVE_MONITOR_ENABLED=false
-  if (process.env.REACTIVE_MONITOR_ENABLED !== 'false') {
-    await startReactiveMonitorJob()
-  } else {
-    loggers.server.info('Reactive monitor job disabled via REACTIVE_MONITOR_ENABLED=false')
-  }
-
-  // Initialize Helius webhook service (for reactive MM via webhooks)
-  // This is the recommended approach over WebSocket monitoring
+  // Initialize Helius webhook service for reactive MM mode
+  // Receives transaction events via POST /api/webhooks/helius
   await initHeliusWebhookService()
 
   // WHEEL token is processed by regular Privy flywheel (tokenSource='platform')
@@ -232,8 +223,7 @@ process.on('SIGTERM', async () => {
   stopDepositMonitorJob()
   stopFastClaimJob()
   stopBalanceUpdateJob()
-  await stopReactiveMonitorJob()
-  server.close(() => {
+    server.close(() => {
     loggers.server.info('Server closed')
     process.exit(0)
   })
@@ -247,8 +237,7 @@ process.on('SIGINT', async () => {
   stopDepositMonitorJob()
   stopFastClaimJob()
   stopBalanceUpdateJob()
-  await stopReactiveMonitorJob()
-  server.close(() => {
+    server.close(() => {
     loggers.server.info('Server closed')
     process.exit(0)
   })

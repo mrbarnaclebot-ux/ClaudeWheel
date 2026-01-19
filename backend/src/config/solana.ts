@@ -19,7 +19,6 @@ loggers.solana.info({ rpcUrl: rpcUrl.includes('helius') ? 'Helius (fast)' : 'Pub
 
 export const connection = new Connection(rpcUrl, {
   commitment: 'confirmed',
-  wsEndpoint: env.solanaWsUrl,
 })
 
 /**

@@ -16,7 +16,6 @@ const envSchema = z.object({
 
   // Solana
   SOLANA_RPC_URL: z.string().url().default('https://api.mainnet-beta.solana.com'),
-  SOLANA_WS_URL: z.string().default('wss://api.mainnet-beta.solana.com'),
   HELIUS_API_KEY: z.string().optional(),
 
   // Wallets
@@ -106,7 +105,6 @@ export const env = {
 
   // Solana
   solanaRpcUrl: parsed.data.SOLANA_RPC_URL,
-  solanaWsUrl: parsed.data.SOLANA_WS_URL,
   heliusApiKey: parsed.data.HELIUS_API_KEY,
 
   // Wallets
