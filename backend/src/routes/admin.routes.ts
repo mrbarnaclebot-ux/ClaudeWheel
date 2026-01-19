@@ -26,6 +26,7 @@ import { getDepositMonitorStatus } from '../jobs/deposit-monitor.job'
 import { triggerFlywheelCycle } from '../jobs/multi-flywheel.job'
 import { loggers } from '../utils/logger'
 import { platformConfigService } from '../services/platform-config.service'
+import { setupHeliusWebhook, getWebhookStatus, deleteHeliusWebhook } from '../services/helius-webhook.service'
 // wheelMMService removed - WHEEL is now handled by regular Privy flywheel
 
 // Legacy function stubs for backwards compatibility - these jobs have been removed
@@ -3415,6 +3416,104 @@ router.post('/discord/test', requireAdmin, async (req: AdminRequest, res: Respon
     })
   } catch (error) {
     console.error('Error sending Discord test:', error)
+    return res.status(500).json({ error: 'Internal server error' })
+  }
+})
+
+// ═══════════════════════════════════════════════════════════════════════════
+// HELIUS WEBHOOK MANAGEMENT (for reactive MM)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * GET /api/admin/helius-webhook/status
+ * Get current Helius webhook configuration status
+ */
+router.get('/helius-webhook/status', requireAdmin, async (_req: AdminRequest, res: Response) => {
+  try {
+    const status = await getWebhookStatus()
+    return res.json({
+      success: true,
+      ...status,
+    })
+  } catch (error) {
+    console.error('Error getting webhook status:', error)
+    return res.status(500).json({ error: 'Internal server error' })
+  }
+})
+
+/**
+ * POST /api/admin/helius-webhook/setup
+ * Setup or update Helius webhook for reactive MM
+ * Body: { webhookUrl?: string } - defaults to current server URL + /api/webhooks/helius
+ */
+router.post('/helius-webhook/setup', requireAdmin, requirePermission('trigger_jobs'), async (req: AdminRequest, res: Response) => {
+  try {
+    // Default webhook URL is the current server's webhook endpoint
+    const defaultUrl = process.env.BACKEND_URL
+      ? `${process.env.BACKEND_URL}/api/webhooks/helius`
+      : `https://your-backend-url.com/api/webhooks/helius`
+
+    const webhookUrl = req.body.webhookUrl || defaultUrl
+
+    if (!webhookUrl.startsWith('https://')) {
+      return res.status(400).json({
+        success: false,
+        error: 'Webhook URL must use HTTPS',
+      })
+    }
+
+    const result = await setupHeliusWebhook(webhookUrl)
+
+    if (result.success) {
+      return res.json({
+        success: true,
+        webhookId: result.webhookId,
+        webhookUrl,
+        message: 'Helius webhook configured successfully',
+      })
+    } else {
+      return res.status(400).json({
+        success: false,
+        error: result.error,
+      })
+    }
+  } catch (error) {
+    console.error('Error setting up webhook:', error)
+    return res.status(500).json({ error: 'Internal server error' })
+  }
+})
+
+/**
+ * DELETE /api/admin/helius-webhook/:webhookId
+ * Delete a Helius webhook
+ */
+router.delete('/helius-webhook/:webhookId', requireAdmin, requirePermission('trigger_jobs'), async (req: AdminRequest, res: Response) => {
+  try {
+    const { webhookId } = req.params
+
+    // Validate webhookId format (Helius uses UUIDs)
+    if (!webhookId || !/^[a-f0-9-]{36}$/i.test(webhookId)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid webhook ID format',
+      })
+    }
+
+    const success = await deleteHeliusWebhook(webhookId)
+
+    if (success) {
+      return res.json({
+        success: true,
+        message: 'Webhook deleted successfully',
+      })
+    } else {
+      return res.status(400).json({
+        success: false,
+        error: 'Failed to delete webhook',
+      })
+    }
+  } catch (error) {
+    console.error('Error deleting webhook:', error)
     return res.status(500).json({ error: 'Internal server error' })
   }
 })

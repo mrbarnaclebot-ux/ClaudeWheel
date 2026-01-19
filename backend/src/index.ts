@@ -15,7 +15,9 @@ import privyTokensRoutes from './routes/privy-tokens.routes'
 import privyLaunchesRoutes from './routes/privy-launches.routes'
 import privyUsersRoutes from './routes/privy-users.routes'
 import privyMmRoutes from './routes/privy-mm.routes'
+import heliusWebhookRoutes from './routes/helius-webhook.routes'
 import { bagsFmService } from './services/bags-fm'
+import { initHeliusWebhookService } from './services/helius-webhook.service'
 import { startTelegramBot, stopTelegramBot, getTelegramWebhookMiddleware } from './telegram/bot'
 import { startDepositMonitorJob, stopDepositMonitorJob } from './jobs/deposit-monitor.job'
 import { startReactiveMonitorJob, stopReactiveMonitorJob } from './jobs/reactive-monitor.job'
@@ -43,6 +45,9 @@ app.use('/api/privy/tokens', privyTokensRoutes)
 app.use('/api/privy/launches', privyLaunchesRoutes)
 app.use('/api/privy/mm', privyMmRoutes)
 app.use('/api/users', privyUsersRoutes)
+
+// Helius webhook (for reactive MM)
+app.use('/api/webhooks', heliusWebhookRoutes)
 
 // Telegram webhook (for production)
 const telegramWebhook = getTelegramWebhookMiddleware()
@@ -146,11 +151,16 @@ async function initializeServices() {
   }
 
   // Start reactive monitor job for transaction_reactive MM mode
+  // Note: If using Helius webhooks (recommended), set REACTIVE_MONITOR_ENABLED=false
   if (process.env.REACTIVE_MONITOR_ENABLED !== 'false') {
     await startReactiveMonitorJob()
   } else {
     loggers.server.info('Reactive monitor job disabled via REACTIVE_MONITOR_ENABLED=false')
   }
+
+  // Initialize Helius webhook service (for reactive MM via webhooks)
+  // This is the recommended approach over WebSocket monitoring
+  await initHeliusWebhookService()
 
   // WHEEL token is processed by regular Privy flywheel (tokenSource='platform')
 
