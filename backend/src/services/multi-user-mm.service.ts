@@ -1232,6 +1232,214 @@ class MultiUserMMService {
   isJobRunning(): boolean {
     return this.isRunning
   }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // TRANSACTION REACTIVE MODE
+  // Responds to large market transactions with counter-trades
+  // Formula: response_% = min(sol_amount × scale_percent, max_response_percent)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * Execute a reactive trade in response to a detected market transaction
+   * @param privyTokenId - Token ID from database
+   * @param detectedType - Type of transaction detected ('buy' or 'sell')
+   * @param solAmount - SOL amount of the detected transaction
+   * @param reactiveConfig - Reactive mode configuration
+   */
+  async executeReactiveTrade(
+    privyTokenId: string,
+    detectedType: 'buy' | 'sell',
+    solAmount: number,
+    reactiveConfig: {
+      minTriggerSol: number
+      scalePercent: number
+      maxResponsePercent: number
+      cooldownMs: number
+    }
+  ): Promise<TradeResult | null> {
+    if (!isPrismaConfigured()) {
+      return null
+    }
+
+    // Get token info with config and state
+    const token = await prisma.privyUserToken.findUnique({
+      where: { id: privyTokenId },
+      include: {
+        config: true,
+        flywheelState: true,
+        opsWallet: true,
+      },
+    })
+
+    if (!token || !token.opsWallet || !token.config) {
+      loggers.flywheel.error({ privyTokenId }, 'Token not found for reactive trade')
+      return null
+    }
+
+    const baseResult = {
+      userTokenId: token.id,
+      tokenMint: token.tokenMintAddress,
+      tokenSymbol: token.tokenSymbol,
+    }
+
+    // Check cooldown
+    if (token.flywheelState?.lastReactiveTradeAt) {
+      const timeSinceLastTrade = Date.now() - new Date(token.flywheelState.lastReactiveTradeAt).getTime()
+      if (timeSinceLastTrade < reactiveConfig.cooldownMs) {
+        loggers.flywheel.debug({
+          tokenSymbol: token.tokenSymbol,
+          timeSinceLastTrade,
+          cooldownMs: reactiveConfig.cooldownMs,
+        }, 'Reactive trade on cooldown, skipping')
+        return null
+      }
+    }
+
+    // Try to acquire lock
+    if (!await this.acquireTurboLock(token.id)) {
+      loggers.flywheel.debug({ tokenSymbol: token.tokenSymbol }, 'Token locked, skipping reactive trade')
+      return null
+    }
+
+    try {
+      const connection = getConnection()
+      const opsWalletAddress = token.opsWallet.walletAddress
+      const opsWalletPubkey = new PublicKey(opsWalletAddress)
+      const tokenMint = new PublicKey(token.tokenMintAddress)
+
+      // Calculate response percentage: min(solAmount × scalePercent, maxResponsePercent)
+      const responsePercent = Math.min(
+        solAmount * reactiveConfig.scalePercent,
+        reactiveConfig.maxResponsePercent
+      )
+
+      loggers.flywheel.info({
+        tokenSymbol: token.tokenSymbol,
+        detectedType,
+        solAmount,
+        responsePercent,
+      }, `🎯 Executing reactive ${detectedType === 'buy' ? 'SELL' : 'BUY'} (${responsePercent}% response)`)
+
+      // Counter-trade: if market buys, we sell; if market sells, we buy
+      const tradeType: 'buy' | 'sell' = detectedType === 'buy' ? 'sell' : 'buy'
+      const slippageBps = token.config.slippageBps
+
+      let signature: string | null = null
+      let tradeAmount = 0
+
+      if (tradeType === 'sell') {
+        // Sell tokens: get token balance and sell responsePercent%
+        const tokenBalance = await getTokenBalance(opsWalletPubkey, tokenMint)
+        if (tokenBalance <= 0) {
+          loggers.flywheel.warn({ tokenSymbol: token.tokenSymbol }, 'No token balance for reactive sell')
+          return { ...baseResult, tradeType, success: false, amount: 0, error: 'No token balance' }
+        }
+
+        tradeAmount = tokenBalance * (responsePercent / 100)
+        if (tradeAmount < 1) {
+          loggers.flywheel.debug({ tokenSymbol: token.tokenSymbol, tradeAmount }, 'Trade amount too small')
+          return { ...baseResult, tradeType, success: false, amount: 0, error: 'Trade amount too small' }
+        }
+
+        // Get quote for selling tokens
+        const quote = await this.getTradeQuote(
+          token.tokenMintAddress,
+          SOL_MINT,
+          tradeAmount,
+          'sell',
+          slippageBps
+        )
+
+        if (!quote) {
+          return { ...baseResult, tradeType, success: false, amount: 0, error: 'Failed to get sell quote' }
+        }
+
+        signature = await this.executeSwapWithPrivySigning(connection, opsWalletAddress, quote.rawQuoteResponse)
+
+      } else {
+        // Buy tokens: get SOL balance and buy with responsePercent% of SOL
+        const solBalance = await getBalance(opsWalletPubkey)
+        const availableSol = Math.max(0, solBalance - 0.05) // Keep 0.05 SOL reserve
+        if (availableSol <= 0.01) {
+          loggers.flywheel.warn({ tokenSymbol: token.tokenSymbol }, 'Insufficient SOL for reactive buy')
+          return { ...baseResult, tradeType, success: false, amount: 0, error: 'Insufficient SOL' }
+        }
+
+        tradeAmount = availableSol * (responsePercent / 100)
+        if (tradeAmount < 0.01) {
+          loggers.flywheel.debug({ tokenSymbol: token.tokenSymbol, tradeAmount }, 'Trade amount too small')
+          return { ...baseResult, tradeType, success: false, amount: 0, error: 'Trade amount too small' }
+        }
+
+        // Get quote for buying tokens
+        const quote = await this.getTradeQuote(
+          SOL_MINT,
+          token.tokenMintAddress,
+          tradeAmount,
+          'buy',
+          slippageBps
+        )
+
+        if (!quote) {
+          return { ...baseResult, tradeType, success: false, amount: 0, error: 'Failed to get buy quote' }
+        }
+
+        signature = await this.executeSwapWithPrivySigning(connection, opsWalletAddress, quote.rawQuoteResponse)
+      }
+
+      // Update reactive trade state
+      if (isPrismaConfigured()) {
+        await prisma.privyFlywheelState.upsert({
+          where: { privyTokenId: token.id },
+          update: {
+            lastReactiveTradeAt: new Date(),
+            reactiveTradesCount: { increment: 1 },
+          },
+          create: {
+            privyTokenId: token.id,
+            lastReactiveTradeAt: new Date(),
+            reactiveTradesCount: 1,
+          },
+        })
+      }
+
+      if (signature) {
+        await this.recordTransaction(token.id, tradeType, tradeAmount, signature)
+        loggers.flywheel.info({
+          tokenSymbol: token.tokenSymbol,
+          tradeType,
+          tradeAmount,
+          responsePercent,
+          signature,
+        }, `✅ Reactive ${tradeType} executed successfully`)
+
+        return {
+          ...baseResult,
+          tradeType,
+          success: true,
+          amount: tradeAmount,
+          signature,
+        }
+      }
+
+      return { ...baseResult, tradeType, success: false, amount: 0, error: 'Swap execution failed' }
+
+    } catch (error: any) {
+      loggers.flywheel.error({
+        tokenSymbol: token.tokenSymbol,
+        error: String(error),
+      }, 'Reactive trade failed')
+      return {
+        ...baseResult,
+        tradeType: detectedType === 'buy' ? 'sell' : 'buy',
+        success: false,
+        amount: 0,
+        error: error.message,
+      }
+    } finally {
+      await this.releaseTurboLock(token.id)
+    }
+  }
 }
 
 export const multiUserMMService = new MultiUserMMService()

@@ -343,6 +343,15 @@ async function handleSuccessfulLaunch(launch: PrivyPendingLaunchWithRelations, t
         launchConfigData.turboBatchStateUpdates = true
       }
 
+      // Add transaction reactive mode defaults if transaction_reactive selected
+      if (launchAlgorithmMode === 'transaction_reactive') {
+        launchConfigData.reactiveEnabled = true
+        launchConfigData.reactiveMinTriggerSol = 0.5
+        launchConfigData.reactiveScalePercent = 10
+        launchConfigData.reactiveMaxResponsePercent = 80
+        launchConfigData.reactiveCooldownMs = 5000
+      }
+
       await prisma.privyTokenConfig.create({
         data: launchConfigData,
       })
@@ -751,6 +760,15 @@ async function activateMmToken(pending: PrivyMmPendingWithRelations): Promise<vo
         configData.turboGlobalRateLimit = 60
         configData.turboConfirmationTimeout = 45
         configData.turboBatchStateUpdates = true
+      }
+
+      // Add transaction reactive mode defaults if transaction_reactive selected
+      if (algorithmMode === 'transaction_reactive') {
+        configData.reactiveEnabled = true
+        configData.reactiveMinTriggerSol = 0.5
+        configData.reactiveScalePercent = 10
+        configData.reactiveMaxResponsePercent = 80
+        configData.reactiveCooldownMs = 5000
       }
 
       await tx.privyTokenConfig.create({

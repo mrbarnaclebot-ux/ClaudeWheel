@@ -14,7 +14,7 @@ type MmStep = 'input' | 'review' | 'depositing' | 'active';
 
 interface MmData {
     tokenMint: string;
-    mmAlgorithm: 'simple' | 'turbo_lite' | 'rebalance';
+    mmAlgorithm: 'simple' | 'turbo_lite' | 'rebalance' | 'transaction_reactive';
 }
 
 interface TokenInfo {
@@ -296,10 +296,11 @@ export default function MmPage() {
                         {/* MM Strategy Selection */}
                         <div className="bg-bg-card border border-border-subtle rounded-xl p-4">
                             <label className="block text-sm text-text-muted mb-3">Market Making Strategy</label>
-                            <div className="grid grid-cols-3 gap-2">
+                            <div className="grid grid-cols-2 gap-2">
                                 {[
                                     { value: 'simple', label: '🐢 Simple', desc: '5 buys, 5 sells', disabled: false },
-                                    { value: 'turbo_lite', label: '🚀 Turbo', desc: '8 buys, 8 sells (8x)', disabled: false },
+                                    { value: 'turbo_lite', label: '🚀 Turbo', desc: '8 buys, 8 sells', disabled: false },
+                                    { value: 'transaction_reactive', label: '⚡ Reactive', desc: 'Counter big trades', disabled: false },
                                     { value: 'rebalance', label: '⚖️ Rebalance', desc: 'Portfolio %', disabled: true },
                                 ].map(opt => (
                                     <button

@@ -640,6 +640,12 @@ router.get('/:id', async (req: PrivyRequest, res: Response) => {
         turbo_confirmation_timeout: token.config.turboConfirmationTimeout,
         turbo_batch_state_updates: token.config.turboBatchStateUpdates,
         platform_fee_percentage_override: token.config.platformFeePercentageOverride,
+        // Transaction Reactive mode
+        reactive_enabled: token.config.reactiveEnabled,
+        reactive_min_trigger_sol: Number(token.config.reactiveMinTriggerSol),
+        reactive_scale_percent: token.config.reactiveScalePercent,
+        reactive_max_response_percent: token.config.reactiveMaxResponsePercent,
+        reactive_cooldown_ms: token.config.reactiveCooldownMs,
       } : null,
       state: token.flywheelState ? {
         cycle_phase: token.flywheelState.cyclePhase,
@@ -673,7 +679,7 @@ const updateConfigSchema = z.object({
   max_sell_amount_tokens: z.number().min(0).optional(),
   buy_interval_minutes: z.number().int().min(1).optional(),
   slippage_bps: z.number().int().min(0).max(5000).optional(),
-  algorithm_mode: z.enum(['simple', 'turbo_lite', 'rebalance', 'twap_vwap', 'dynamic']).optional(),
+  algorithm_mode: z.enum(['simple', 'turbo_lite', 'rebalance', 'twap_vwap', 'dynamic', 'transaction_reactive']).optional(),
   target_sol_allocation: z.number().int().min(0).max(100).optional(),
   target_token_allocation: z.number().int().min(0).max(100).optional(),
   rebalance_threshold: z.number().int().min(1).max(50).optional(),
@@ -705,6 +711,12 @@ const updateConfigSchema = z.object({
   buyback_boost_on_dump: z.boolean().optional(),
   pause_on_extreme_volatility: z.boolean().optional(),
   volatility_pause_threshold: z.number().int().min(5).max(50).optional(),
+  // Transaction Reactive Mode Configuration
+  reactive_enabled: z.boolean().optional(),
+  reactive_min_trigger_sol: z.number().min(0.1).max(100).optional(),
+  reactive_scale_percent: z.number().int().min(1).max(50).optional(),
+  reactive_max_response_percent: z.number().int().min(10).max(100).optional(),
+  reactive_cooldown_ms: z.number().int().min(1000).max(60000).optional(),
 })
 
 /**
@@ -800,6 +812,12 @@ router.put('/:id/config', async (req: PrivyRequest, res: Response) => {
     if (config.buyback_boost_on_dump !== undefined) prismaConfig.buybackBoostOnDump = config.buyback_boost_on_dump
     if (config.pause_on_extreme_volatility !== undefined) prismaConfig.pauseOnExtremeVolatility = config.pause_on_extreme_volatility
     if (config.volatility_pause_threshold !== undefined) prismaConfig.volatilityPauseThreshold = config.volatility_pause_threshold
+    // Transaction Reactive mode config
+    if (config.reactive_enabled !== undefined) prismaConfig.reactiveEnabled = config.reactive_enabled
+    if (config.reactive_min_trigger_sol !== undefined) prismaConfig.reactiveMinTriggerSol = config.reactive_min_trigger_sol
+    if (config.reactive_scale_percent !== undefined) prismaConfig.reactiveScalePercent = config.reactive_scale_percent
+    if (config.reactive_max_response_percent !== undefined) prismaConfig.reactiveMaxResponsePercent = config.reactive_max_response_percent
+    if (config.reactive_cooldown_ms !== undefined) prismaConfig.reactiveCooldownMs = config.reactive_cooldown_ms
 
     // Update config
     const updatedConfig = await prisma.privyTokenConfig.update({
