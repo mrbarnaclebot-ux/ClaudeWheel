@@ -6,7 +6,7 @@ import { prisma, isPrismaConfigured } from '../config/prisma'
 import { bagsFmService } from '../services/bags-fm'
 import { loggers } from '../utils/logger'
 import { z } from 'zod'
-import { getConnection } from '../config/solana'
+import { getConnection, getBalance, getTokenBalance } from '../config/solana'
 import { sendTransactionWithPrivySigning, sendSerializedTransactionWithPrivySigning } from '../utils/transaction'
 import { env } from '../config/env'
 
@@ -101,50 +101,85 @@ router.get('/', async (req: PrivyRequest, res: Response) => {
       orderBy: { createdAt: 'desc' },
     })
 
+    // Fetch balances for all tokens in parallel
+    const balancePromises = (tokens || []).map(async (token) => {
+      try {
+        if (!token.devWallet?.walletAddress || !token.opsWallet?.walletAddress) {
+          return { tokenId: token.id, devSol: 0, opsSol: 0, tokenBalance: 0 }
+        }
+
+        const devPubkey = new PublicKey(token.devWallet.walletAddress)
+        const opsPubkey = new PublicKey(token.opsWallet.walletAddress)
+        const tokenMint = token.tokenMintAddress ? new PublicKey(token.tokenMintAddress) : null
+
+        const [devSol, opsSol, tokenBalance] = await Promise.all([
+          getBalance(devPubkey),
+          getBalance(opsPubkey),
+          tokenMint ? getTokenBalance(devPubkey, tokenMint) : Promise.resolve(0),
+        ])
+
+        return { tokenId: token.id, devSol, opsSol, tokenBalance }
+      } catch (error) {
+        loggers.privy.warn({ tokenId: token.id, error: String(error) }, 'Failed to fetch token balance')
+        return { tokenId: token.id, devSol: 0, opsSol: 0, tokenBalance: 0 }
+      }
+    })
+
+    const balances = await Promise.all(balancePromises)
+    const balanceMap = new Map(balances.map(b => [b.tokenId, b]))
+
     // Transform to snake_case for frontend compatibility
-    const transformedTokens = (tokens || []).map(token => ({
-      id: token.id,
-      token_mint: token.tokenMintAddress,
-      token_name: token.tokenName,
-      token_symbol: token.tokenSymbol,
-      token_image: token.tokenImage,
-      token_decimals: token.tokenDecimals,
-      token_source: token.tokenSource,
-      is_active: token.isActive,
-      created_at: token.createdAt,
-      dev_wallet: token.devWallet ? {
-        address: token.devWallet.walletAddress,
-      } : null,
-      ops_wallet: token.opsWallet ? {
-        address: token.opsWallet.walletAddress,
-      } : null,
-      config: token.config ? {
-        flywheel_active: token.config.flywheelActive,
-        market_making_enabled: token.config.marketMakingEnabled,
-        auto_claim_enabled: token.config.autoClaimEnabled,
-        fee_threshold_sol: token.config.feeThresholdSol,
-        min_buy_amount_sol: token.config.minBuyAmountSol,
-        max_buy_amount_sol: token.config.maxBuyAmountSol,
-        algorithm_mode: token.config.algorithmMode,
-        // Turbo Lite configuration
-        turbo_job_interval_seconds: token.config.turboJobIntervalSeconds,
-        turbo_cycle_size_buys: token.config.turboCycleSizeBuys,
-        turbo_cycle_size_sells: token.config.turboCycleSizeSells,
-        turbo_inter_token_delay_ms: token.config.turboInterTokenDelayMs,
-        turbo_global_rate_limit: token.config.turboGlobalRateLimit,
-        turbo_confirmation_timeout: token.config.turboConfirmationTimeout,
-        turbo_batch_state_updates: token.config.turboBatchStateUpdates,
-        platform_fee_percentage_override: token.config.platformFeePercentageOverride,
-      } : null,
-      flywheel_state: token.flywheelState ? {
-        cycle_phase: token.flywheelState.cyclePhase,
-        buy_count: token.flywheelState.buyCount,
-        sell_count: token.flywheelState.sellCount,
-        last_trade_at: token.flywheelState.lastTradeAt,
-        consecutive_failures: token.flywheelState.consecutiveFailures,
-        paused_until: token.flywheelState.pausedUntil,
-      } : null,
-    }))
+    const transformedTokens = (tokens || []).map(token => {
+      const balance = balanceMap.get(token.id)
+      return {
+        id: token.id,
+        token_mint: token.tokenMintAddress,
+        token_name: token.tokenName,
+        token_symbol: token.tokenSymbol,
+        token_image: token.tokenImage,
+        token_decimals: token.tokenDecimals,
+        token_source: token.tokenSource,
+        is_active: token.isActive,
+        created_at: token.createdAt,
+        dev_wallet: token.devWallet ? {
+          address: token.devWallet.walletAddress,
+        } : null,
+        ops_wallet: token.opsWallet ? {
+          address: token.opsWallet.walletAddress,
+        } : null,
+        config: token.config ? {
+          flywheel_active: token.config.flywheelActive,
+          market_making_enabled: token.config.marketMakingEnabled,
+          auto_claim_enabled: token.config.autoClaimEnabled,
+          fee_threshold_sol: token.config.feeThresholdSol,
+          min_buy_amount_sol: token.config.minBuyAmountSol,
+          max_buy_amount_sol: token.config.maxBuyAmountSol,
+          algorithm_mode: token.config.algorithmMode,
+          // Turbo Lite configuration
+          turbo_job_interval_seconds: token.config.turboJobIntervalSeconds,
+          turbo_cycle_size_buys: token.config.turboCycleSizeBuys,
+          turbo_cycle_size_sells: token.config.turboCycleSizeSells,
+          turbo_inter_token_delay_ms: token.config.turboInterTokenDelayMs,
+          turbo_global_rate_limit: token.config.turboGlobalRateLimit,
+          turbo_confirmation_timeout: token.config.turboConfirmationTimeout,
+          turbo_batch_state_updates: token.config.turboBatchStateUpdates,
+          platform_fee_percentage_override: token.config.platformFeePercentageOverride,
+        } : null,
+        flywheel_state: token.flywheelState ? {
+          cycle_phase: token.flywheelState.cyclePhase,
+          buy_count: token.flywheelState.buyCount,
+          sell_count: token.flywheelState.sellCount,
+          last_trade_at: token.flywheelState.lastTradeAt,
+          consecutive_failures: token.flywheelState.consecutiveFailures,
+          paused_until: token.flywheelState.pausedUntil,
+        } : null,
+        balance: balance ? {
+          dev_sol: balance.devSol,
+          ops_sol: balance.opsSol,
+          token_balance: balance.tokenBalance,
+        } : null,
+      }
+    })
 
     res.json({
       success: true,
@@ -545,6 +580,30 @@ router.get('/:id', async (req: PrivyRequest, res: Response) => {
       })
     }
 
+    // Fetch balance data from Solana
+    let balanceData = null
+    try {
+      if (token.devWallet?.walletAddress && token.opsWallet?.walletAddress) {
+        const devPubkey = new PublicKey(token.devWallet.walletAddress)
+        const opsPubkey = new PublicKey(token.opsWallet.walletAddress)
+        const tokenMint = token.tokenMintAddress ? new PublicKey(token.tokenMintAddress) : null
+
+        const [devSol, opsSol, tokenBalance] = await Promise.all([
+          getBalance(devPubkey),
+          getBalance(opsPubkey),
+          tokenMint ? getTokenBalance(devPubkey, tokenMint) : Promise.resolve(0),
+        ])
+
+        balanceData = {
+          dev_sol: devSol,
+          ops_sol: opsSol,
+          token_balance: tokenBalance,
+        }
+      }
+    } catch (error) {
+      loggers.privy.warn({ tokenId: token.id, error: String(error) }, 'Failed to fetch token balance')
+    }
+
     // Transform to snake_case for frontend compatibility
     const transformed = {
       id: token.id,
@@ -590,6 +649,7 @@ router.get('/:id', async (req: PrivyRequest, res: Response) => {
         consecutive_failures: token.flywheelState.consecutiveFailures,
         paused_until: token.flywheelState.pausedUntil,
       } : null,
+      balance: balanceData,
     }
 
     res.json(transformed)
