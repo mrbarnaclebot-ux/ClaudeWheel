@@ -187,6 +187,23 @@ export async function processHeliusWebhook(tx: HeliusTransaction): Promise<void>
       source,
     }, `📥 Processing ${type} transaction from ${source}`)
 
+    // Log raw swap data for debugging
+    if (tx.events?.swap) {
+      loggers.server.info({
+        signature,
+        nativeInput: tx.events.swap.nativeInput,
+        nativeOutput: tx.events.swap.nativeOutput,
+        tokenInputs: tx.events.swap.tokenInputs?.map(t => ({ mint: t.mint, amount: t.rawTokenAmount })),
+        tokenOutputs: tx.events.swap.tokenOutputs?.map(t => ({ mint: t.mint, amount: t.rawTokenAmount })),
+      }, '🔎 Raw swap event data')
+    }
+    if (tx.nativeTransfers?.length) {
+      loggers.server.info({
+        signature,
+        nativeTransfers: tx.nativeTransfers.slice(0, 5),
+      }, '🔎 Native transfers')
+    }
+
     // Extract token mints and SOL amount from the transaction
     const { tokenMint, solAmount, tradeType } = parseTransaction(tx)
 
