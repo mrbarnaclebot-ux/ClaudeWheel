@@ -177,7 +177,7 @@ export function PrivyTMAProvider({ children }: { children: React.ReactNode }) {
                 // Appearance - match Telegram's theme
                 appearance: {
                     theme: 'dark',
-                    accentColor: '#00D26A',  // ClaudeWheel green
+                    accentColor: '#e67428',  // ClaudeWheel orange
                     logo: '/logo.png',
                     walletChainType: 'solana-only',
                 },

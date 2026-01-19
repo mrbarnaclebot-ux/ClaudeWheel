@@ -69,10 +69,10 @@ export function TokenCard({ token, index = 0, variant = 'default' }: TokenCardPr
             relative overflow-hidden rounded-2xl p-4
             border transition-all duration-300
             ${isActive
-              ? 'bg-gradient-to-br from-[#2a2822] via-[#2f2d24] to-[#2a2822] border-[rgba(205,133,63,0.35)] shadow-[0_4px_24px_rgba(205,133,63,0.15)]'
-              : 'bg-[#2a2822] border-[rgba(205,133,63,0.12)] hover:border-[rgba(205,133,63,0.25)]'
+              ? 'bg-gradient-to-br from-[#1f1810] via-[#252018] to-[#1f1810] border-[rgba(230,116,40,0.35)] shadow-[0_4px_24px_rgba(230,116,40,0.15)]'
+              : 'bg-[#1f1810] border-[rgba(230,116,40,0.12)] hover:border-[rgba(230,116,40,0.25)]'
             }
-            hover:shadow-[0_8px_32px_rgba(205,133,63,0.2)]
+            hover:shadow-[0_8px_32px_rgba(230,116,40,0.2)]
             group
           `}
         >
@@ -82,9 +82,9 @@ export function TokenCard({ token, index = 0, variant = 'default' }: TokenCardPr
               className="absolute inset-0 pointer-events-none"
               animate={{
                 background: [
-                  'radial-gradient(ellipse at 30% 20%, rgba(205,133,63,0.08) 0%, transparent 50%)',
-                  'radial-gradient(ellipse at 70% 80%, rgba(205,133,63,0.08) 0%, transparent 50%)',
-                  'radial-gradient(ellipse at 30% 20%, rgba(205,133,63,0.08) 0%, transparent 50%)',
+                  'radial-gradient(ellipse at 30% 20%, rgba(230,116,40,0.08) 0%, transparent 50%)',
+                  'radial-gradient(ellipse at 70% 80%, rgba(230,116,40,0.08) 0%, transparent 50%)',
+                  'radial-gradient(ellipse at 30% 20%, rgba(230,116,40,0.08) 0%, transparent 50%)',
                 ],
               }}
               transition={{ duration: 8, repeat: Infinity, ease: 'linear' }}
@@ -123,7 +123,7 @@ export function TokenCard({ token, index = 0, variant = 'default' }: TokenCardPr
               {/* Token Info */}
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2 mb-1">
-                  <span className="font-semibold text-[#F5F0E6] text-base truncate">
+                  <span className="font-semibold text-[#f8f0ec] text-base truncate">
                     {token.token_symbol}
                   </span>
                   {token.token_source && (
@@ -149,7 +149,7 @@ export function TokenCard({ token, index = 0, variant = 'default' }: TokenCardPr
               <div className="text-xs text-[#7A756B] mb-0.5 font-medium uppercase tracking-wider">
                 Balance
               </div>
-              <div className="font-mono text-base font-semibold text-[#CD853F]">
+              <div className="font-mono text-base font-semibold text-[#e67428]">
                 {token.balance?.dev_sol !== undefined
                   ? `${token.balance.dev_sol.toFixed(3)}`
                   : '—'}
@@ -159,7 +159,7 @@ export function TokenCard({ token, index = 0, variant = 'default' }: TokenCardPr
 
             {/* Chevron indicator */}
             <motion.div
-              className="text-[#7A756B] group-hover:text-[#CD853F] transition-colors"
+              className="text-[#7A756B] group-hover:text-[#e67428] transition-colors"
               initial={{ x: 0 }}
               whileHover={{ x: 4 }}
             >
@@ -202,9 +202,9 @@ function CompactTokenCard({
     >
       <Link href={`/token/${token.id}`} onClick={onLinkClick}>
         <motion.div
-          whileHover={{ backgroundColor: 'rgba(53,51,43,1)' }}
+          whileHover={{ backgroundColor: 'rgba(42,36,32,1)' }}
           whileTap={{ scale: 0.98 }}
-          className="flex items-center gap-3 p-3 rounded-xl border border-transparent hover:border-[rgba(205,133,63,0.2)] transition-all"
+          className="flex items-center gap-3 p-3 rounded-xl border border-transparent hover:border-[rgba(230,116,40,0.2)] transition-all"
         >
           <TokenAvatar
             symbol={token.token_symbol}
@@ -212,7 +212,7 @@ function CompactTokenCard({
             size="sm"
           />
           <div className="flex-1 min-w-0">
-            <span className="font-medium text-[#F5F0E6] text-sm truncate block">
+            <span className="font-medium text-[#f8f0ec] text-sm truncate block">
               {token.token_symbol}
             </span>
           </div>
@@ -251,14 +251,14 @@ function DetailedTokenCard({
             relative overflow-hidden rounded-2xl
             border transition-all duration-300
             ${isActive
-              ? 'bg-gradient-to-br from-[#2a2822] via-[#2f2d24] to-[#2a2822] border-[rgba(205,133,63,0.35)]'
-              : 'bg-[#2a2822] border-[rgba(205,133,63,0.12)]'
+              ? 'bg-gradient-to-br from-[#1f1810] via-[#252018] to-[#1f1810] border-[rgba(230,116,40,0.35)]'
+              : 'bg-[#1f1810] border-[rgba(230,116,40,0.12)]'
             }
-            hover:shadow-[0_12px_40px_rgba(205,133,63,0.2)]
+            hover:shadow-[0_12px_40px_rgba(230,116,40,0.2)]
           `}
         >
           {/* Header with gradient */}
-          <div className="relative p-4 pb-3 border-b border-[rgba(205,133,63,0.1)]">
+          <div className="relative p-4 pb-3 border-b border-[rgba(230,116,40,0.1)]">
             {isActive && (
               <div className="absolute inset-0 bg-gradient-to-r from-[#5D8C3E]/10 via-transparent to-transparent" />
             )}
@@ -272,7 +272,7 @@ function DetailedTokenCard({
                 />
                 {isActive && (
                   <motion.div
-                    className="absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 rounded-full bg-[#5D8C3E] border-2 border-[#2a2822]"
+                    className="absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 rounded-full bg-[#5D8C3E] border-2 border-[#1f1810]"
                     animate={{ scale: [1, 1.2, 1] }}
                     transition={{ duration: 2, repeat: Infinity }}
                   />
@@ -281,12 +281,12 @@ function DetailedTokenCard({
 
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 mb-1">
-                  <h3 className="font-display font-bold text-lg text-[#F5F0E6] truncate">
+                  <h3 className="font-display font-bold text-lg text-[#f8f0ec] truncate">
                     {token.token_name}
                   </h3>
                 </div>
                 <div className="flex items-center gap-2">
-                  <span className="text-sm text-[#CD853F] font-mono">
+                  <span className="text-sm text-[#e67428] font-mono">
                     ${token.token_symbol}
                   </span>
                   {token.token_source && (
@@ -318,7 +318,7 @@ function DetailedTokenCard({
               <div className="text-xs text-[#7A756B] mb-1 uppercase tracking-wider">
                 Balance
               </div>
-              <div className="font-mono text-sm font-semibold text-[#CD853F]">
+              <div className="font-mono text-sm font-semibold text-[#e67428]">
                 {token.balance?.dev_sol?.toFixed(3) || '0.000'}
               </div>
             </div>
@@ -336,32 +336,32 @@ export function TokenCardSkeleton({ variant = 'default' }: { variant?: 'default'
   if (variant === 'compact') {
     return (
       <div className="flex items-center gap-3 p-3 rounded-xl animate-pulse">
-        <div className="w-8 h-8 rounded-full bg-[#35332b]" />
+        <div className="w-8 h-8 rounded-full bg-[#2a2420]" />
         <div className="flex-1">
-          <div className="h-4 w-16 rounded bg-[#35332b]" />
+          <div className="h-4 w-16 rounded bg-[#2a2420]" />
         </div>
-        <div className="w-2 h-2 rounded-full bg-[#35332b]" />
+        <div className="w-2 h-2 rounded-full bg-[#2a2420]" />
       </div>
     );
   }
 
   if (variant === 'detailed') {
     return (
-      <div className="rounded-2xl border border-[rgba(205,133,63,0.12)] bg-[#2a2822] overflow-hidden animate-pulse">
-        <div className="p-4 border-b border-[rgba(205,133,63,0.1)]">
+      <div className="rounded-2xl border border-[rgba(230,116,40,0.12)] bg-[#1f1810] overflow-hidden animate-pulse">
+        <div className="p-4 border-b border-[rgba(230,116,40,0.1)]">
           <div className="flex items-center gap-4">
-            <div className="w-12 h-12 rounded-full bg-[#35332b]" />
+            <div className="w-12 h-12 rounded-full bg-[#2a2420]" />
             <div className="flex-1">
-              <div className="h-5 w-32 rounded bg-[#35332b] mb-2" />
-              <div className="h-4 w-20 rounded bg-[#35332b]" />
+              <div className="h-5 w-32 rounded bg-[#2a2420] mb-2" />
+              <div className="h-4 w-20 rounded bg-[#2a2420]" />
             </div>
           </div>
         </div>
         <div className="p-4 grid grid-cols-3 gap-3">
           {[1, 2, 3].map((i) => (
             <div key={i} className="text-center">
-              <div className="h-3 w-12 rounded bg-[#35332b] mx-auto mb-2" />
-              <div className="h-4 w-16 rounded bg-[#35332b] mx-auto" />
+              <div className="h-3 w-12 rounded bg-[#2a2420] mx-auto mb-2" />
+              <div className="h-4 w-16 rounded bg-[#2a2420] mx-auto" />
             </div>
           ))}
         </div>
@@ -370,18 +370,18 @@ export function TokenCardSkeleton({ variant = 'default' }: { variant?: 'default'
   }
 
   return (
-    <div className="rounded-2xl border border-[rgba(205,133,63,0.12)] bg-[#2a2822] p-4 animate-pulse">
+    <div className="rounded-2xl border border-[rgba(230,116,40,0.12)] bg-[#1f1810] p-4 animate-pulse">
       <div className="flex items-center justify-between gap-4">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-full bg-[#35332b]" />
+          <div className="w-10 h-10 rounded-full bg-[#2a2420]" />
           <div>
-            <div className="h-4 w-20 rounded bg-[#35332b] mb-2" />
-            <div className="h-3 w-16 rounded bg-[#35332b]" />
+            <div className="h-4 w-20 rounded bg-[#2a2420] mb-2" />
+            <div className="h-3 w-16 rounded bg-[#2a2420]" />
           </div>
         </div>
         <div className="text-right">
-          <div className="h-3 w-12 rounded bg-[#35332b] mb-2 ml-auto" />
-          <div className="h-4 w-16 rounded bg-[#35332b]" />
+          <div className="h-3 w-12 rounded bg-[#2a2420] mb-2 ml-auto" />
+          <div className="h-4 w-16 rounded bg-[#2a2420]" />
         </div>
       </div>
     </div>

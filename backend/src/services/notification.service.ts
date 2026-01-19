@@ -57,24 +57,6 @@ export interface FeesClaimedNotification {
   transactionSignature?: string
 }
 
-export interface FlywheelPausedNotification {
-  telegramId: number
-  tokenSymbol: string
-  reason: string
-  pausedUntil?: string
-}
-
-export interface DailySummaryNotification {
-  telegramId: number
-  tokenSymbol: string
-  totalBuys: number
-  totalSells: number
-  totalFeesClaimed: number
-  currentBalance: {
-    sol: number
-    tokens: number
-  }
-}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // NOTIFICATION SERVICE CLASS
@@ -252,85 +234,6 @@ Flywheel is now active! Your token will automatically:
     }
 
     return this.notify({ telegramId, message })
-  }
-
-  /**
-   * Notify user that flywheel has been paused
-   */
-  async notifyFlywheelPaused(params: FlywheelPausedNotification): Promise<boolean> {
-    const { telegramId, tokenSymbol, reason, pausedUntil } = params
-
-    let message = `⚠️ *Flywheel Paused*\n\n`
-    message += `*Token:* ${tokenSymbol}\n`
-    message += `*Reason:* ${reason}\n`
-
-    if (pausedUntil) {
-      message += `*Resumes:* ${pausedUntil}\n`
-    }
-
-    message += `\n_The flywheel will automatically resume once the issue is resolved._`
-
-    return this.notify({ telegramId, message })
-  }
-
-  /**
-   * Send daily summary notification
-   */
-  async notifyDailySummary(params: DailySummaryNotification): Promise<boolean> {
-    const { telegramId, tokenSymbol, totalBuys, totalSells, totalFeesClaimed, currentBalance } = params
-
-    const message = `📊 *Daily Summary - ${tokenSymbol}*
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-*Trading Activity (24h):*
-├ Buys: ${totalBuys}
-└ Sells: ${totalSells}
-
-*Fees Claimed:* ${totalFeesClaimed.toFixed(4)} SOL
-
-*Current Balance:*
-├ SOL: ${currentBalance.sol.toFixed(4)}
-└ ${tokenSymbol}: ${currentBalance.tokens.toLocaleString()}
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`
-
-    return this.notify({ telegramId, message })
-  }
-
-  // ═══════════════════════════════════════════════════════════════════════════
-  // BULK NOTIFICATION METHODS
-  // ═══════════════════════════════════════════════════════════════════════════
-
-  /**
-   * Send notification to multiple users
-   */
-  async notifyMultiple(telegramIds: number[], message: string): Promise<{ successful: number; failed: number }> {
-    const results = { successful: 0, failed: 0 }
-
-    // Rate limiting: 25 messages per second for Telegram limits
-    const BATCH_SIZE = 25
-    const BATCH_DELAY_MS = 1000
-
-    for (let i = 0; i < telegramIds.length; i += BATCH_SIZE) {
-      const batch = telegramIds.slice(i, i + BATCH_SIZE)
-
-      const promises = batch.map(telegramId =>
-        this.notify({ telegramId, message })
-          .then(success => success ? results.successful++ : results.failed++)
-          .catch(() => results.failed++)
-      )
-
-      await Promise.all(promises)
-
-      // Delay between batches
-      if (i + BATCH_SIZE < telegramIds.length) {
-        await new Promise(resolve => setTimeout(resolve, BATCH_DELAY_MS))
-      }
-    }
-
-    logger.info({ successful: results.successful, failed: results.failed }, 'Bulk notification complete')
-    return results
   }
 
   /**

@@ -10,34 +10,34 @@
    ═══════════════════════════════════════════════════════════════════════════ */
 
 :root {
-  /* ─── Backgrounds (Warm Dark Theme - matching main UI exactly) ─── */
-  --bg-void: #191814;
-  --bg-primary: #1f1e19;
-  --bg-secondary: #252420;
-  --bg-card: #2a2822;
-  --bg-card-hover: #35332b;
-  --bg-gradient: linear-gradient(180deg, #1f1e19 0%, #191814 100%);
+  /* ─── Backgrounds (Matching Landing Page) ─── */
+  --bg-void: #0e0804;
+  --bg-primary: #0e0804;
+  --bg-secondary: #1a140f;
+  --bg-card: #1f1810;
+  --bg-card-hover: #2a2420;
+  --bg-gradient: linear-gradient(180deg, #0e0804 0%, #0e0804 100%);
 
-  /* ─── Wood Color Palette ─── */
-  --wood-dark: #654321;
-  --wood-medium: #8B4513;
-  --wood-light: #CD853F;
-  --wood-accent: #DEB887;
-  --wood-highlight: #F4A460;
-  --wood-glow: rgba(205, 133, 63, 0.4);
-  --wood-glow-strong: rgba(222, 184, 135, 0.6);
+  /* ─── Wood Color Palette (Orange/Copper Theme) ─── */
+  --wood-dark: #864317;
+  --wood-medium: #c95a1a;
+  --wood-light: #e67428;
+  --wood-accent: #e2aa84;
+  --wood-highlight: #f8f0ec;
+  --wood-glow: rgba(230, 116, 40, 0.4);
+  --wood-glow-strong: rgba(226, 170, 132, 0.6);
 
-  /* ─── Primary Accent Colors ─── */
-  --accent-primary: #CD853F;
-  --accent-secondary: #8B4513;
-  --accent-tertiary: #A0522D;
-  --accent-glow: rgba(205, 133, 63, 0.4);
-  --accent-glow-strong: rgba(205, 133, 63, 0.6);
+  /* ─── Primary Accent Colors (Matching Landing Page) ─── */
+  --accent-primary: #e67428;
+  --accent-secondary: #c95a1a;
+  --accent-tertiary: #864317;
+  --accent-glow: rgba(230, 116, 40, 0.4);
+  --accent-glow-strong: rgba(230, 116, 40, 0.6);
 
-  /* ─── Copper/Bronze Accent ─── */
-  --copper: #B87333;
-  --copper-light: #DA8A67;
-  --bronze: #CD7F32;
+  /* ─── Copper/Bronze Accent (Updated) ─── */
+  --copper: #e2aa84;
+  --copper-light: #f0c8a8;
+  --bronze: #e67428;
 
   /* ─── Status Colors ─── */
   --success: #5D8C3E;
@@ -46,29 +46,29 @@
   --error-glow: rgba(166, 61, 47, 0.3);
   --warning: #C9A227;
 
-  /* ─── Text Hierarchy (Warm Cream) ─── */
-  --text-primary: #F5F0E6;
-  --text-secondary: #C9C2B5;
+  /* ─── Text Hierarchy (Matching Landing Page) ─── */
+  --text-primary: #f8f0ec;
+  --text-secondary: #d4ccc6;
   --text-muted: #7A756B;
 
-  /* ─── Borders ─── */
-  --border-subtle: rgba(205, 133, 63, 0.12);
-  --border-accent: rgba(205, 133, 63, 0.35);
-  --border-glow: rgba(205, 133, 63, 0.5);
+  /* ─── Borders (Updated for Orange Accent) ─── */
+  --border-subtle: rgba(230, 116, 40, 0.12);
+  --border-accent: rgba(230, 116, 40, 0.35);
+  --border-glow: rgba(230, 116, 40, 0.5);
 
   /* ─── Typography ─── */
   --font-mono: 'JetBrains Mono', ui-monospace, monospace;
   --font-display: 'Playfair Display', serif;
   --font-body: 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif;
 
-  /* ─── Telegram Theme Fallbacks ─── */
-  --tg-theme-bg-color: #191814;
-  --tg-theme-text-color: #F5F0E6;
+  /* ─── Telegram Theme Fallbacks (Updated) ─── */
+  --tg-theme-bg-color: #0e0804;
+  --tg-theme-text-color: #f8f0ec;
   --tg-theme-hint-color: #7A756B;
-  --tg-theme-link-color: #CD853F;
-  --tg-theme-button-color: #CD853F;
-  --tg-theme-button-text-color: #191814;
-  --tg-theme-secondary-bg-color: #252420;
+  --tg-theme-link-color: #e67428;
+  --tg-theme-button-color: #e67428;
+  --tg-theme-button-text-color: #0e0804;
+  --tg-theme-secondary-bg-color: #1a140f;
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -229,7 +229,7 @@ h1, h2, h3, h4, h5, h6 {
 }
 
 .btn-outline:hover {
-  background: rgba(205, 133, 63, 0.1);
+  background: rgba(230, 116, 40, 0.1);
   box-shadow: 0 0 15px var(--accent-glow);
 }
 
@@ -391,7 +391,7 @@ h1, h2, h3, h4, h5, h6 {
   background: linear-gradient(
     135deg,
     var(--bg-card) 0%,
-    rgba(101, 67, 33, 0.1) 50%,
+    rgba(134, 67, 23, 0.1) 50%,
     var(--bg-card) 100%
   );
   border: 1px solid var(--border-accent);
@@ -405,7 +405,7 @@ h1, h2, h3, h4, h5, h6 {
   border-color: var(--wood-light);
   box-shadow:
     0 4px 20px rgba(0, 0, 0, 0.3),
-    0 0 40px rgba(205, 133, 63, 0.1);
+    0 0 40px rgba(230, 116, 40, 0.1);
 }
 
 .wood-btn {
@@ -428,7 +428,7 @@ h1, h2, h3, h4, h5, h6 {
 .wood-btn:hover {
   background: linear-gradient(135deg, var(--wood-medium) 0%, var(--wood-light) 100%);
   border-color: var(--wood-light);
-  box-shadow: 0 4px 15px rgba(139, 69, 19, 0.4);
+  box-shadow: 0 4px 15px rgba(201, 90, 26, 0.4);
 }
 
 .wood-btn:active {
@@ -456,14 +456,14 @@ h1, h2, h3, h4, h5, h6 {
 @keyframes lantern-flicker {
   0%, 100% {
     box-shadow:
-      0 0 10px rgba(205, 133, 63, 0.4),
-      0 0 20px rgba(205, 133, 63, 0.2);
+      0 0 10px rgba(230, 116, 40, 0.4),
+      0 0 20px rgba(230, 116, 40, 0.2);
     opacity: 1;
   }
   50% {
     box-shadow:
-      0 0 15px rgba(205, 133, 63, 0.6),
-      0 0 30px rgba(205, 133, 63, 0.3);
+      0 0 15px rgba(230, 116, 40, 0.6),
+      0 0 30px rgba(230, 116, 40, 0.3);
     opacity: 0.95;
   }
 }

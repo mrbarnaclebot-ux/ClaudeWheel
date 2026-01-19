@@ -6,7 +6,7 @@ type BadgeType = 'algorithm' | 'flywheel' | 'transaction' | 'source';
 type BadgeSize = 'sm' | 'md' | 'lg';
 
 // Algorithm mode badges
-type AlgorithmMode = 'simple' | 'turbo_lite' | 'rebalance' | 'twap_vwap' | 'dynamic';
+type AlgorithmMode = 'simple' | 'turbo_lite' | 'rebalance';
 
 // Flywheel status badges
 type FlywheelStatus = 'active' | 'paused' | 'error';
@@ -32,8 +32,6 @@ const algorithmConfig: Record<AlgorithmMode, { icon: string; label: string; clas
   simple: { icon: '🐢', label: 'Simple', className: 'badge-accent' },
   turbo_lite: { icon: '🚀', label: 'Turbo', className: 'badge-success' },
   rebalance: { icon: '⚖️', label: 'Rebalance', className: 'badge-warning' },
-  twap_vwap: { icon: '📊', label: 'TWAP', className: 'badge-accent' },
-  dynamic: { icon: '🎯', label: 'Dynamic', className: 'badge-accent' },
 };
 
 const flywheelConfig: Record<FlywheelStatus, { icon: string; label: string; className: string; pulse?: boolean }> = {

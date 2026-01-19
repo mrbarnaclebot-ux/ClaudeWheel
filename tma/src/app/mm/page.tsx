@@ -7,7 +7,6 @@ import { useTelegram } from '@/components/TelegramProvider';
 import { api } from '@/lib/api';
 import { toast } from '@/lib/toast';
 import { LoadingButton } from '@/components/LoadingButton';
-import { CopyButton } from '@/components/CopyButton';
 import { AlgorithmBadge } from '@/components/StatusBadge';
 import { motion, AnimatePresence } from 'framer-motion';
 
