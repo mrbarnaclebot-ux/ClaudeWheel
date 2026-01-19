@@ -190,31 +190,33 @@ export async function processHeliusWebhook(tx: HeliusTransaction): Promise<void>
     // Extract token mints and SOL amount from the transaction
     const { tokenMint, solAmount, tradeType } = parseTransaction(tx)
 
+    loggers.server.info({ signature, tokenMint, solAmount, tradeType }, '🔍 Parsed transaction')
+
     if (!tokenMint || solAmount === 0) {
-      loggers.server.debug({ signature }, 'Could not parse transaction details')
+      loggers.server.info({ signature, tokenMint, solAmount }, '⏭️ Could not parse transaction details')
       return
     }
 
     // Check if this token has reactive mode enabled
     const config = await getReactiveConfig(tokenMint)
     if (!config) {
-      loggers.server.debug({ tokenMint, signature }, 'Token not configured for reactive mode')
+      loggers.server.info({ tokenMint, signature }, '⏭️ Token not configured for reactive mode')
       return
     }
 
     // Check if this is our own transaction (from ops wallet)
     if (isOwnTransaction(tx, config.opsWalletAddress)) {
-      loggers.server.debug({ signature }, 'Ignoring own transaction')
+      loggers.server.info({ signature }, '⏭️ Ignoring own transaction')
       return
     }
 
     // Check minimum threshold
     if (solAmount < config.minTriggerSol) {
-      loggers.server.debug({
+      loggers.server.info({
         signature,
         solAmount,
         minTrigger: config.minTriggerSol,
-      }, 'Transaction below threshold')
+      }, '⏭️ Transaction below threshold')
       return
     }
 
