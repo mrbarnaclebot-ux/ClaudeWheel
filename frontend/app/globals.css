@@ -39,6 +39,10 @@
   --copper-light: #DA8A67;
   --bronze: #CD7F32;
 
+  /* ─── Cyan Accent (for transfers/secondary actions) ─── */
+  --accent-cyan: #4ECDC4;
+  --accent-cyan-glow: rgba(78, 205, 196, 0.4);
+
   /* ─── Status Colors ─── */
   --success: #5D8C3E;
   --success-glow: rgba(93, 140, 62, 0.3);
@@ -965,4 +969,118 @@ h3 {
 
 .text-glow {
   text-shadow: 0 0 10px var(--wood-glow), 0 0 20px var(--wood-glow);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   SKELETON LOADERS
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--bg-card) 0%,
+    var(--bg-card-hover) 50%,
+    var(--bg-card) 100%
+  );
+  background-size: 200% 100%;
+  animation: skeleton-loading 1.5s ease-in-out infinite;
+  border-radius: inherit;
+}
+
+@keyframes skeleton-loading {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   BUTTON PRESS EFFECT
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.btn-press:active {
+  transform: scale(0.98);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   BADGE STYLES (Additional)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.badge-warning {
+  background: rgba(201, 162, 39, 0.15);
+  color: var(--warning);
+  border: 1px solid rgba(201, 162, 39, 0.3);
+}
+
+.badge-error {
+  background: rgba(166, 61, 47, 0.15);
+  color: var(--error);
+  border: 1px solid rgba(166, 61, 47, 0.3);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   TOAST OVERRIDES (Sonner)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+[data-sonner-toaster] {
+  font-family: var(--font-body) !important;
+}
+
+[data-sonner-toast] {
+  background: var(--bg-card) !important;
+  border: 1px solid var(--border-subtle) !important;
+  color: var(--text-primary) !important;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4) !important;
+}
+
+[data-sonner-toast][data-type="success"] {
+  border-left: 3px solid var(--success) !important;
+}
+
+[data-sonner-toast][data-type="error"] {
+  border-left: 3px solid var(--error) !important;
+}
+
+[data-sonner-toast][data-type="warning"] {
+  border-left: 3px solid var(--warning) !important;
+}
+
+[data-sonner-toast][data-type="info"],
+[data-sonner-toast][data-type="loading"] {
+  border-left: 3px solid var(--accent-primary) !important;
+}
+
+[data-sonner-toast] [data-title] {
+  font-weight: 600;
+  color: var(--text-primary) !important;
+}
+
+[data-sonner-toast] [data-description] {
+  color: var(--text-secondary) !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   SAFE AREA INSETS (for mobile)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.safe-area-inset-top {
+  padding-top: env(safe-area-inset-top);
+}
+
+.safe-area-inset-bottom {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   BG VOID UTILITY
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.bg-void {
+  background: var(--bg-void);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   SHADOW UTILITIES
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.shadow-wood-glow {
+  box-shadow: 0 0 20px var(--wood-glow);
 }

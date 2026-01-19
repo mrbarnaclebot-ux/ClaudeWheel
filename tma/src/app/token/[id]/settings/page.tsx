@@ -144,8 +144,10 @@ export default function TokenSettingsPage() {
 
     if (isLoading) {
         return (
-            <div className="min-h-screen p-4 flex items-center justify-center">
-                <div className="animate-spin w-8 h-8 border-2 border-green-500 border-t-transparent rounded-full" />
+            <div className="min-h-screen bg-void flex flex-col items-center justify-center p-4">
+                <div className="animate-spin w-12 h-12 border-3 border-accent-primary/30 border-t-accent-primary rounded-full mb-4" />
+                <p className="text-text-primary font-medium">Loading Settings</p>
+                <p className="text-xs text-text-muted mt-1">Fetching configuration...</p>
             </div>
         );
     }
@@ -236,14 +238,47 @@ export default function TokenSettingsPage() {
                 transition={{ delay: 0.1 }}
                 className="bg-gray-800/50 rounded-xl p-4 mb-6"
             >
-                <h3 className="font-medium text-gray-400 mb-4">Algorithm Mode</h3>
+                <h3 className="font-medium text-gray-400 mb-2">Algorithm Mode</h3>
+                <p className="text-xs text-text-muted mb-4">Choose how the flywheel executes trades</p>
 
                 <div className="space-y-3">
                     {([
-                        { value: 'simple', label: '🐢 Simple', desc: '5 buys → 5 sells (60s cycles)', disabled: false },
-                        { value: 'turbo_lite', label: '🚀 Turbo Lite', desc: '8 buys → 8 sells (15s cycles)', disabled: false },
-                        { value: 'transaction_reactive', label: '⚡ Reactive', desc: 'Counter big buys/sells in real-time', disabled: false },
-                        { value: 'rebalance', label: '⚖️ Rebalance', desc: 'Maintains target allocation', disabled: true },
+                        {
+                            value: 'simple',
+                            label: '🐢 Simple',
+                            desc: 'Steady & reliable',
+                            details: '5 buys then 5 sells per cycle, 60s intervals. Best for lower-volume tokens or if you want minimal activity.',
+                            badge: 'Stable',
+                            badgeColor: 'bg-blue-500/20 text-blue-400',
+                            disabled: false
+                        },
+                        {
+                            value: 'turbo_lite',
+                            label: '🚀 Turbo Lite',
+                            desc: 'High frequency trading',
+                            details: '8 buys then 8 sells per cycle, 15s intervals. Generates more volume and fees but uses more capital.',
+                            badge: 'Recommended',
+                            badgeColor: 'bg-success/20 text-success',
+                            disabled: false
+                        },
+                        {
+                            value: 'transaction_reactive',
+                            label: '⚡ Reactive',
+                            desc: 'Counter big trades',
+                            details: 'Monitors transactions in real-time. Sells when others buy big, buys when others sell big. Response scales with trade size.',
+                            badge: 'Advanced',
+                            badgeColor: 'bg-purple-500/20 text-purple-400',
+                            disabled: false
+                        },
+                        {
+                            value: 'rebalance',
+                            label: '⚖️ Rebalance',
+                            desc: 'Portfolio balancing',
+                            details: 'Automatically maintains a target SOL/token ratio. Coming soon.',
+                            badge: 'Coming Soon',
+                            badgeColor: 'bg-gray-500/20 text-gray-400',
+                            disabled: true
+                        },
                     ] as const).map((mode) => (
                         <button
                             key={mode.value}
@@ -253,14 +288,35 @@ export default function TokenSettingsPage() {
                                 mode.disabled
                                     ? 'bg-gray-800/30 border border-gray-700/50 opacity-50 cursor-not-allowed'
                                     : formData.algorithm_mode === mode.value
-                                    ? 'bg-green-600/20 border border-green-600/50'
-                                    : 'bg-gray-700/50 border border-transparent'
+                                    ? 'bg-green-600/20 border-2 border-green-600/50'
+                                    : 'bg-gray-700/50 border border-gray-600/30 hover:border-gray-500/50'
                             }`}
                         >
-                            <p className="font-medium">{mode.label}</p>
-                            <p className="text-xs text-gray-400">{mode.desc}</p>
+                            <div className="flex items-center justify-between mb-1">
+                                <p className="font-medium">{mode.label}</p>
+                                <span className={`text-xs px-2 py-0.5 rounded-full ${mode.badgeColor}`}>
+                                    {mode.badge}
+                                </span>
+                            </div>
+                            <p className="text-sm text-text-secondary mb-1">{mode.desc}</p>
+                            <p className="text-xs text-gray-500">{mode.details}</p>
                         </button>
                     ))}
+                </div>
+
+                {/* Algorithm comparison */}
+                <div className="mt-4 p-3 bg-bg-secondary rounded-lg">
+                    <p className="text-xs text-text-muted mb-2">Quick comparison:</p>
+                    <div className="grid grid-cols-2 gap-2 text-xs">
+                        <div className="flex justify-between">
+                            <span className="text-text-muted">Simple:</span>
+                            <span className="text-text-secondary">~10 trades/cycle</span>
+                        </div>
+                        <div className="flex justify-between">
+                            <span className="text-text-muted">Turbo:</span>
+                            <span className="text-success">~64 trades/cycle</span>
+                        </div>
+                    </div>
                 </div>
             </motion.div>
 
@@ -273,13 +329,67 @@ export default function TokenSettingsPage() {
                     transition={{ delay: 0.2 }}
                     className="space-y-4 bg-gray-800/30 rounded-xl p-4 border border-gray-700/50 mb-6"
                 >
-                    <div className="flex items-center gap-2 mb-3">
-                        <span className="text-lg">🚀</span>
-                        <h3 className="font-semibold text-white">Turbo Mode Settings</h3>
+                    <div className="flex items-center justify-between mb-3">
+                        <div className="flex items-center gap-2">
+                            <span className="text-lg">🚀</span>
+                            <h3 className="font-semibold text-white">Turbo Mode Settings</h3>
+                        </div>
+                    </div>
+
+                    {/* Quick Presets */}
+                    <div className="space-y-2">
+                        <label className="text-xs text-gray-400">Quick Presets</label>
+                        <div className="grid grid-cols-3 gap-2">
+                            {[
+                                {
+                                    name: 'Conservative',
+                                    icon: '🛡️',
+                                    values: { buys: 6, sells: 6, interval: 30, rateLimit: 40 },
+                                    desc: 'Lower risk'
+                                },
+                                {
+                                    name: 'Balanced',
+                                    icon: '⚖️',
+                                    values: { buys: 8, sells: 8, interval: 15, rateLimit: 60 },
+                                    desc: 'Recommended'
+                                },
+                                {
+                                    name: 'Aggressive',
+                                    icon: '🔥',
+                                    values: { buys: 12, sells: 12, interval: 10, rateLimit: 100 },
+                                    desc: 'Max volume'
+                                },
+                            ].map((preset) => {
+                                const isActive =
+                                    formData.turbo_cycle_size_buys === preset.values.buys &&
+                                    formData.turbo_cycle_size_sells === preset.values.sells &&
+                                    formData.turbo_job_interval_seconds === preset.values.interval;
+                                return (
+                                    <button
+                                        key={preset.name}
+                                        onClick={() => {
+                                            updateField('turbo_cycle_size_buys', preset.values.buys);
+                                            updateField('turbo_cycle_size_sells', preset.values.sells);
+                                            updateField('turbo_job_interval_seconds', preset.values.interval);
+                                            updateField('turbo_global_rate_limit', preset.values.rateLimit);
+                                        }}
+                                        className={`p-2 rounded-lg text-center transition-colors ${
+                                            isActive
+                                                ? 'bg-green-600/30 border-2 border-green-500'
+                                                : 'bg-gray-700/50 border border-gray-600/50 hover:border-gray-500'
+                                        }`}
+                                    >
+                                        <span className="text-lg">{preset.icon}</span>
+                                        <p className="text-xs font-medium mt-1">{preset.name}</p>
+                                        <p className="text-xs text-gray-500">{preset.desc}</p>
+                                    </button>
+                                );
+                            })}
+                        </div>
                     </div>
 
                     {/* Cycle Size Configuration */}
-                    <div className="space-y-3">
+                    <div className="space-y-3 pt-3 border-t border-gray-700">
                         <label className="block text-sm text-gray-300">
                             Cycle Size (trades per phase)
                         </label>
@@ -307,7 +417,6 @@ export default function TokenSettingsPage() {
                                 />
                             </div>
                         </div>
-                        <p className="text-xs text-gray-400">Default: 8 buys + 8 sells (vs 5+5 in Simple mode)</p>
                     </div>
 
                     {/* Rate Limit Configuration */}
@@ -356,12 +465,10 @@ export default function TokenSettingsPage() {
                         </div>
                     </div>
 
-                    {/* Advanced Settings Toggle */}
-                    <details className="border-t border-gray-700 pt-3">
-                        <summary className="text-sm text-gray-300 cursor-pointer hover:text-white">
-                            Advanced Settings
-                        </summary>
-                        <div className="mt-3 space-y-3">
+                    {/* Advanced Settings - Now expanded by default */}
+                    <div className="border-t border-gray-700 pt-3">
+                        <p className="text-sm text-gray-300 mb-3">Advanced Settings</p>
+                        <div className="space-y-3">
                             {/* Inter-token Delay */}
                             <div>
                                 <label className="block text-xs text-gray-400 mb-1">
@@ -376,6 +483,7 @@ export default function TokenSettingsPage() {
                                     onChange={(e) => updateField('turbo_inter_token_delay_ms', parseInt(e.target.value) || 200)}
                                     className="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm"
                                 />
+                                <p className="text-xs text-gray-500 mt-1">Delay between processing different tokens</p>
                             </div>
 
                             {/* Confirmation Timeout */}
@@ -392,6 +500,7 @@ export default function TokenSettingsPage() {
                                     onChange={(e) => updateField('turbo_confirmation_timeout', parseInt(e.target.value) || 45)}
                                     className="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm"
                                 />
+                                <p className="text-xs text-gray-500 mt-1">How long to wait for tx confirmation</p>
                             </div>
 
                             {/* Batch State Updates Toggle */}
@@ -412,10 +521,10 @@ export default function TokenSettingsPage() {
                                 </button>
                             </div>
                         </div>
-                    </details>
+                    </div>
 
                     {/* Performance Estimate */}
-                    <div className="bg-green-900/20 border border-green-700/50 rounded-lg p-3 mt-4">
+                    <div className="bg-green-900/20 border border-green-700/50 rounded-lg p-3">
                         <div className="flex items-start gap-2">
                             <span className="text-lg">⚡</span>
                             <div>

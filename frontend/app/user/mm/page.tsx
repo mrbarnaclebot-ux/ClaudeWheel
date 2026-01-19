@@ -2,20 +2,20 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
-import { usePrivyWrapper } from '@/hooks/usePrivyWrapper';
-import { useTelegram } from '@/components/TelegramProvider';
-import { api } from '@/lib/api';
-import { toast } from '@/lib/toast';
-import { LoadingButton } from '@/components/LoadingButton';
-import { AlgorithmBadge } from '@/components/StatusBadge';
-import { DepositProgress } from '@/components/DepositProgress';
+import { usePrivyWrapper } from '@/app/hooks/usePrivyWrapper';
+import { useTelegram } from '@/app/components/WebProvider';
+import { api } from '@/app/lib/api';
+import { toast } from '@/app/lib/toast';
+import { LoadingButton, AlgorithmBadge, DepositProgress, WalletAddress } from '@/app/components/user';
+import Link from 'next/link';
 import { motion, AnimatePresence } from 'framer-motion';
 
 type MmStep = 'input' | 'review' | 'depositing' | 'active';
+type AlgorithmMode = 'simple' | 'turbo_lite' | 'rebalance';
 
 interface MmData {
     tokenMint: string;
-    mmAlgorithm: 'simple' | 'turbo_lite' | 'rebalance' | 'transaction_reactive';
+    mmAlgorithm: AlgorithmMode;
 }
 
 interface TokenInfo {
@@ -218,7 +218,7 @@ export default function MmPage() {
 
     function handleGoToDashboard() {
         hapticFeedback('medium');
-        router.push('/dashboard');
+        router.push('/user/dashboard');
     }
 
     const canContinue = data.tokenMint.length >= 32 && data.tokenMint.length <= 64;
@@ -236,10 +236,10 @@ export default function MmPage() {
             <div className="flex items-center gap-3 mb-6">
                 <button
                     onClick={handleBack}
-                    className="text-2xl text-text-secondary hover:text-text-primary transition-colors"
+                    className="w-10 h-10 bg-bg-card border border-border-subtle rounded-full flex items-center justify-center text-text-secondary hover:text-text-primary hover:border-border-accent transition-colors"
                     disabled={step === 'depositing' || step === 'active'}
                 >
-                    ←
+                    <span className="text-lg">&#8592;</span>
                 </button>
                 <h1 className="text-xl font-bold text-text-primary">{stepTitle[step]}</h1>
             </div>
@@ -273,7 +273,7 @@ export default function MmPage() {
                         <div className="bg-accent-cyan/10 border border-accent-cyan/30 rounded-xl p-4 mb-4">
                             <p className="text-sm text-accent-cyan">
                                 Market make any Bags.fm token without being the creator.
-                                You'll earn trading profits while the flywheel runs.
+                                You will earn trading profits while the flywheel runs.
                             </p>
                         </div>
 
@@ -296,67 +296,28 @@ export default function MmPage() {
 
                         {/* MM Strategy Selection */}
                         <div className="bg-bg-card border border-border-subtle rounded-xl p-4">
-                            <div className="flex items-center justify-between mb-3">
-                                <label className="block text-sm text-text-muted">Market Making Strategy</label>
-                                <span className={`text-xs px-2 py-0.5 rounded-full ${
-                                    data.mmAlgorithm === 'turbo_lite'
-                                        ? 'bg-accent-cyan/20 text-accent-cyan'
-                                        : data.mmAlgorithm === 'transaction_reactive'
-                                        ? 'bg-purple-500/20 text-purple-400'
-                                        : 'bg-blue-500/20 text-blue-400'
-                                }`}>
-                                    {data.mmAlgorithm === 'turbo_lite' ? 'Recommended' : data.mmAlgorithm === 'transaction_reactive' ? 'Advanced' : 'Stable'}
-                                </span>
-                            </div>
-                            <div className="space-y-2">
+                            <label className="block text-sm text-text-muted mb-3">Market Making Strategy</label>
+                            <div className="grid grid-cols-3 gap-2">
                                 {[
-                                    {
-                                        value: 'simple',
-                                        label: '🐢 Simple',
-                                        desc: 'Steady & reliable',
-                                        detail: '5 buys/sells, 60s cycles',
-                                        disabled: false
-                                    },
-                                    {
-                                        value: 'turbo_lite',
-                                        label: '🚀 Turbo Lite',
-                                        desc: 'High frequency',
-                                        detail: '8 buys/sells, 15s cycles',
-                                        disabled: false
-                                    },
-                                    {
-                                        value: 'transaction_reactive',
-                                        label: '⚡ Reactive',
-                                        desc: 'Counter big trades',
-                                        detail: 'Real-time response',
-                                        disabled: false
-                                    },
-                                    {
-                                        value: 'rebalance',
-                                        label: '⚖️ Rebalance',
-                                        desc: 'Auto-balance',
-                                        detail: 'Coming soon',
-                                        disabled: true
-                                    },
+                                    { value: 'simple', label: 'Simple', icon: '', desc: '5 buys, 5 sells', disabled: false },
+                                    { value: 'turbo_lite', label: 'Turbo', icon: '', desc: '8 buys, 8 sells (8x)', disabled: false },
+                                    { value: 'rebalance', label: 'Rebalance', icon: '', desc: 'Portfolio %', disabled: true },
                                 ].map(opt => (
                                     <button
                                         key={opt.value}
                                         type="button"
-                                        onClick={() => !opt.disabled && setData({ ...data, mmAlgorithm: opt.value as MmData['mmAlgorithm'] })}
+                                        onClick={() => !opt.disabled && setData({ ...data, mmAlgorithm: opt.value as AlgorithmMode })}
                                         disabled={opt.disabled}
-                                        className={`w-full p-3 rounded-lg text-left transition-colors ${
+                                        className={`p-3 rounded-lg text-center transition-colors ${
                                             opt.disabled
-                                                ? 'bg-bg-secondary/50 text-text-muted opacity-50 cursor-not-allowed'
+                                                ? 'bg-bg-secondary/50 text-text-muted opacity-50 cursor-not-allowed border border-border-subtle'
                                                 : data.mmAlgorithm === opt.value
-                                                ? 'bg-accent-cyan/20 border-2 border-accent-cyan text-text-primary'
+                                                ? 'bg-accent-cyan text-bg-void'
                                                 : 'bg-bg-secondary text-text-secondary hover:bg-bg-card-hover border border-border-subtle'
                                         }`}
                                     >
-                                        <div className="flex items-center justify-between">
-                                            <span className="font-medium">{opt.label}</span>
-                                            <span className="text-xs text-text-muted">{opt.detail}</span>
-                                        </div>
-                                        <div className="text-xs text-text-muted mt-1">{opt.desc}</div>
+                                        <div className="text-sm font-medium">{opt.label}</div>
+                                        <div className="text-xs opacity-70">{opt.desc}</div>
                                     </button>
                                 ))}
                             </div>
@@ -374,7 +335,7 @@ export default function MmPage() {
 
                         <div className="bg-warning/20 border border-warning/30 rounded-xl p-4">
                             <p className="text-xs text-warning">
-                                Note: As an MM-only user, you receive trading profits but cannot claim creator fees (since you're not the token creator).
+                                Note: As an MM-only user, you receive trading profits but cannot claim creator fees (since you are not the token creator).
                             </p>
                         </div>
 
@@ -384,13 +345,15 @@ export default function MmPage() {
                             </div>
                         )}
 
-                        <button
+                        <LoadingButton
                             onClick={handleContinueToReview}
                             disabled={!canContinue}
-                            className="w-full bg-accent-cyan hover:bg-accent-cyan/80 disabled:bg-bg-card disabled:text-text-muted text-bg-void py-4 rounded-xl font-medium transition-colors btn-press"
+                            variant="cyan"
+                            size="lg"
+                            fullWidth
                         >
                             Continue
-                        </button>
+                        </LoadingButton>
                     </motion.div>
                 )}
 
@@ -410,7 +373,7 @@ export default function MmPage() {
                             </div>
                             <div>
                                 <p className="text-xs text-text-muted mb-1">MM Strategy</p>
-                                <p className="font-medium capitalize text-text-primary">{data.mmAlgorithm}</p>
+                                <AlgorithmBadge mode={data.mmAlgorithm} />
                             </div>
                         </div>
 
@@ -430,20 +393,16 @@ export default function MmPage() {
                             </div>
                         )}
 
-                        <button
+                        <LoadingButton
                             onClick={handleStartMm}
-                            disabled={isSubmitting}
-                            className="w-full bg-accent-cyan hover:bg-accent-cyan/80 disabled:bg-bg-card disabled:text-text-muted text-bg-void py-4 rounded-xl font-medium transition-colors btn-press"
+                            isLoading={isSubmitting}
+                            loadingText="Starting..."
+                            variant="cyan"
+                            size="lg"
+                            fullWidth
                         >
-                            {isSubmitting ? (
-                                <span className="flex items-center justify-center gap-2">
-                                    <span className="animate-spin w-5 h-5 border-2 border-bg-void border-t-transparent rounded-full" />
-                                    Starting...
-                                </span>
-                            ) : (
-                                'Start MM'
-                            )}
-                        </button>
+                            Start MM
+                        </LoadingButton>
                     </motion.div>
                 )}
 
@@ -465,7 +424,7 @@ export default function MmPage() {
                             </div>
                         )}
 
-                        <div className="text-3xl mb-2">💰</div>
+                        <div className="text-3xl mb-2">$</div>
                         <h2 className="text-xl font-bold mb-2 text-text-primary">Deposit to Activate MM</h2>
                         <p className="text-text-secondary mb-2">
                             {pendingMm.tokenName || pendingMm.tokenSymbol} ({pendingMm.tokenSymbol})
@@ -476,9 +435,7 @@ export default function MmPage() {
 
                         <div className="bg-bg-card border border-border-subtle rounded-xl p-4 mb-4">
                             <p className="text-sm text-text-muted mb-2">Ops Wallet Address</p>
-                            <p className="font-mono text-accent-cyan text-sm break-all">
-                                {pendingMm.depositAddress}
-                            </p>
+                            <WalletAddress address={pendingMm.depositAddress} variant="full" />
                         </div>
 
                         {/* Deposit Progress */}
@@ -504,18 +461,22 @@ export default function MmPage() {
                         </p>
 
                         <div className="flex gap-3">
-                            <button
+                            <LoadingButton
                                 onClick={handleCancelPending}
-                                className="flex-1 bg-bg-card border border-border-subtle hover:bg-bg-card-hover text-text-primary py-4 rounded-xl font-medium transition-colors btn-press"
+                                variant="secondary"
+                                size="lg"
+                                fullWidth
                             >
                                 Cancel
-                            </button>
-                            <button
+                            </LoadingButton>
+                            <LoadingButton
                                 onClick={handleGoToDashboard}
-                                className="flex-1 bg-bg-card border border-border-subtle hover:bg-bg-card-hover text-text-primary py-4 rounded-xl font-medium transition-colors btn-press"
+                                variant="secondary"
+                                size="lg"
+                                fullWidth
                             >
                                 Dashboard
-                            </button>
+                            </LoadingButton>
                         </div>
                     </motion.div>
                 )}
@@ -532,9 +493,9 @@ export default function MmPage() {
                             initial={{ scale: 0 }}
                             animate={{ scale: 1 }}
                             transition={{ type: 'spring', delay: 0.2 }}
-                            className="text-6xl mb-6"
+                            className="w-20 h-20 bg-success/20 rounded-full flex items-center justify-center mb-6"
                         >
-                            🎉
+                            <span className="text-4xl text-success">&#10003;</span>
                         </motion.div>
                         <h2 className="text-2xl font-bold mb-2 text-accent-cyan">MM Activated!</h2>
                         <p className="text-text-muted mb-4">
@@ -547,12 +508,14 @@ export default function MmPage() {
                             </p>
                         </div>
 
-                        <button
+                        <LoadingButton
                             onClick={handleGoToDashboard}
-                            className="w-full bg-accent-cyan hover:bg-accent-cyan/80 text-bg-void py-4 rounded-xl font-medium transition-colors btn-press"
+                            variant="cyan"
+                            size="lg"
+                            fullWidth
                         >
                             View in Dashboard
-                        </button>
+                        </LoadingButton>
                     </motion.div>
                 )}
             </AnimatePresence>

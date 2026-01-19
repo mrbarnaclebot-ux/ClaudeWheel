@@ -2,13 +2,11 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
-import { usePrivyWrapper, useWalletsWrapper } from '@/hooks/usePrivyWrapper';
-import { toast } from '@/lib/toast';
-import { useTelegram } from '@/components/TelegramProvider';
-import { WalletAddress } from '@/components/WalletAddress';
-import { LoadingButton } from '@/components/LoadingButton';
-import { DepositProgress } from '@/components/DepositProgress';
-import { api } from '@/lib/api';
+import { usePrivyWrapper, useWalletsWrapper } from '@/app/hooks/usePrivyWrapper';
+import { toast } from '@/app/lib/toast';
+import { useTelegram } from '@/app/components/WebProvider';
+import { WalletAddress, LoadingButton, DepositProgress } from '@/app/components/user';
+import { api } from '@/app/lib/api';
 import { motion, AnimatePresence } from 'framer-motion';
 
 type LaunchStep = 'details' | 'socials' | 'review' | 'depositing' | 'launched';
@@ -178,7 +176,7 @@ export default function LaunchPage() {
             // Handle different statuses
             if (launch.status === 'completed') {
                 hapticFeedback('heavy');
-                toast.success('🎉 Token launched successfully!', {
+                toast.success('Token launched successfully!', {
                     description: 'View it in your dashboard',
                 });
                 setStep('launched');
@@ -281,7 +279,7 @@ export default function LaunchPage() {
 
     function handleGoToDashboard() {
         hapticFeedback('medium');
-        router.push('/dashboard');
+        router.push('/user/dashboard');
     }
 
     const stepTitle = {
@@ -301,7 +299,7 @@ export default function LaunchPage() {
                     className="text-2xl text-text-secondary hover:text-text-primary transition-colors"
                     disabled={step === 'depositing' || step === 'launched'}
                 >
-                    ←
+                    <span className="font-mono">&larr;</span>
                 </button>
                 <h1 className="text-xl font-bold text-text-primary">{stepTitle[step]}</h1>
             </div>
@@ -387,7 +385,7 @@ export default function LaunchPage() {
                                             onClick={() => setData({ ...data, imageUrl: '' })}
                                             className="absolute -top-2 -right-2 bg-error text-white rounded-full w-6 h-6 flex items-center justify-center text-sm"
                                         >
-                                            ×
+                                            x
                                         </button>
                                     </div>
                                 </div>
@@ -413,7 +411,7 @@ export default function LaunchPage() {
                                         </span>
                                     ) : (
                                         <span className="text-text-muted">
-                                            📤 Tap to upload image
+                                            Click to upload image
                                         </span>
                                     )}
                                 </label>
@@ -475,64 +473,31 @@ export default function LaunchPage() {
 
                         {/* MM Strategy Selection */}
                         <div className="bg-bg-card border border-border-subtle rounded-xl p-4">
-                            <div className="flex items-center justify-between mb-3">
-                                <label className="block text-sm text-text-muted">Market Making Strategy</label>
-                                <span className="text-xs text-success bg-success/10 px-2 py-0.5 rounded-full">
-                                    {data.mmAlgorithm === 'turbo_lite' ? 'Recommended' : data.mmAlgorithm === 'simple' ? 'Stable' : 'Advanced'}
-                                </span>
-                            </div>
-                            <div className="space-y-2 mb-4">
+                            <label className="block text-sm text-text-muted mb-3">Market Making Strategy</label>
+                            <div className="grid grid-cols-3 gap-2 mb-4">
                                 {[
-                                    {
-                                        value: 'simple',
-                                        label: '🐢 Simple',
-                                        desc: 'Steady & reliable - 5 buys/sells per cycle',
-                                        tooltip: 'Best for lower-volume tokens',
-                                        disabled: false
-                                    },
-                                    {
-                                        value: 'turbo_lite',
-                                        label: '🚀 Turbo Lite',
-                                        desc: 'High frequency - 8 buys/sells, 4x more trades',
-                                        tooltip: 'More volume, more fees',
-                                        disabled: false
-                                    },
-                                    {
-                                        value: 'rebalance',
-                                        label: '⚖️ Rebalance',
-                                        desc: 'Auto-balance SOL/token ratio',
-                                        tooltip: 'Coming soon',
-                                        disabled: true
-                                    },
+                                    { value: 'simple', label: 'Simple', desc: '5 buys, 5 sells', disabled: false },
+                                    { value: 'turbo_lite', label: 'Turbo Lite', desc: '8 buys, 8 sells', disabled: false },
+                                    { value: 'rebalance', label: 'Rebalance', desc: 'Portfolio %', disabled: false },
                                 ].map(opt => (
                                     <button
                                         key={opt.value}
                                         type="button"
                                         disabled={opt.disabled}
                                         onClick={() => !opt.disabled && setData({ ...data, mmAlgorithm: opt.value as TokenData['mmAlgorithm'] })}
-                                        className={`w-full p-3 rounded-lg text-left transition-colors ${
+                                        className={`p-3 rounded-lg text-center transition-colors ${
                                             opt.disabled
-                                                ? 'bg-bg-secondary/50 text-text-muted cursor-not-allowed opacity-50'
+                                                ? 'bg-bg-secondary text-text-muted cursor-not-allowed'
                                                 : data.mmAlgorithm === opt.value
-                                                    ? 'bg-accent-primary/20 border-2 border-accent-primary text-text-primary'
+                                                    ? 'bg-accent-primary text-bg-void'
                                                     : 'bg-bg-secondary text-text-secondary hover:bg-bg-card-hover border border-border-subtle'
                                         }`}
                                     >
-                                        <div className="flex items-center justify-between">
-                                            <span className="font-medium">{opt.label}</span>
-                                            {opt.disabled && <span className="text-xs text-text-muted">Soon</span>}
-                                        </div>
-                                        <div className="text-xs text-text-muted mt-1">{opt.desc}</div>
+                                        <div className="text-sm font-medium">{opt.label}</div>
+                                        <div className="text-xs opacity-70">{opt.desc}</div>
                                     </button>
                                 ))}
                             </div>
-                            <p className="text-xs text-text-muted">
-                                {data.mmAlgorithm === 'turbo_lite'
-                                    ? '🚀 Turbo generates more trading volume and fees but uses more capital.'
-                                    : data.mmAlgorithm === 'simple'
-                                    ? '🐢 Simple is best for getting started or lower-volume tokens.'
-                                    : '⚖️ Rebalance maintains a target allocation automatically.'}
-                            </p>
                         </div>
 
                         <div className="bg-bg-card border border-border-subtle rounded-xl p-4 text-sm space-y-2">
@@ -542,17 +507,18 @@ export default function LaunchPage() {
                                 <span className="text-text-muted ml-1">(0.1 base{data.devBuy ? ` + ${data.devBuy.toFixed(2)} dev buy` : ''})</span>
                             </p>
                             <p className="text-text-muted text-xs">
-                                💡 Tip: We recommend <span className="text-accent-primary">{(0.5 + (data.devBuy || 0)).toFixed(2)} SOL</span> total for effective market making
+                                Tip: We recommend <span className="text-accent-primary">{(0.5 + (data.devBuy || 0)).toFixed(2)} SOL</span> total for effective market making
                             </p>
                         </div>
 
-                        <button
+                        <LoadingButton
                             onClick={handleContinueToSocials}
                             disabled={!canContinueDetails}
-                            className="w-full bg-accent-primary hover:bg-accent-secondary disabled:bg-bg-card disabled:text-text-muted text-bg-void py-4 rounded-xl font-medium transition-colors btn-press"
+                            fullWidth
+                            size="lg"
                         >
                             Continue
-                        </button>
+                        </LoadingButton>
                     </motion.div>
                 )}
 
@@ -603,18 +569,21 @@ export default function LaunchPage() {
                         </div>
 
                         <div className="flex gap-3">
-                            <button
+                            <LoadingButton
                                 onClick={handleContinueToReview}
-                                className="flex-1 bg-bg-card border border-border-subtle hover:bg-bg-card-hover text-text-primary py-4 rounded-xl font-medium transition-colors btn-press"
+                                variant="secondary"
+                                fullWidth
+                                size="lg"
                             >
                                 Skip
-                            </button>
-                            <button
+                            </LoadingButton>
+                            <LoadingButton
                                 onClick={handleContinueToReview}
-                                className="flex-1 bg-accent-primary hover:bg-accent-secondary text-bg-void py-4 rounded-xl font-medium transition-colors btn-press"
+                                fullWidth
+                                size="lg"
                             >
                                 Continue
-                            </button>
+                            </LoadingButton>
                         </div>
                     </motion.div>
                 )}
@@ -680,7 +649,7 @@ export default function LaunchPage() {
                                 Deposit at least <span className="font-bold">{(0.1 + (data.devBuy || 0)).toFixed(2)} SOL</span> to your dev wallet to launch.
                             </p>
                             <p className="text-xs text-warning/70">
-                                💡 We recommend <span className="font-medium">{(0.5 + (data.devBuy || 0)).toFixed(2)} SOL</span> total for effective market making.
+                                Tip: We recommend <span className="font-medium">{(0.5 + (data.devBuy || 0)).toFixed(2)} SOL</span> total for effective market making.
                             </p>
                         </div>
 
@@ -690,20 +659,15 @@ export default function LaunchPage() {
                             </div>
                         )}
 
-                        <button
+                        <LoadingButton
                             onClick={handleCreatePendingLaunch}
-                            disabled={isSubmitting}
-                            className="w-full bg-accent-primary hover:bg-accent-secondary disabled:bg-bg-card disabled:text-text-muted text-bg-void py-4 rounded-xl font-medium transition-colors btn-press"
+                            isLoading={isSubmitting}
+                            loadingText="Creating..."
+                            fullWidth
+                            size="lg"
                         >
-                            {isSubmitting ? (
-                                <span className="flex items-center justify-center gap-2">
-                                    <span className="animate-spin w-5 h-5 border-2 border-bg-void border-t-transparent rounded-full" />
-                                    Creating...
-                                </span>
-                            ) : (
-                                'Create Launch'
-                            )}
-                        </button>
+                            Create Launch
+                        </LoadingButton>
                     </motion.div>
                 )}
 
@@ -718,7 +682,7 @@ export default function LaunchPage() {
                         {/* Status-based icon and title */}
                         {launchStatus === 'launching' ? (
                             <>
-                                <div className="text-5xl mb-4">🚀</div>
+                                <div className="text-5xl mb-4">Launching</div>
                                 <h2 className="text-xl font-bold mb-2 text-accent-primary">Launching...</h2>
                                 <p className="text-text-muted mb-6">
                                     <span className="text-accent-primary font-bold">{depositBalance.toFixed(4)} SOL</span> received - launching your token...
@@ -726,7 +690,7 @@ export default function LaunchPage() {
                             </>
                         ) : launchStatus === 'retry_pending' ? (
                             <>
-                                <div className="text-5xl mb-4">🔄</div>
+                                <div className="text-5xl mb-4">Retrying</div>
                                 <h2 className="text-xl font-bold mb-2 text-warning">Retrying...</h2>
                                 <p className="text-text-muted mb-4">
                                     Launch attempt failed. Retrying automatically in a few seconds...
@@ -735,13 +699,13 @@ export default function LaunchPage() {
                             </>
                         ) : launchStatus === 'failed' || launchStatus === 'expired' || launchStatus === 'refunded' ? (
                             <>
-                                <div className="text-5xl mb-4">❌</div>
+                                <div className="text-5xl mb-4">Failed</div>
                                 <h2 className="text-xl font-bold mb-2 text-error">Launch {launchStatus}</h2>
                                 {error && <p className="text-text-muted mb-6">{error}</p>}
                             </>
                         ) : isExpired ? (
                             <>
-                                <div className="text-5xl mb-4">⏰</div>
+                                <div className="text-5xl mb-4">Expired</div>
                                 <h2 className="text-xl font-bold mb-2 text-error">Launch Expired</h2>
                                 <p className="text-text-muted mb-4">
                                     This launch has expired. Please create a new launch.
@@ -749,13 +713,13 @@ export default function LaunchPage() {
                             </>
                         ) : (
                             <>
-                                <div className="text-5xl mb-4">💰</div>
+                                <div className="text-5xl mb-4">Deposit</div>
                                 <h2 className="text-xl font-bold mb-2 text-text-primary">Deposit to Launch</h2>
                                 <p className="text-text-muted mb-4">
                                     Send at least <span className="text-accent-primary font-bold">{pendingLaunch.required_amount?.toFixed(2) || '0.10'} SOL</span> to your dev wallet
                                 </p>
                                 <p className="text-text-muted text-xs mb-4">
-                                    💡 We recommend <span className="text-accent-primary">{((pendingLaunch.required_amount || 0.1) + 0.4).toFixed(2)} SOL</span> total for effective MM
+                                    Tip: We recommend <span className="text-accent-primary">{((pendingLaunch.required_amount || 0.1) + 0.4).toFixed(2)} SOL</span> total for effective MM
                                 </p>
                             </>
                         )}
@@ -773,10 +737,10 @@ export default function LaunchPage() {
                             >
                                 <div className="flex items-center justify-center gap-2">
                                     <span className={isExpiring ? 'text-error' : 'text-text-muted'}>
-                                        ⏱️
+                                        Timer
                                     </span>
                                     <span className={`font-mono text-sm ${isExpiring ? 'text-error font-bold' : 'text-text-secondary'}`}>
-                                        {isExpiring ? '⚠️ Expires in ' : 'Time remaining: '}
+                                        {isExpiring ? 'Warning: Expires in ' : 'Time remaining: '}
                                         {formatTime}
                                     </span>
                                 </div>
@@ -844,12 +808,14 @@ export default function LaunchPage() {
                                 : 'Your token will launch automatically when the deposit is detected.'}
                         </p>
 
-                        <button
+                        <LoadingButton
                             onClick={handleGoToDashboard}
-                            className="w-full bg-bg-card border border-border-subtle hover:bg-bg-card-hover text-text-primary py-4 rounded-xl font-medium transition-colors btn-press"
+                            variant="secondary"
+                            fullWidth
+                            size="lg"
                         >
                             Go to Dashboard
-                        </button>
+                        </LoadingButton>
                     </motion.div>
                 )}
 
@@ -867,19 +833,20 @@ export default function LaunchPage() {
                             transition={{ type: 'spring', delay: 0.2 }}
                             className="text-6xl mb-6"
                         >
-                            🎉
+                            Success!
                         </motion.div>
                         <h2 className="text-2xl font-bold mb-2 text-accent-primary">Token Launched!</h2>
                         <p className="text-text-muted mb-8">
                             Your token is now live on Bags.fm
                         </p>
 
-                        <button
+                        <LoadingButton
                             onClick={handleGoToDashboard}
-                            className="w-full bg-accent-primary hover:bg-accent-secondary text-bg-void py-4 rounded-xl font-medium transition-colors btn-press"
+                            fullWidth
+                            size="lg"
                         >
                             View in Dashboard
-                        </button>
+                        </LoadingButton>
                     </motion.div>
                 )}
             </AnimatePresence>

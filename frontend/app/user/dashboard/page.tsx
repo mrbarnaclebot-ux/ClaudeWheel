@@ -1,13 +1,11 @@
 'use client';
 
 import { useQuery } from '@tanstack/react-query';
-import { usePrivyWrapper, useWalletsWrapper } from '@/hooks/usePrivyWrapper';
-import { useTelegram } from '@/components/TelegramProvider';
-import { WalletAddress } from '@/components/WalletAddress';
-import { TokenAvatar } from '@/components/TokenAvatar';
-import { SkeletonCard } from '@/components/SkeletonCard';
-import { EmptyState } from '@/components/EmptyState';
-import { api } from '@/lib/api';
+import { usePrivyWrapper, useWalletsWrapper } from '@/app/hooks/usePrivyWrapper';
+import { useTelegram } from '@/app/components/WebProvider';
+import { WalletAddress, TokenAvatar, SkeletonCard, EmptyState, TotalFeesCard, SourceBadge } from '@/app/components/user';
+import { useState, useMemo } from 'react';
+import { api } from '@/app/lib/api';
 import Link from 'next/link';
 import { motion } from 'framer-motion';
 
@@ -20,25 +18,24 @@ interface Token {
     token_source?: 'launched' | 'registered' | 'mm_only';
     config?: {
         flywheel_active: boolean;
+        algorithm_mode?: string;
     };
     balance?: {
         dev_sol: number;
         ops_sol: number;
         token_balance: number;
     };
-    stats?: {
-        total_trades: number;
-        total_fees_claimed: number;
-        claimable_fees?: number;
-    };
 }
 
-export default function DashboardPage() {
-    const { getAccessToken } = usePrivyWrapper();
-    const { wallets } = useWalletsWrapper();
-    const { user: telegramUser, hapticFeedback } = useTelegram();
+type SourceFilter = 'all' | 'launched' | 'registered' | 'mm_only';
 
-    // useSolanaWallets already returns only Solana wallets
+export default function DashboardPage() {
+    const { getAccessToken, user } = usePrivyWrapper();
+    const { wallets } = useWalletsWrapper();
+    const { hapticFeedback } = useTelegram();
+    const [sourceFilter, setSourceFilter] = useState<SourceFilter>('all');
+
+    // Get Solana wallets
     const devWallet = wallets[0];
     const opsWallet = wallets[1];
 
@@ -57,6 +54,23 @@ export default function DashboardPage() {
         hapticFeedback('light');
     };
 
+    // Filter tokens by source
+    const filteredTokens = useMemo(() => {
+        if (!tokens) return [];
+        if (sourceFilter === 'all') return tokens;
+        return tokens.filter(t => t.token_source === sourceFilter);
+    }, [tokens, sourceFilter]);
+
+    // Token counts by source
+    const tokenCounts = useMemo(() => {
+        if (!tokens) return { launched: 0, registered: 0, mm_only: 0 };
+        return {
+            launched: tokens.filter(t => t.token_source === 'launched').length,
+            registered: tokens.filter(t => t.token_source === 'registered').length,
+            mm_only: tokens.filter(t => t.token_source === 'mm_only').length,
+        };
+    }, [tokens]);
+
     const getSourceBadge = (source?: string) => {
         switch (source) {
             case 'launched':
@@ -70,6 +84,9 @@ export default function DashboardPage() {
         }
     };
 
+    // Get user display name from Privy user
+    const displayName = user?.email?.address?.split('@')[0] || user?.google?.name || 'there';
+
     return (
         <div className="min-h-screen bg-void p-4">
             {/* Header */}
@@ -77,11 +94,11 @@ export default function DashboardPage() {
                 <div>
                     <h1 className="text-xl font-bold text-text-primary wood-text">ClaudeWheel</h1>
                     <p className="text-sm text-text-muted">
-                        Hey, {telegramUser?.firstName || 'there'}!
+                        Hey, {displayName}!
                     </p>
                 </div>
                 <Link
-                    href="/settings"
+                    href="/user/settings"
                     onClick={handleLinkClick}
                     className="w-10 h-10 bg-bg-card border border-border-subtle rounded-full flex items-center justify-center hover:border-border-accent transition-colors"
                 >
@@ -117,7 +134,7 @@ export default function DashboardPage() {
             {/* Quick Actions */}
             <div className="grid grid-cols-3 gap-3 mb-6">
                 <Link
-                    href="/launch"
+                    href="/user/launch"
                     onClick={handleLinkClick}
                     className="bg-accent-primary hover:bg-accent-secondary text-bg-void rounded-xl p-4 text-center transition-all btn-press hover:shadow-wood-glow"
                 >
@@ -125,7 +142,7 @@ export default function DashboardPage() {
                     <div className="font-medium text-sm">Launch</div>
                 </Link>
                 <Link
-                    href="/mm"
+                    href="/user/mm"
                     onClick={handleLinkClick}
                     className="bg-accent-cyan hover:bg-accent-cyan/80 text-bg-void rounded-xl p-4 text-center transition-all btn-press"
                 >
@@ -133,7 +150,7 @@ export default function DashboardPage() {
                     <div className="font-medium text-sm">MM Mode</div>
                 </Link>
                 <Link
-                    href="/register"
+                    href="/user/register"
                     onClick={handleLinkClick}
                     className="bg-bg-card border border-border-subtle hover:border-border-accent rounded-xl p-4 text-center transition-all btn-press"
                 >
@@ -148,61 +165,102 @@ export default function DashboardPage() {
                     initial={{ opacity: 0, y: 10 }}
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ delay: 0.1 }}
-                    className="space-y-3 mb-6"
+                    className="grid grid-cols-3 gap-3 mb-6"
                 >
-                    {/* Token counts */}
-                    <div className="grid grid-cols-3 gap-3">
-                        <div className="bg-bg-card border border-border-subtle rounded-xl p-3 text-center">
-                            <p className="text-2xl font-bold text-accent-primary font-mono">{tokens.length}</p>
-                            <p className="text-xs text-text-muted">Tokens</p>
-                        </div>
-                        <div className="bg-bg-card border border-border-subtle rounded-xl p-3 text-center">
-                            <p className="text-2xl font-bold text-success font-mono">
-                                {tokens.filter(t => t.config?.flywheel_active).length}
-                            </p>
-                            <p className="text-xs text-text-muted">Active</p>
-                        </div>
-                        <div className="bg-bg-card border border-border-subtle rounded-xl p-3 text-center">
-                            <p className="text-2xl font-bold text-text-secondary font-mono">
-                                {tokens.filter(t => !t.config?.flywheel_active).length}
-                            </p>
-                            <p className="text-xs text-text-muted">Paused</p>
-                        </div>
+                    <div className="bg-bg-card border border-border-subtle rounded-xl p-3 text-center">
+                        <p className="text-2xl font-bold text-accent-primary font-mono">{tokens.length}</p>
+                        <p className="text-xs text-text-muted">Tokens</p>
                     </div>
+                    <div className="bg-bg-card border border-border-subtle rounded-xl p-3 text-center">
+                        <p className="text-2xl font-bold text-success font-mono">
+                            {tokens.filter(t => t.config?.flywheel_active).length}
+                        </p>
+                        <p className="text-xs text-text-muted">Active</p>
+                    </div>
+                    <div className="bg-bg-card border border-border-subtle rounded-xl p-3 text-center">
+                        <p className="text-2xl font-bold text-text-secondary font-mono">
+                            {tokens.filter(t => !t.config?.flywheel_active).length}
+                        </p>
+                        <p className="text-xs text-text-muted">Paused</p>
+                    </div>
+                </motion.div>
+            )}
 
-                    {/* Portfolio value & fees */}
-                    <div className="bg-gradient-to-br from-accent-primary/10 to-success/10 border border-accent-primary/20 rounded-xl p-4">
-                        <div className="flex items-center gap-2 mb-3">
-                            <span className="text-lg">💰</span>
-                            <span className="text-sm font-medium text-text-primary">Portfolio Overview</span>
-                        </div>
-                        <div className="grid grid-cols-3 gap-3">
-                            <div className="text-center">
-                                <p className="text-lg font-bold font-mono text-accent-primary">
-                                    {tokens.reduce((sum, t) => sum + (t.balance?.dev_sol || 0) + (t.balance?.ops_sol || 0), 0).toFixed(3)}
-                                </p>
-                                <p className="text-xs text-text-muted">Total SOL</p>
-                            </div>
-                            <div className="text-center border-x border-border-subtle">
-                                <p className="text-lg font-bold font-mono text-success">
-                                    {tokens.reduce((sum, t) => sum + (t.stats?.total_fees_claimed || 0), 0).toFixed(3)}
-                                </p>
-                                <p className="text-xs text-text-muted">Fees Earned</p>
-                            </div>
-                            <div className="text-center">
-                                <p className="text-lg font-bold font-mono text-text-primary">
-                                    {tokens.reduce((sum, t) => sum + (t.stats?.total_trades || 0), 0)}
-                                </p>
-                                <p className="text-xs text-text-muted">Total Trades</p>
-                            </div>
-                        </div>
-                    </div>
+            {/* Total Fees Card */}
+            {tokens && tokens.length > 0 && (
+                <motion.div
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: 0.15 }}
+                    className="mb-6"
+                >
+                    <TotalFeesCard
+                        totalClaimable={tokens.reduce((sum, t) => sum + (t.balance?.dev_sol || 0), 0)}
+                        tokenCount={tokens.length}
+                    />
                 </motion.div>
             )}
 
             {/* Tokens List */}
             <div className="space-y-3">
-                <h2 className="text-lg font-medium text-text-primary">Your Tokens</h2>
+                <div className="flex items-center justify-between">
+                    <h2 className="text-lg font-medium text-text-primary">Your Tokens</h2>
+                    {tokens && tokens.length > 0 && (
+                        <span className="text-xs text-text-muted">
+                            {filteredTokens.length} of {tokens.length}
+                        </span>
+                    )}
+                </div>
+
+                {/* Source Filter Tabs */}
+                {tokens && tokens.length > 0 && (
+                    <motion.div
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide"
+                    >
+                        <button
+                            onClick={() => { setSourceFilter('all'); hapticFeedback('light'); }}
+                            className={`px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-all ${
+                                sourceFilter === 'all'
+                                    ? 'bg-accent-primary text-bg-void'
+                                    : 'bg-bg-card border border-border-subtle text-text-muted hover:border-border-accent'
+                            }`}
+                        >
+                            All ({tokens.length})
+                        </button>
+                        <button
+                            onClick={() => { setSourceFilter('launched'); hapticFeedback('light'); }}
+                            className={`px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-all ${
+                                sourceFilter === 'launched'
+                                    ? 'bg-success text-bg-void'
+                                    : 'bg-bg-card border border-border-subtle text-text-muted hover:border-border-accent'
+                            }`}
+                        >
+                            Launched ({tokenCounts.launched})
+                        </button>
+                        <button
+                            onClick={() => { setSourceFilter('registered'); hapticFeedback('light'); }}
+                            className={`px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-all ${
+                                sourceFilter === 'registered'
+                                    ? 'bg-accent-cyan text-bg-void'
+                                    : 'bg-bg-card border border-border-subtle text-text-muted hover:border-border-accent'
+                            }`}
+                        >
+                            Registered ({tokenCounts.registered})
+                        </button>
+                        <button
+                            onClick={() => { setSourceFilter('mm_only'); hapticFeedback('light'); }}
+                            className={`px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-all ${
+                                sourceFilter === 'mm_only'
+                                    ? 'bg-warning text-bg-void'
+                                    : 'bg-bg-card border border-border-subtle text-text-muted hover:border-border-accent'
+                            }`}
+                        >
+                            MM Only ({tokenCounts.mm_only})
+                        </button>
+                    </motion.div>
+                )}
 
                 {isLoading ? (
                     <SkeletonCard count={3} />
@@ -213,22 +271,38 @@ export default function DashboardPage() {
                         description="Launch your first token in under 2 minutes. We'll handle the trading for you."
                         primaryAction={{
                             label: 'Launch Your First Token',
-                            href: '/launch',
+                            href: '/user/launch',
                             icon: '🚀',
                         }}
                         secondaryAction={{
                             label: 'Or register existing token',
-                            href: '/register',
+                            href: '/user/register',
                         }}
                         socialProof="Join creators already trading"
                     />
+                ) : filteredTokens.length === 0 ? (
+                    <motion.div
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        className="bg-bg-card border border-border-subtle rounded-xl p-6 text-center"
+                    >
+                        <p className="text-text-muted text-sm">
+                            No {sourceFilter === 'launched' ? 'launched' : sourceFilter === 'registered' ? 'registered' : 'MM only'} tokens found
+                        </p>
+                        <button
+                            onClick={() => setSourceFilter('all')}
+                            className="mt-2 text-accent-primary text-sm hover:underline"
+                        >
+                            View all tokens
+                        </button>
+                    </motion.div>
                 ) : (
                     <motion.div
                         initial={{ opacity: 0 }}
                         animate={{ opacity: 1 }}
                         className="space-y-3"
                     >
-                        {tokens?.map((token, index) => (
+                        {filteredTokens.map((token, index) => (
                             <TokenCard
                                 key={token.id}
                                 token={token}
@@ -262,7 +336,7 @@ function TokenCard({
             transition={{ delay: index * 0.05 }}
         >
             <Link
-                href={`/token/${token.id}`}
+                href={`/user/token/${token.id}`}
                 onClick={onLinkClick}
                 className="block bg-bg-card border border-border-subtle rounded-xl p-4 hover:border-border-accent hover:bg-bg-card-hover transition-all"
             >
