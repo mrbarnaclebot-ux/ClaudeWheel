@@ -1182,8 +1182,10 @@ class MultiUserMMService {
     if (!isPrismaConfigured()) return
 
     try {
-      await prisma.privyTransaction.create({
-        data: {
+      await prisma.privyTransaction.upsert({
+        where: { signature },
+        update: {}, // No update needed, just skip if exists
+        create: {
           privyTokenId,
           type,
           amount,
