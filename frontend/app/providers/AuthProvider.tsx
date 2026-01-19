@@ -1,7 +1,8 @@
 'use client'
 
 import { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react'
-import { usePrivy, useSolanaWallets } from '@privy-io/react-auth'
+import { usePrivy } from '@privy-io/react-auth'
+import { useWallets } from '@privy-io/react-auth/solana'
 import { api, UserToken } from '@/lib/api'
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -72,7 +73,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
   } = usePrivy()
 
   // Solana wallets from Privy - can be used for wallet-related operations
-  const { wallets: _solanaWallets } = useSolanaWallets()
+  const { wallets: _solanaWallets } = useWallets()
 
   const [user, setUser] = useState<PrivyUserData | null>(null)
   const [tokens, setTokens] = useState<UserToken[]>([])
