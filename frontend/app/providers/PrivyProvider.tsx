@@ -54,7 +54,9 @@ export const PrivyProvider: FC<Props> = ({ children }) => {
 
         // Embedded wallet config - create for users without wallets
         embeddedWallets: {
-          createOnLogin: 'users-without-wallets',
+          solana: {
+            createOnLogin: 'users-without-wallets',
+          },
         },
       }}
     >
