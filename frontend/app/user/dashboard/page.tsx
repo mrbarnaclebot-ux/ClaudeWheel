@@ -3,7 +3,8 @@
 import { useQuery } from '@tanstack/react-query';
 import { usePrivyWrapper, useWalletsWrapper } from '@/app/hooks/usePrivyWrapper';
 import { useTelegram } from '@/app/components/WebProvider';
-import { WalletAddress, TokenAvatar, SkeletonCard, EmptyState } from '@/app/components/user';
+import { WalletAddress, TokenAvatar, SkeletonCard, EmptyState, TotalFeesCard, SourceBadge } from '@/app/components/user';
+import { useState, useMemo } from 'react';
 import { api } from '@/app/lib/api';
 import Link from 'next/link';
 import { motion } from 'framer-motion';
@@ -26,10 +27,13 @@ interface Token {
     };
 }
 
+type SourceFilter = 'all' | 'launched' | 'registered' | 'mm_only';
+
 export default function DashboardPage() {
     const { getAccessToken, user } = usePrivyWrapper();
     const { wallets } = useWalletsWrapper();
     const { hapticFeedback } = useTelegram();
+    const [sourceFilter, setSourceFilter] = useState<SourceFilter>('all');
 
     // Get Solana wallets
     const devWallet = wallets[0];
@@ -49,6 +53,23 @@ export default function DashboardPage() {
     const handleLinkClick = () => {
         hapticFeedback('light');
     };
+
+    // Filter tokens by source
+    const filteredTokens = useMemo(() => {
+        if (!tokens) return [];
+        if (sourceFilter === 'all') return tokens;
+        return tokens.filter(t => t.token_source === sourceFilter);
+    }, [tokens, sourceFilter]);
+
+    // Token counts by source
+    const tokenCounts = useMemo(() => {
+        if (!tokens) return { launched: 0, registered: 0, mm_only: 0 };
+        return {
+            launched: tokens.filter(t => t.token_source === 'launched').length,
+            registered: tokens.filter(t => t.token_source === 'registered').length,
+            mm_only: tokens.filter(t => t.token_source === 'mm_only').length,
+        };
+    }, [tokens]);
 
     const getSourceBadge = (source?: string) => {
         switch (source) {
@@ -165,9 +186,81 @@ export default function DashboardPage() {
                 </motion.div>
             )}
 
+            {/* Total Fees Card */}
+            {tokens && tokens.length > 0 && (
+                <motion.div
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: 0.15 }}
+                    className="mb-6"
+                >
+                    <TotalFeesCard
+                        totalClaimable={tokens.reduce((sum, t) => sum + (t.balance?.dev_sol || 0), 0)}
+                        tokenCount={tokens.length}
+                    />
+                </motion.div>
+            )}
+
             {/* Tokens List */}
             <div className="space-y-3">
-                <h2 className="text-lg font-medium text-text-primary">Your Tokens</h2>
+                <div className="flex items-center justify-between">
+                    <h2 className="text-lg font-medium text-text-primary">Your Tokens</h2>
+                    {tokens && tokens.length > 0 && (
+                        <span className="text-xs text-text-muted">
+                            {filteredTokens.length} of {tokens.length}
+                        </span>
+                    )}
+                </div>
+
+                {/* Source Filter Tabs */}
+                {tokens && tokens.length > 0 && (
+                    <motion.div
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide"
+                    >
+                        <button
+                            onClick={() => { setSourceFilter('all'); hapticFeedback('light'); }}
+                            className={`px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-all ${
+                                sourceFilter === 'all'
+                                    ? 'bg-accent-primary text-bg-void'
+                                    : 'bg-bg-card border border-border-subtle text-text-muted hover:border-border-accent'
+                            }`}
+                        >
+                            All ({tokens.length})
+                        </button>
+                        <button
+                            onClick={() => { setSourceFilter('launched'); hapticFeedback('light'); }}
+                            className={`px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-all ${
+                                sourceFilter === 'launched'
+                                    ? 'bg-success text-bg-void'
+                                    : 'bg-bg-card border border-border-subtle text-text-muted hover:border-border-accent'
+                            }`}
+                        >
+                            Launched ({tokenCounts.launched})
+                        </button>
+                        <button
+                            onClick={() => { setSourceFilter('registered'); hapticFeedback('light'); }}
+                            className={`px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-all ${
+                                sourceFilter === 'registered'
+                                    ? 'bg-accent-cyan text-bg-void'
+                                    : 'bg-bg-card border border-border-subtle text-text-muted hover:border-border-accent'
+                            }`}
+                        >
+                            Registered ({tokenCounts.registered})
+                        </button>
+                        <button
+                            onClick={() => { setSourceFilter('mm_only'); hapticFeedback('light'); }}
+                            className={`px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-all ${
+                                sourceFilter === 'mm_only'
+                                    ? 'bg-warning text-bg-void'
+                                    : 'bg-bg-card border border-border-subtle text-text-muted hover:border-border-accent'
+                            }`}
+                        >
+                            MM Only ({tokenCounts.mm_only})
+                        </button>
+                    </motion.div>
+                )}
 
                 {isLoading ? (
                     <SkeletonCard count={3} />
@@ -187,13 +280,29 @@ export default function DashboardPage() {
                         }}
                         socialProof="Join creators already trading"
                     />
+                ) : filteredTokens.length === 0 ? (
+                    <motion.div
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        className="bg-bg-card border border-border-subtle rounded-xl p-6 text-center"
+                    >
+                        <p className="text-text-muted text-sm">
+                            No {sourceFilter === 'launched' ? 'launched' : sourceFilter === 'registered' ? 'registered' : 'MM only'} tokens found
+                        </p>
+                        <button
+                            onClick={() => setSourceFilter('all')}
+                            className="mt-2 text-accent-primary text-sm hover:underline"
+                        >
+                            View all tokens
+                        </button>
+                    </motion.div>
                 ) : (
                     <motion.div
                         initial={{ opacity: 0 }}
                         animate={{ opacity: 1 }}
                         className="space-y-3"
                     >
-                        {tokens?.map((token, index) => (
+                        {filteredTokens.map((token, index) => (
                             <TokenCard
                                 key={token.id}
                                 token={token}

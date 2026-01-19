@@ -6,7 +6,7 @@ import { usePrivyWrapper } from '@/app/hooks/usePrivyWrapper';
 import { useTelegram } from '@/app/components/WebProvider';
 import { api } from '@/app/lib/api';
 import { toast } from '@/app/lib/toast';
-import { LoadingButton, AlgorithmBadge } from '@/app/components/user';
+import { LoadingButton, AlgorithmBadge, DepositProgress, WalletAddress } from '@/app/components/user';
 import Link from 'next/link';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -435,21 +435,17 @@ export default function MmPage() {
 
                         <div className="bg-bg-card border border-border-subtle rounded-xl p-4 mb-4">
                             <p className="text-sm text-text-muted mb-2">Ops Wallet Address</p>
-                            <p className="font-mono text-accent-cyan text-sm break-all">
-                                {pendingMm.depositAddress}
-                            </p>
+                            <WalletAddress address={pendingMm.depositAddress} variant="full" />
                         </div>
 
-                        {/* Balance indicator */}
-                        <div className={`rounded-xl p-4 mb-4 ${depositBalance >= pendingMm.minDepositSol ? 'bg-success/20 border border-success/30' : 'bg-bg-card border border-border-subtle'}`}>
-                            <p className={`text-sm ${depositBalance >= pendingMm.minDepositSol ? 'text-success' : 'text-text-secondary'}`}>
-                                Current Balance: <span className="font-bold">{depositBalance.toFixed(4)} SOL</span>
-                            </p>
-                            {depositBalance >= pendingMm.minDepositSol && (
-                                <p className="text-xs text-success/70 mt-1">
-                                    Activating MM...
-                                </p>
-                            )}
+                        {/* Deposit Progress */}
+                        <div className="mb-4">
+                            <DepositProgress
+                                currentBalance={depositBalance}
+                                requiredAmount={pendingMm.minDepositSol}
+                                recommendedAmount={pendingMm.minDepositSol + 0.4}
+                                accentColor="cyan"
+                            />
                         </div>
 
                         {/* Status indicator */}

@@ -9,6 +9,7 @@ interface WalletAddressProps {
   showToast?: boolean;
   startChars?: number;
   endChars?: number;
+  variant?: 'truncated' | 'full';
 }
 
 export function WalletAddress({
@@ -18,12 +19,16 @@ export function WalletAddress({
   showToast = false,
   startChars = 4,
   endChars = 4,
+  variant = 'truncated',
 }: WalletAddressProps) {
+  const displayAddress = variant === 'full'
+    ? address
+    : `${address.slice(0, startChars)}...${address.slice(-endChars)}`;
+
   if (!showCopyButton) {
-    const truncated = `${address.slice(0, startChars)}...${address.slice(-endChars)}`;
     return (
-      <p className={`font-mono text-xs text-accent-primary ${className}`}>
-        {truncated}
+      <p className={`font-mono text-xs text-accent-primary ${className} ${variant === 'full' ? 'break-all' : ''}`}>
+        {displayAddress}
       </p>
     );
   }
@@ -31,8 +36,8 @@ export function WalletAddress({
   return (
     <CopyAddress
       address={address}
-      startChars={startChars}
-      endChars={endChars}
+      startChars={variant === 'full' ? address.length : startChars}
+      endChars={variant === 'full' ? 0 : endChars}
       showToast={showToast}
       className={className}
     />

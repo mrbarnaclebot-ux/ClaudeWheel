@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { usePrivyWrapper, useWalletsWrapper } from '@/app/hooks/usePrivyWrapper';
 import { toast } from '@/app/lib/toast';
 import { useTelegram } from '@/app/components/WebProvider';
-import { WalletAddress, LoadingButton } from '@/app/components/user';
+import { WalletAddress, LoadingButton, DepositProgress } from '@/app/components/user';
 import { api } from '@/app/lib/api';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -762,14 +762,15 @@ export default function LaunchPage() {
                             </div>
                         </div>
 
-                        {/* Balance indicator */}
-                        {depositBalance > 0 && (
-                            <div className="bg-success/20 border border-success/30 rounded-xl p-4 mb-4">
-                                <p className="text-sm text-success">
-                                    Current Balance: <span className="font-bold">{depositBalance.toFixed(4)} SOL</span>
-                                </p>
-                            </div>
-                        )}
+                        {/* Deposit Progress */}
+                        <div className="mb-4">
+                            <DepositProgress
+                                currentBalance={depositBalance}
+                                requiredAmount={pendingLaunch.required_amount || 0.1}
+                                recommendedAmount={(pendingLaunch.required_amount || 0.1) + 0.4}
+                                accentColor="primary"
+                            />
+                        </div>
 
                         {/* Status indicator */}
                         <div className="bg-bg-card border border-border-subtle rounded-xl p-4 mb-6">

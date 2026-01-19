@@ -5,7 +5,7 @@ import { usePrivyWrapper } from '@/app/hooks/usePrivyWrapper';
 import { useTelegram } from '@/app/components/WebProvider';
 import { api } from '@/app/lib/api';
 import { toast } from '@/app/lib/toast';
-// Components can be imported from @/app/components/user if needed
+import { FullCycleProgress, WalletAddress, SkeletonCard, ClaimableFeesCard, AlgorithmBadge, LoadingButton } from '@/app/components/user';
 import Link from 'next/link';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useParams } from 'next/navigation';
@@ -371,17 +371,11 @@ export default function TokenDetailPage() {
                         : 'bg-bg-card border-border-subtle'
                 }`}
             >
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between mb-4">
                     <div>
                         <p className={`font-medium flex items-center gap-2 ${token.config.flywheel_active ? 'text-success' : 'text-text-secondary'}`}>
                             <span className={`status-dot ${token.config.flywheel_active ? 'active' : ''}`} />
                             {token.config.flywheel_active ? 'Flywheel Active' : 'Flywheel Paused'}
-                        </p>
-                        <p className="text-sm text-text-muted mt-1">
-                            {token.state?.cycle_phase === 'buy'
-                                ? `Buy phase (${token.state.buy_count || 0}/${getCycleSize()})`
-                                : `Sell phase (${token.state?.sell_count || 0}/${getCycleSize()})`
-                            }
                         </p>
                     </div>
                     <button
@@ -401,6 +395,16 @@ export default function TokenDetailPage() {
                         }
                     </button>
                 </div>
+
+                {/* Cycle Progress Visualization */}
+                <FullCycleProgress
+                    buyCount={token.state?.buy_count || 0}
+                    sellCount={token.state?.sell_count || 0}
+                    cycleSize={getCycleSize()}
+                    phase={(token.state?.cycle_phase || 'buy') as 'buy' | 'sell'}
+                    isActive={token.config.flywheel_active}
+                    algorithmMode={token.config.algorithm_mode}
+                />
             </motion.div>
 
             {/* Balance Cards */}
