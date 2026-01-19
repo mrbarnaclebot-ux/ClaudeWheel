@@ -183,6 +183,10 @@ export async function getPrivyTokensForFlywheel(): Promise<PrivyTokenWithConfig[
         isActive: true,
         config: {
           flywheelActive: true,
+          // Exclude transaction_reactive tokens - they're handled by reactive-monitor.job.ts
+          algorithmMode: {
+            not: 'transaction_reactive',
+          },
         },
       },
       include: {
