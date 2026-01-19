@@ -7,6 +7,7 @@ import { toast } from '@/lib/toast';
 import { useTelegram } from '@/components/TelegramProvider';
 import { WalletAddress } from '@/components/WalletAddress';
 import { LoadingButton } from '@/components/LoadingButton';
+import { DepositProgress } from '@/components/DepositProgress';
 import { api } from '@/lib/api';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -474,31 +475,64 @@ export default function LaunchPage() {
 
                         {/* MM Strategy Selection */}
                         <div className="bg-bg-card border border-border-subtle rounded-xl p-4">
-                            <label className="block text-sm text-text-muted mb-3">Market Making Strategy</label>
-                            <div className="grid grid-cols-3 gap-2 mb-4">
+                            <div className="flex items-center justify-between mb-3">
+                                <label className="block text-sm text-text-muted">Market Making Strategy</label>
+                                <span className="text-xs text-success bg-success/10 px-2 py-0.5 rounded-full">
+                                    {data.mmAlgorithm === 'turbo_lite' ? 'Recommended' : data.mmAlgorithm === 'simple' ? 'Stable' : 'Advanced'}
+                                </span>
+                            </div>
+                            <div className="space-y-2 mb-4">
                                 {[
-                                    { value: 'simple', label: 'Simple', desc: '5 buys, 5 sells', disabled: false },
-                                    { value: 'turbo_lite', label: 'Turbo Lite', desc: '8 buys, 8 sells', disabled: false },
-                                    { value: 'rebalance', label: 'Rebalance', desc: 'Portfolio %', disabled: false },
+                                    {
+                                        value: 'simple',
+                                        label: '🐢 Simple',
+                                        desc: 'Steady & reliable - 5 buys/sells per cycle',
+                                        tooltip: 'Best for lower-volume tokens',
+                                        disabled: false
+                                    },
+                                    {
+                                        value: 'turbo_lite',
+                                        label: '🚀 Turbo Lite',
+                                        desc: 'High frequency - 8 buys/sells, 4x more trades',
+                                        tooltip: 'More volume, more fees',
+                                        disabled: false
+                                    },
+                                    {
+                                        value: 'rebalance',
+                                        label: '⚖️ Rebalance',
+                                        desc: 'Auto-balance SOL/token ratio',
+                                        tooltip: 'Coming soon',
+                                        disabled: true
+                                    },
                                 ].map(opt => (
                                     <button
                                         key={opt.value}
                                         type="button"
                                         disabled={opt.disabled}
                                         onClick={() => !opt.disabled && setData({ ...data, mmAlgorithm: opt.value as TokenData['mmAlgorithm'] })}
-                                        className={`p-3 rounded-lg text-center transition-colors ${
+                                        className={`w-full p-3 rounded-lg text-left transition-colors ${
                                             opt.disabled
-                                                ? 'bg-bg-secondary text-text-muted cursor-not-allowed'
+                                                ? 'bg-bg-secondary/50 text-text-muted cursor-not-allowed opacity-50'
                                                 : data.mmAlgorithm === opt.value
-                                                    ? 'bg-accent-primary text-bg-void'
+                                                    ? 'bg-accent-primary/20 border-2 border-accent-primary text-text-primary'
                                                     : 'bg-bg-secondary text-text-secondary hover:bg-bg-card-hover border border-border-subtle'
                                         }`}
                                     >
-                                        <div className="text-sm font-medium">{opt.label}</div>
-                                        <div className="text-xs opacity-70">{opt.desc}</div>
+                                        <div className="flex items-center justify-between">
+                                            <span className="font-medium">{opt.label}</span>
+                                            {opt.disabled && <span className="text-xs text-text-muted">Soon</span>}
+                                        </div>
+                                        <div className="text-xs text-text-muted mt-1">{opt.desc}</div>
                                     </button>
                                 ))}
                             </div>
+                            <p className="text-xs text-text-muted">
+                                {data.mmAlgorithm === 'turbo_lite'
+                                    ? '🚀 Turbo generates more trading volume and fees but uses more capital.'
+                                    : data.mmAlgorithm === 'simple'
+                                    ? '🐢 Simple is best for getting started or lower-volume tokens.'
+                                    : '⚖️ Rebalance maintains a target allocation automatically.'}
+                            </p>
                         </div>
 
                         <div className="bg-bg-card border border-border-subtle rounded-xl p-4 text-sm space-y-2">
@@ -764,14 +798,15 @@ export default function LaunchPage() {
                             </div>
                         </div>
 
-                        {/* Balance indicator */}
-                        {depositBalance > 0 && (
-                            <div className="bg-success/20 border border-success/30 rounded-xl p-4 mb-4">
-                                <p className="text-sm text-success">
-                                    Current Balance: <span className="font-bold">{depositBalance.toFixed(4)} SOL</span>
-                                </p>
-                            </div>
-                        )}
+                        {/* Deposit Progress */}
+                        <div className="mb-4">
+                            <DepositProgress
+                                currentBalance={depositBalance}
+                                requiredAmount={pendingLaunch.required_amount || 0.1}
+                                recommendedAmount={(pendingLaunch.required_amount || 0.1) + 0.4}
+                                accentColor="primary"
+                            />
+                        </div>
 
                         {/* Status indicator */}
                         <div className="bg-bg-card border border-border-subtle rounded-xl p-4 mb-6">

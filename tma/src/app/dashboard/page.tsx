@@ -26,6 +26,11 @@ interface Token {
         ops_sol: number;
         token_balance: number;
     };
+    stats?: {
+        total_trades: number;
+        total_fees_claimed: number;
+        claimable_fees?: number;
+    };
 }
 
 export default function DashboardPage() {
@@ -143,23 +148,54 @@ export default function DashboardPage() {
                     initial={{ opacity: 0, y: 10 }}
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ delay: 0.1 }}
-                    className="grid grid-cols-3 gap-3 mb-6"
+                    className="space-y-3 mb-6"
                 >
-                    <div className="bg-bg-card border border-border-subtle rounded-xl p-3 text-center">
-                        <p className="text-2xl font-bold text-accent-primary font-mono">{tokens.length}</p>
-                        <p className="text-xs text-text-muted">Tokens</p>
+                    {/* Token counts */}
+                    <div className="grid grid-cols-3 gap-3">
+                        <div className="bg-bg-card border border-border-subtle rounded-xl p-3 text-center">
+                            <p className="text-2xl font-bold text-accent-primary font-mono">{tokens.length}</p>
+                            <p className="text-xs text-text-muted">Tokens</p>
+                        </div>
+                        <div className="bg-bg-card border border-border-subtle rounded-xl p-3 text-center">
+                            <p className="text-2xl font-bold text-success font-mono">
+                                {tokens.filter(t => t.config?.flywheel_active).length}
+                            </p>
+                            <p className="text-xs text-text-muted">Active</p>
+                        </div>
+                        <div className="bg-bg-card border border-border-subtle rounded-xl p-3 text-center">
+                            <p className="text-2xl font-bold text-text-secondary font-mono">
+                                {tokens.filter(t => !t.config?.flywheel_active).length}
+                            </p>
+                            <p className="text-xs text-text-muted">Paused</p>
+                        </div>
                     </div>
-                    <div className="bg-bg-card border border-border-subtle rounded-xl p-3 text-center">
-                        <p className="text-2xl font-bold text-success font-mono">
-                            {tokens.filter(t => t.config?.flywheel_active).length}
-                        </p>
-                        <p className="text-xs text-text-muted">Active</p>
-                    </div>
-                    <div className="bg-bg-card border border-border-subtle rounded-xl p-3 text-center">
-                        <p className="text-2xl font-bold text-text-secondary font-mono">
-                            {tokens.filter(t => !t.config?.flywheel_active).length}
-                        </p>
-                        <p className="text-xs text-text-muted">Paused</p>
+
+                    {/* Portfolio value & fees */}
+                    <div className="bg-gradient-to-br from-accent-primary/10 to-success/10 border border-accent-primary/20 rounded-xl p-4">
+                        <div className="flex items-center gap-2 mb-3">
+                            <span className="text-lg">💰</span>
+                            <span className="text-sm font-medium text-text-primary">Portfolio Overview</span>
+                        </div>
+                        <div className="grid grid-cols-3 gap-3">
+                            <div className="text-center">
+                                <p className="text-lg font-bold font-mono text-accent-primary">
+                                    {tokens.reduce((sum, t) => sum + (t.balance?.dev_sol || 0) + (t.balance?.ops_sol || 0), 0).toFixed(3)}
+                                </p>
+                                <p className="text-xs text-text-muted">Total SOL</p>
+                            </div>
+                            <div className="text-center border-x border-border-subtle">
+                                <p className="text-lg font-bold font-mono text-success">
+                                    {tokens.reduce((sum, t) => sum + (t.stats?.total_fees_claimed || 0), 0).toFixed(3)}
+                                </p>
+                                <p className="text-xs text-text-muted">Fees Earned</p>
+                            </div>
+                            <div className="text-center">
+                                <p className="text-lg font-bold font-mono text-text-primary">
+                                    {tokens.reduce((sum, t) => sum + (t.stats?.total_trades || 0), 0)}
+                                </p>
+                                <p className="text-xs text-text-muted">Total Trades</p>
+                            </div>
+                        </div>
                     </div>
                 </motion.div>
             )}

@@ -7,6 +7,7 @@ import { api } from '@/lib/api';
 import { toast } from '@/lib/toast';
 import { LoadingButton } from '@/components/LoadingButton';
 import { AlgorithmBadge, FlywheelIndicator, TransactionIcon } from '@/components/StatusBadge';
+import { FullCycleProgress } from '@/components/CycleProgress';
 import Link from 'next/link';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useParams } from 'next/navigation';
@@ -306,8 +307,10 @@ export default function TokenDetailPage() {
 
     if (isLoading) {
         return (
-            <div className="min-h-screen p-4 flex items-center justify-center bg-void">
-                <div className="animate-spin w-8 h-8 border-2 border-accent-primary border-t-transparent rounded-full" />
+            <div className="min-h-screen bg-void flex flex-col items-center justify-center p-4">
+                <div className="animate-spin w-12 h-12 border-3 border-accent-primary/30 border-t-accent-primary rounded-full mb-4" />
+                <p className="text-text-primary font-medium">Loading Token</p>
+                <p className="text-xs text-text-muted mt-1">Fetching details and history...</p>
             </div>
         );
     }
@@ -371,17 +374,14 @@ export default function TokenDetailPage() {
                         : 'bg-bg-card border-border-subtle'
                 }`}
             >
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between mb-4">
                     <div>
                         <p className={`font-medium flex items-center gap-2 ${token.config.flywheel_active ? 'text-success' : 'text-text-secondary'}`}>
                             <span className={`status-dot ${token.config.flywheel_active ? 'active' : ''}`} />
                             {token.config.flywheel_active ? 'Flywheel Active' : 'Flywheel Paused'}
                         </p>
-                        <p className="text-sm text-text-muted mt-1">
-                            {token.state?.cycle_phase === 'buy'
-                                ? `Buy phase (${token.state.buy_count || 0}/${getCycleSize()})`
-                                : `Sell phase (${token.state?.sell_count || 0}/${getCycleSize()})`
-                            }
+                        <p className="text-xs text-text-muted mt-1">
+                            {getAlgorithmDisplay(token.config.algorithm_mode)}
                         </p>
                     </div>
                     <button
@@ -401,6 +401,16 @@ export default function TokenDetailPage() {
                         }
                     </button>
                 </div>
+
+                {/* Visual Cycle Progress */}
+                <FullCycleProgress
+                    buyCount={token.state?.buy_count || 0}
+                    sellCount={token.state?.sell_count || 0}
+                    cycleSize={getCycleSize()}
+                    phase={(token.state?.cycle_phase as 'buy' | 'sell') || 'buy'}
+                    isActive={token.config.flywheel_active}
+                    algorithmMode={token.config.algorithm_mode}
+                />
             </motion.div>
 
             {/* Balance Cards */}
@@ -408,7 +418,7 @@ export default function TokenDetailPage() {
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: 0.1 }}
-                className="grid grid-cols-2 gap-3 mb-6"
+                className="grid grid-cols-2 gap-3 mb-4"
             >
                 <div className="bg-bg-card border border-border-subtle rounded-xl p-3 text-center">
                     <p className="text-lg font-bold text-accent-primary font-mono">
@@ -423,6 +433,40 @@ export default function TokenDetailPage() {
                     <p className="text-xs text-text-muted">Ops SOL</p>
                 </div>
             </motion.div>
+
+            {/* Stats & Fees */}
+            {token.stats && (
+                <motion.div
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: 0.15 }}
+                    className="bg-gradient-to-br from-success/5 to-accent-primary/5 border border-success/20 rounded-xl p-4 mb-6"
+                >
+                    <div className="flex items-center gap-2 mb-3">
+                        <span className="text-lg">📊</span>
+                        <span className="text-sm font-medium text-text-primary">Performance</span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-4">
+                        <div>
+                            <p className="text-xs text-text-muted mb-1">Total Trades</p>
+                            <p className="text-xl font-bold font-mono text-text-primary">
+                                {token.stats.total_trades || 0}
+                            </p>
+                        </div>
+                        <div>
+                            <p className="text-xs text-text-muted mb-1">Fees Claimed</p>
+                            <p className="text-xl font-bold font-mono text-success">
+                                {(token.stats.total_fees_claimed || 0).toFixed(4)} SOL
+                            </p>
+                        </div>
+                    </div>
+                    {token.token_source !== 'mm_only' && (
+                        <p className="text-xs text-text-muted mt-3 pt-3 border-t border-border-subtle">
+                            Fees auto-claim when balance reaches 0.15 SOL (90% to you, 10% platform)
+                        </p>
+                    )}
+                </motion.div>
+            )}
 
             {/* Dev Buy Actions (only show if tokens in dev wallet) */}
             {devBuyBalance && devBuyBalance.devTokenBalance > 0 && (
@@ -753,6 +797,23 @@ export default function TokenDetailPage() {
                                             <p className="font-mono text-sm text-text-primary">
                                                 {typeof tx.amount === 'number' ? tx.amount.toFixed(4) : tx.amount} SOL
                                             </p>
+                                            {/* Show token amount if available */}
+                                            {tx.outputAmount && tx.type === 'buy' && (
+                                                <p className="text-xs text-success font-mono">
+                                                    +{tx.outputAmount.toLocaleString()} {token.token_symbol}
+                                                </p>
+                                            )}
+                                            {tx.inputAmount && tx.type === 'sell' && (
+                                                <p className="text-xs text-error font-mono">
+                                                    -{tx.inputAmount.toLocaleString()} {token.token_symbol}
+                                                </p>
+                                            )}
+                                            {/* Show price per token if available */}
+                                            {tx.pricePerToken && (
+                                                <p className="text-xs text-text-muted">
+                                                    @ {tx.pricePerToken.toFixed(8)} SOL
+                                                </p>
+                                            )}
                                             {tx.signature && (
                                                 <a
                                                     href={`https://solscan.io/tx/${tx.signature}`}
