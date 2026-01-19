@@ -457,6 +457,11 @@ class MultiUserMMService {
         return this.runSimpleAlgorithm(token, config, state, opsWalletAddress, connection, baseResult)
       case 'turbo_lite':
         return this.runTurboLiteAlgorithm(token, config, state, opsWalletAddress, connection, baseResult)
+      case 'transaction_reactive':
+        // Reactive mode trades are triggered by the reactive monitor job, not the flywheel
+        // Skip periodic flywheel trades - just collect fees
+        loggers.flywheel.debug({ tokenSymbol: token.token_symbol }, 'Transaction reactive mode - skipping flywheel trade (handled by reactive monitor)')
+        return null
       case 'rebalance':
       case 'twap_vwap':
       case 'dynamic':

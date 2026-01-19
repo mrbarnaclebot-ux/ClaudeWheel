@@ -24,7 +24,7 @@ export interface UserTokenConfig {
   updated_at: string
 
   // Algorithm mode selection
-  algorithm_mode?: 'simple' | 'turbo_lite' | 'rebalance' | 'twap_vwap' | 'dynamic'
+  algorithm_mode?: 'simple' | 'turbo_lite' | 'rebalance' | 'twap_vwap' | 'dynamic' | 'transaction_reactive'
 
   // Percentage-based trading: 20% of current balance per trade
   buy_percent: number   // % of SOL balance to use for buys (default 20)
