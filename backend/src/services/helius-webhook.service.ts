@@ -285,6 +285,8 @@ export async function processHeliusWebhook(tx: HeliusTransaction): Promise<void>
 
 /**
  * Parse transaction to extract token mint, SOL amount, and trade type
+ * For bonding curve trades, we need to check multiple sources and use the largest SOL amount
+ * Trade type is determined by the most reliable signal (nativeInput/nativeOutput > balanceChange)
  */
 function parseTransaction(tx: HeliusTransaction): {
   tokenMint: string | null
@@ -294,58 +296,81 @@ function parseTransaction(tx: HeliusTransaction): {
   let tokenMint: string | null = null
   let solAmount = 0
   let tradeType: 'buy' | 'sell' = 'buy'
+  let tradeTypeSource = 'default'
 
   const SOL_MINT = 'So11111111111111111111111111111111111111112'
 
-  // Try to parse from events.swap (most reliable for swaps)
+  // Collect all potential SOL amounts
+  const solAmounts: { source: string; amount: number }[] = []
+
+  // Source 1: events.swap - most reliable for trade direction
   if (tx.events?.swap) {
     const swap = tx.events.swap
 
-    // Get SOL amount from native input/output
+    // nativeInput = SOL going IN to swap = BUY tokens
     if (swap.nativeInput) {
-      solAmount = parseInt(swap.nativeInput.amount) / 1e9
-      tradeType = 'buy' // Native SOL input = buying tokens
-    } else if (swap.nativeOutput) {
-      solAmount = parseInt(swap.nativeOutput.amount) / 1e9
-      tradeType = 'sell' // Native SOL output = selling tokens
+      const amount = parseInt(swap.nativeInput.amount) / 1e9
+      solAmounts.push({ source: 'nativeInput', amount })
+      if (amount > 0.001) {
+        tradeType = 'buy'
+        tradeTypeSource = 'nativeInput'
+      }
+    }
+    // nativeOutput = SOL coming OUT of swap = SELL tokens
+    if (swap.nativeOutput) {
+      const amount = parseInt(swap.nativeOutput.amount) / 1e9
+      solAmounts.push({ source: 'nativeOutput', amount })
+      if (amount > 0.001) {
+        tradeType = 'sell'
+        tradeTypeSource = 'nativeOutput'
+      }
     }
 
     // Get token mint from outputs (for buy) or inputs (for sell)
-    if (tradeType === 'buy' && swap.tokenOutputs?.length) {
-      tokenMint = swap.tokenOutputs[0].mint
-    } else if (tradeType === 'sell' && swap.tokenInputs?.length) {
-      tokenMint = swap.tokenInputs[0].mint
+    if (swap.tokenOutputs?.length) {
+      for (const output of swap.tokenOutputs) {
+        if (output.mint !== SOL_MINT) {
+          tokenMint = output.mint
+          break
+        }
+      }
     }
-  }
-
-  // Fallback: parse from tokenTransfers
-  if (!tokenMint && tx.tokenTransfers?.length) {
-    for (const transfer of tx.tokenTransfers) {
-      if (transfer.mint !== SOL_MINT) {
-        tokenMint = transfer.mint
-        break
+    if (!tokenMint && swap.tokenInputs?.length) {
+      for (const input of swap.tokenInputs) {
+        if (input.mint !== SOL_MINT) {
+          tokenMint = input.mint
+          break
+        }
       }
     }
   }
 
-  // Fallback: parse SOL from nativeTransfers
-  if (solAmount === 0 && tx.nativeTransfers?.length) {
+  // Source 2: nativeTransfers - just for amount, not direction
+  if (tx.nativeTransfers?.length) {
     for (const transfer of tx.nativeTransfers) {
       const amount = transfer.amount / 1e9
-      if (amount > solAmount) {
-        solAmount = amount
+      if (amount > 0.001) {
+        solAmounts.push({ source: 'nativeTransfer', amount })
       }
     }
   }
 
-  // Fallback: parse from accountData
-  if ((!tokenMint || solAmount === 0) && tx.accountData?.length) {
+  // Source 3: accountData.nativeBalanceChange
+  if (tx.accountData?.length) {
     for (const account of tx.accountData) {
-      // Get SOL amount from native balance changes
-      if (solAmount === 0 && account.nativeBalanceChange) {
-        const change = Math.abs(account.nativeBalanceChange) / 1e9
-        if (change > solAmount) {
-          solAmount = change
+      if (account.nativeBalanceChange) {
+        const change = account.nativeBalanceChange / 1e9
+        const absChange = Math.abs(change)
+        if (absChange > 0.001) {
+          solAmounts.push({ source: 'balanceChange', amount: absChange })
+
+          // Use balance change for direction only if we don't have a better signal
+          if (tradeTypeSource === 'default') {
+            // Negative change = SOL left the account = buying tokens
+            // Positive change = SOL received = selling tokens
+            tradeType = change < 0 ? 'buy' : 'sell'
+            tradeTypeSource = 'balanceChange'
+          }
         }
       }
 
@@ -360,6 +385,31 @@ function parseTransaction(tx: HeliusTransaction): {
       }
     }
   }
+
+  // Fallback: parse token mint from tokenTransfers
+  if (!tokenMint && tx.tokenTransfers?.length) {
+    for (const transfer of tx.tokenTransfers) {
+      if (transfer.mint !== SOL_MINT) {
+        tokenMint = transfer.mint
+        break
+      }
+    }
+  }
+
+  // Find the largest SOL amount - this is most likely the actual trade
+  for (const candidate of solAmounts) {
+    if (candidate.amount > solAmount) {
+      solAmount = candidate.amount
+    }
+  }
+
+  loggers.server.debug({
+    signature: tx.signature,
+    allAmounts: solAmounts,
+    selectedAmount: solAmount,
+    tradeType,
+    tradeTypeSource,
+  }, '🔍 Parsed SOL amounts and trade type')
 
   return { tokenMint, solAmount, tradeType }
 }
