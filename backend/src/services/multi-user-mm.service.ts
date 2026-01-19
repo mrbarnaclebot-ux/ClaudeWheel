@@ -1291,18 +1291,18 @@ class MultiUserMMService {
     if (token.flywheelState?.lastReactiveTradeAt) {
       const timeSinceLastTrade = Date.now() - new Date(token.flywheelState.lastReactiveTradeAt).getTime()
       if (timeSinceLastTrade < reactiveConfig.cooldownMs) {
-        loggers.flywheel.debug({
+        loggers.flywheel.info({
           tokenSymbol: token.tokenSymbol,
           timeSinceLastTrade,
           cooldownMs: reactiveConfig.cooldownMs,
-        }, 'Reactive trade on cooldown, skipping')
+        }, '⏸️ Reactive trade on cooldown, skipping')
         return null
       }
     }
 
     // Try to acquire lock
     if (!await this.acquireTurboLock(token.id)) {
-      loggers.flywheel.debug({ tokenSymbol: token.tokenSymbol }, 'Token locked, skipping reactive trade')
+      loggers.flywheel.info({ tokenSymbol: token.tokenSymbol }, '🔒 Token locked, skipping reactive trade')
       return null
     }
 

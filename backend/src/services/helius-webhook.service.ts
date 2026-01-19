@@ -274,6 +274,12 @@ export async function processHeliusWebhook(tx: HeliusTransaction): Promise<void>
           triggerSignature: signature,
         }, '⚠️ Reactive trade failed')
       }
+    } else {
+      loggers.server.warn({
+        signature,
+        tokenMint,
+        solAmount,
+      }, '⚠️ Reactive trade returned null (cooldown, lock, or config issue)')
     }
   } catch (error) {
     loggers.server.error({
