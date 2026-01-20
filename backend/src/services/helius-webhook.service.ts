@@ -204,20 +204,21 @@ export async function processHeliusWebhook(tx: HeliusTransaction): Promise<void>
       }, '🔎 Native transfers')
     }
 
-    // Extract token mints and SOL amount from the transaction
-    const { tokenMint, solAmount, tradeType } = parseTransaction(tx)
+    // Get set of monitored token mints for matching
+    const monitoredMints = new Set(reactiveTokensCache.keys())
 
-    loggers.server.info({ signature, tokenMint, solAmount, tradeType }, '🔍 Parsed transaction')
+    // Extract token mints and SOL amount from the transaction
+    const { tokenMint, solAmount, tradeType } = parseTransaction(tx, monitoredMints)
 
     if (!tokenMint || solAmount === 0) {
-      loggers.server.info({ signature, tokenMint, solAmount }, '⏭️ Could not parse transaction details')
+      loggers.server.info({ signature: signature.slice(0, 20) + '...', tokenMint, solAmount }, '⏭️ No monitored token or SOL amount found')
       return
     }
 
     // Check if this token has reactive mode enabled
     const config = await getReactiveConfig(tokenMint)
     if (!config) {
-      loggers.server.info({ tokenMint, signature }, '⏭️ Token not configured for reactive mode')
+      loggers.server.info({ tokenMint, signature: signature.slice(0, 20) + '...' }, '⏭️ Token not configured for reactive mode')
       return
     }
 
@@ -290,68 +291,59 @@ export async function processHeliusWebhook(tx: HeliusTransaction): Promise<void>
 }
 
 /**
- * Parse transaction to extract token mint, SOL amount, and trade type
- * For bonding curve trades, we need to check multiple sources and use the largest SOL amount
- * Trade type is determined by the most reliable signal (nativeInput/nativeOutput > balanceChange)
+ * Parse transaction to extract token mints, SOL amount, and trade type
+ * Collects ALL token mints found so we can match against monitored tokens
+ * Trade type is determined by checking if our monitored token is in inputs (sell) or outputs (buy)
  */
-function parseTransaction(tx: HeliusTransaction): {
+function parseTransaction(tx: HeliusTransaction, monitoredMints: Set<string>): {
   tokenMint: string | null
   solAmount: number
   tradeType: 'buy' | 'sell'
 } {
-  let tokenMint: string | null = null
-  let solAmount = 0
-  let tradeType: 'buy' | 'sell' = 'buy'
-  let tradeTypeSource = 'default'
-
   const SOL_MINT = 'So11111111111111111111111111111111111111112'
+
+  // Collect ALL token mints from the transaction
+  const allMints = new Set<string>()
+  const inputMints = new Set<string>()  // Tokens going INTO the swap (being sold)
+  const outputMints = new Set<string>() // Tokens coming OUT of swap (being bought)
 
   // Collect all potential SOL amounts
   const solAmounts: { source: string; amount: number }[] = []
 
-  // Source 1: events.swap - most reliable for trade direction
+  // Source 1: events.swap - most reliable
   if (tx.events?.swap) {
     const swap = tx.events.swap
 
-    // nativeInput = SOL going IN to swap = BUY tokens
+    // Collect SOL amounts
     if (swap.nativeInput) {
       const amount = parseInt(swap.nativeInput.amount) / 1e9
-      solAmounts.push({ source: 'nativeInput', amount })
-      if (amount > 0.001) {
-        tradeType = 'buy'
-        tradeTypeSource = 'nativeInput'
-      }
+      if (amount > 0.001) solAmounts.push({ source: 'nativeInput', amount })
     }
-    // nativeOutput = SOL coming OUT of swap = SELL tokens
     if (swap.nativeOutput) {
       const amount = parseInt(swap.nativeOutput.amount) / 1e9
-      solAmounts.push({ source: 'nativeOutput', amount })
-      if (amount > 0.001) {
-        tradeType = 'sell'
-        tradeTypeSource = 'nativeOutput'
-      }
+      if (amount > 0.001) solAmounts.push({ source: 'nativeOutput', amount })
     }
 
-    // Get token mint from outputs (for buy) or inputs (for sell)
-    if (swap.tokenOutputs?.length) {
-      for (const output of swap.tokenOutputs) {
-        if (output.mint !== SOL_MINT) {
-          tokenMint = output.mint
-          break
+    // Collect token mints with direction
+    if (swap.tokenInputs?.length) {
+      for (const input of swap.tokenInputs) {
+        if (input.mint !== SOL_MINT) {
+          allMints.add(input.mint)
+          inputMints.add(input.mint) // Token being sold
         }
       }
     }
-    if (!tokenMint && swap.tokenInputs?.length) {
-      for (const input of swap.tokenInputs) {
-        if (input.mint !== SOL_MINT) {
-          tokenMint = input.mint
-          break
+    if (swap.tokenOutputs?.length) {
+      for (const output of swap.tokenOutputs) {
+        if (output.mint !== SOL_MINT) {
+          allMints.add(output.mint)
+          outputMints.add(output.mint) // Token being bought
         }
       }
     }
   }
 
-  // Source 2: nativeTransfers - just for amount, not direction
+  // Source 2: nativeTransfers - for SOL amount
   if (tx.nativeTransfers?.length) {
     for (const transfer of tx.nativeTransfers) {
       const amount = transfer.amount / 1e9
@@ -361,63 +353,86 @@ function parseTransaction(tx: HeliusTransaction): {
     }
   }
 
-  // Source 3: accountData.nativeBalanceChange
+  // Source 3: accountData
   if (tx.accountData?.length) {
     for (const account of tx.accountData) {
       if (account.nativeBalanceChange) {
-        const change = account.nativeBalanceChange / 1e9
-        const absChange = Math.abs(change)
+        const absChange = Math.abs(account.nativeBalanceChange) / 1e9
         if (absChange > 0.001) {
           solAmounts.push({ source: 'balanceChange', amount: absChange })
-
-          // Use balance change for direction only if we don't have a better signal
-          if (tradeTypeSource === 'default') {
-            // Negative change = SOL left the account = buying tokens
-            // Positive change = SOL received = selling tokens
-            tradeType = change < 0 ? 'buy' : 'sell'
-            tradeTypeSource = 'balanceChange'
-          }
         }
       }
-
-      // Get token mint from balance changes
-      if (!tokenMint && account.tokenBalanceChanges?.length) {
+      if (account.tokenBalanceChanges?.length) {
         for (const tokenChange of account.tokenBalanceChanges) {
           if (tokenChange.mint !== SOL_MINT) {
-            tokenMint = tokenChange.mint
-            break
+            allMints.add(tokenChange.mint)
           }
         }
       }
     }
   }
 
-  // Fallback: parse token mint from tokenTransfers
-  if (!tokenMint && tx.tokenTransfers?.length) {
+  // Source 4: tokenTransfers
+  if (tx.tokenTransfers?.length) {
     for (const transfer of tx.tokenTransfers) {
       if (transfer.mint !== SOL_MINT) {
-        tokenMint = transfer.mint
-        break
+        allMints.add(transfer.mint)
       }
     }
   }
 
-  // Find the largest SOL amount - this is most likely the actual trade
+  // Find the monitored token in this transaction
+  let matchedMint: string | null = null
+  for (const mint of allMints) {
+    if (monitoredMints.has(mint)) {
+      matchedMint = mint
+      break
+    }
+  }
+
+  // Determine trade type based on whether our token is in inputs or outputs
+  let tradeType: 'buy' | 'sell' = 'buy'
+  if (matchedMint) {
+    if (inputMints.has(matchedMint)) {
+      // Our token is being sent IN to the swap = someone is SELLING our token
+      tradeType = 'sell'
+    } else if (outputMints.has(matchedMint)) {
+      // Our token is coming OUT of the swap = someone is BUYING our token
+      tradeType = 'buy'
+    }
+  }
+
+  // Find the largest SOL amount
+  let solAmount = 0
   for (const candidate of solAmounts) {
     if (candidate.amount > solAmount) {
       solAmount = candidate.amount
     }
   }
 
-  loggers.server.debug({
-    signature: tx.signature,
-    allAmounts: solAmounts,
-    selectedAmount: solAmount,
-    tradeType,
-    tradeTypeSource,
-  }, '🔍 Parsed SOL amounts and trade type')
+  // Info log when monitored token found, debug log for all details
+  if (matchedMint) {
+    loggers.server.info({
+      signature: tx.signature?.slice(0, 16) + '...',
+      matchedMint: matchedMint.slice(0, 8) + '...',
+      solAmount,
+      tradeType,
+      inInput: inputMints.has(matchedMint),
+      inOutput: outputMints.has(matchedMint),
+    }, '🔍 Matched monitored token')
+  }
 
-  return { tokenMint, solAmount, tradeType }
+  loggers.server.debug({
+    signature: tx.signature?.slice(0, 16) + '...',
+    allMints: Array.from(allMints),
+    matchedMint: matchedMint ? matchedMint.slice(0, 8) + '...' : null,
+    inputMints: Array.from(inputMints).map(m => m.slice(0, 8) + '...'),
+    outputMints: Array.from(outputMints).map(m => m.slice(0, 8) + '...'),
+    solAmount,
+    tradeType,
+  }, '🔍 Parsed transaction tokens (all)')
+
+  return { tokenMint: matchedMint, solAmount, tradeType }
 }
 
 /**
