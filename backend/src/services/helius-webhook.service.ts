@@ -161,7 +161,7 @@ export async function processHeliusWebhook(tx: HeliusTransaction): Promise<void>
 
     // Skip if already processed (Helius may retry)
     if (processedSignatures.has(signature)) {
-      loggers.server.debug({ signature }, 'Skipping duplicate webhook')
+      loggers.server.info({ signature: signature.slice(0, 20) + '...' }, '⏭️ Skipping duplicate webhook')
       return
     }
 
@@ -223,7 +223,7 @@ export async function processHeliusWebhook(tx: HeliusTransaction): Promise<void>
 
     // Check if this is our own transaction (from ops wallet)
     if (isOwnTransaction(tx, config.opsWalletAddress)) {
-      loggers.server.info({ signature }, '⏭️ Ignoring own transaction')
+      loggers.server.info({ signature: signature.slice(0, 20) + '...' }, '⏭️ Ignoring own reactive response')
       return
     }
 
