@@ -8,14 +8,16 @@ import LandingHeader from './components/landing/LandingHeader'
 import SpinningLogo from './components/landing/SpinningLogo'
 import LiveStatsGrid from './components/landing/LiveStatsGrid'
 import WheelTokenCard from './components/landing/WheelTokenCard'
+import PlatformTokensGrid from './components/landing/PlatformTokensGrid'
 import HowItWorks from './components/landing/HowItWorks'
 import QuickActions from './components/landing/QuickActions'
 import LandingFooter from './components/landing/LandingFooter'
-import { useLiveStats, useSolPrice } from './hooks/useLiveStats'
+import { useLiveStats, useSolPrice, usePlatformTokens } from './hooks/useLiveStats'
 
 export default function LandingPage() {
   const { wheel, platform, isLoading } = useLiveStats(30000)
   const { price: solPrice } = useSolPrice(60000)
+  const { tokens: platformTokens, isLoading: tokensLoading } = usePlatformTokens(60000)
 
   const isFlywheelActive = wheel?.flywheel?.isActive ?? false
 
@@ -93,9 +95,7 @@ export default function LandingPage() {
                 {/* CTAs */}
                 <div className="flex flex-col sm:flex-row items-center gap-4 justify-center lg:justify-start">
                   <a
-                    href="https://t.me/ClaudeWheelBot"
-                    target="_blank"
-                    rel="noopener noreferrer"
+                    href="/user/launch"
                     className="group w-full sm:w-auto inline-flex items-center justify-center gap-2 px-6 py-3 text-base font-medium text-[#0e0804] bg-[#e67428] hover:bg-[#e2aa84] rounded-xl transition-all duration-200 hover:shadow-[0_0_30px_rgba(230,116,40,0.4)]"
                   >
                     Launch Token
@@ -179,6 +179,30 @@ export default function LandingPage() {
                 todayFees={wheel.feeStats.todayCollected}
                 isActive={isFlywheelActive}
               />
+            </div>
+          </section>
+        )}
+
+        {/* Platform Tokens Section */}
+        {(platformTokens.length > 0 || tokensLoading) && (
+          <section className="relative px-4 sm:px-6 lg:px-8 py-16">
+            <div className="max-w-7xl mx-auto">
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                whileInView={{ opacity: 1, y: 0 }}
+                viewport={{ once: true }}
+                transition={{ duration: 0.5 }}
+                className="text-center mb-10"
+              >
+                <h2 className="text-2xl sm:text-3xl font-semibold text-[#f8f0ec] mb-2">
+                  Tokens on Platform
+                </h2>
+                <p className="text-[#e2aa84]/60">
+                  {platformTokens.length} tokens launched, registered, or using market making
+                </p>
+              </motion.div>
+
+              <PlatformTokensGrid tokens={platformTokens} isLoading={tokensLoading} />
             </div>
           </section>
         )}

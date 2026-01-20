@@ -53,27 +53,23 @@ export default function LandingHeader() {
                 Bot
                 <ExternalLink className="w-3 h-3" />
               </a>
-              <a
-                href="https://bags.fm/8JLGQ7RqhsvhsDhvjMuJUeeuaQ53GTJqSHNaBWf4BAGS"
-                target="_blank"
-                rel="noopener noreferrer"
+              <Link
+                href="/user/dashboard"
                 className="ml-2 px-4 py-2 text-sm font-medium text-[#0e0804] bg-[#e67428] hover:bg-[#e2aa84] rounded-lg transition-all duration-200 hover:shadow-[0_0_20px_rgba(230,116,40,0.4)]"
               >
-                Trade WHEEL
-              </a>
+                Launch App
+              </Link>
             </nav>
           </div>
 
-          {/* Mobile: Trade button only */}
+          {/* Mobile: Launch App button */}
           <div className="sm:hidden">
-            <a
-              href="https://bags.fm/8JLGQ7RqhsvhsDhvjMuJUeeuaQ53GTJqSHNaBWf4BAGS"
-              target="_blank"
-              rel="noopener noreferrer"
+            <Link
+              href="/user/dashboard"
               className="px-3 py-1.5 text-sm font-medium text-[#0e0804] bg-[#e67428] hover:bg-[#e2aa84] rounded-lg transition-all duration-200"
             >
-              Trade
-            </a>
+              Launch App
+            </Link>
           </div>
         </div>
       </div>

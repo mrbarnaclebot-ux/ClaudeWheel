@@ -225,8 +225,10 @@ router.get('/platform-stats', async (_req: Request, res: Response) => {
       })
       totalFeesCollected += Number(privyClaims._sum.totalAmountSol || 0)
 
-      // Get transaction volume
+      // Get transaction volume (only sum SOL from 'buy' and 'transfer' types)
+      // 'buy' amount is in SOL, 'sell' amount is in tokens (can't sum together)
       const privyTxVolume = await prisma.privyTransaction.aggregate({
+        where: { type: { in: ['buy', 'transfer'] } },
         _sum: { amount: true }
       })
       totalSolVolume += Number(privyTxVolume._sum.amount || 0)
@@ -392,6 +394,58 @@ router.get('/wheel', async (_req: Request, res: Response) => {
     res.status(500).json({
       success: false,
       error: 'Failed to fetch WHEEL token status',
+      timestamp: new Date().toISOString(),
+    })
+  }
+})
+
+// GET /api/status/public-tokens - Get public list of platform tokens for showcase
+router.get('/public-tokens', async (_req: Request, res: Response) => {
+  try {
+    // Fetch active tokens from Privy system (exclude platform token like WHEEL)
+    const tokens = await prisma.privyUserToken.findMany({
+      where: {
+        isActive: true,
+        tokenSource: { in: ['launched', 'registered', 'mm_only'] },
+      },
+      include: {
+        config: {
+          select: {
+            flywheelActive: true,
+            algorithmMode: true,
+          },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 50, // Limit to 50 most recent tokens
+    })
+
+    // Map to public-safe data (no wallet addresses, no sensitive info)
+    const publicTokens = tokens.map((token) => ({
+      id: token.id,
+      name: token.tokenName,
+      symbol: token.tokenSymbol,
+      image: token.tokenImage,
+      mint: token.tokenMintAddress,
+      source: token.tokenSource,
+      isActive: token.config?.flywheelActive || false,
+      algorithm: token.config?.algorithmMode || 'simple',
+      createdAt: token.createdAt,
+    }))
+
+    res.json({
+      success: true,
+      data: {
+        tokens: publicTokens,
+        total: publicTokens.length,
+      },
+      timestamp: new Date().toISOString(),
+    })
+  } catch (error: any) {
+    loggers.server.error({ error: error.message }, 'Failed to fetch public tokens')
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch public tokens',
       timestamp: new Date().toISOString(),
     })
   }

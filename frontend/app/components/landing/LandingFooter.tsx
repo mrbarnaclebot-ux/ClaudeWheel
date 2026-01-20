@@ -78,15 +78,12 @@ export default function LandingFooter() {
               </h4>
               <ul className="space-y-3">
                 <li>
-                  <a
-                    href="https://t.me/ClaudeWheelBot"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-sm text-[#e2aa84]/50 hover:text-[#f8f0ec] transition-colors flex items-center gap-1"
+                  <Link
+                    href="/user/launch"
+                    className="text-sm text-[#e2aa84]/50 hover:text-[#f8f0ec] transition-colors"
                   >
                     Launch Token
-                    <ExternalLink className="w-3 h-3" />
-                  </a>
+                  </Link>
                 </li>
                 <li>
                   <a

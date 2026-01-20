@@ -129,3 +129,47 @@ export function useSolPrice(refreshInterval = 60000) {
 
   return { price, isLoading }
 }
+
+// Public token data for showcase
+export interface PublicToken {
+  id: string
+  name: string
+  symbol: string
+  image?: string
+  mint: string
+  source: 'launched' | 'registered' | 'mm_only'
+  isActive: boolean
+  algorithm: string
+  createdAt: string
+}
+
+// Hook for fetching public platform tokens
+export function usePlatformTokens(refreshInterval = 60000) {
+  const [tokens, setTokens] = useState<PublicToken[]>([])
+  const [isLoading, setIsLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  const fetchTokens = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/status/public-tokens`)
+      const data = await res.json()
+
+      if (data.success && data.data?.tokens) {
+        setTokens(data.data.tokens)
+        setError(null)
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to fetch tokens')
+    } finally {
+      setIsLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    fetchTokens()
+    const interval = setInterval(fetchTokens, refreshInterval)
+    return () => clearInterval(interval)
+  }, [fetchTokens, refreshInterval])
+
+  return { tokens, isLoading, error, refetch: fetchTokens }
+}

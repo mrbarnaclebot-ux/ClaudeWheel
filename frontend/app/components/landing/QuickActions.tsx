@@ -1,23 +1,23 @@
 'use client'
 
 import { motion } from 'framer-motion'
-import { ArrowUpRight, Wallet, Bot, BarChart3, BookOpen } from 'lucide-react'
+import { ArrowUpRight, Wallet, Rocket, BarChart3, BookOpen } from 'lucide-react'
 import Link from 'next/link'
 
 const actions = [
+  {
+    title: 'Launch Token',
+    description: 'Create a new token',
+    href: '/user/launch',
+    icon: Rocket,
+    color: 'orange',
+    external: false,
+  },
   {
     title: 'Trade WHEEL',
     description: 'Buy or sell on Bags.fm',
     href: 'https://bags.fm/8JLGQ7RqhsvhsDhvjMuJUeeuaQ53GTJqSHNaBWf4BAGS',
     icon: Wallet,
-    color: 'orange',
-    external: true,
-  },
-  {
-    title: 'Launch Token',
-    description: 'Start via Telegram bot',
-    href: 'https://t.me/ClaudeWheelBot',
-    icon: Bot,
     color: 'copper',
     external: true,
   },
