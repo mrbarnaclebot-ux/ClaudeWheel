@@ -17,6 +17,7 @@ function TokenCard({ token, index }: { token: PublicToken; index: number }) {
   }
 
   const source = sourceColors[token.source] || sourceColors.launched
+  const isInactive = !token.isTokenActive
 
   return (
     <motion.a
@@ -28,10 +29,14 @@ function TokenCard({ token, index }: { token: PublicToken; index: number }) {
       viewport={{ once: true, margin: '-30px' }}
       transition={{ duration: 0.4, delay: index * 0.05, ease: [0.22, 1, 0.36, 1] }}
       whileHover={{ y: -4 }}
-      className="group relative p-4 rounded-xl bg-[#f8f0ec]/[0.02] border border-[#e2aa84]/10 hover:border-[#e67428]/30 transition-all duration-300 hover:shadow-[0_0_30px_rgba(230,116,40,0.1)] cursor-pointer"
+      className={`group relative p-4 rounded-xl border transition-all duration-300 cursor-pointer ${
+        isInactive
+          ? 'bg-[#f8f0ec]/[0.01] border-[#e2aa84]/5 opacity-60 hover:opacity-80'
+          : 'bg-[#f8f0ec]/[0.02] border-[#e2aa84]/10 hover:border-[#e67428]/30 hover:shadow-[0_0_30px_rgba(230,116,40,0.1)]'
+      }`}
     >
-      {/* Active indicator */}
-      {token.isActive && (
+      {/* Active flywheel indicator */}
+      {token.isFlywheelActive && (
         <div className="absolute top-3 right-3">
           <span className="relative flex h-2 w-2">
             <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#e67428] opacity-75" />
@@ -46,13 +51,13 @@ function TokenCard({ token, index }: { token: PublicToken; index: number }) {
           <img
             src={token.image}
             alt={token.symbol}
-            className="w-10 h-10 rounded-full object-cover border border-[#e2aa84]/20"
+            className={`w-10 h-10 rounded-full object-cover border ${isInactive ? 'border-[#e2aa84]/10 grayscale' : 'border-[#e2aa84]/20'}`}
             onError={(e) => {
               (e.target as HTMLImageElement).style.display = 'none'
             }}
           />
         ) : (
-          <div className="w-10 h-10 rounded-full bg-[#e67428]/20 flex items-center justify-center text-[#e67428] font-semibold">
+          <div className={`w-10 h-10 rounded-full flex items-center justify-center font-semibold ${isInactive ? 'bg-[#e2aa84]/10 text-[#e2aa84]/50' : 'bg-[#e67428]/20 text-[#e67428]'}`}>
             {token.symbol[0]}
           </div>
         )}
@@ -60,8 +65,8 @@ function TokenCard({ token, index }: { token: PublicToken; index: number }) {
         {/* Token Info */}
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
-            <span className="font-semibold text-[#f8f0ec] truncate">{token.symbol}</span>
-            {token.isActive && (
+            <span className={`font-semibold truncate ${isInactive ? 'text-[#f8f0ec]/60' : 'text-[#f8f0ec]'}`}>{token.symbol}</span>
+            {token.isFlywheelActive && (
               <Zap className="w-3 h-3 text-[#e67428]" />
             )}
           </div>
@@ -72,13 +77,17 @@ function TokenCard({ token, index }: { token: PublicToken; index: number }) {
         <ExternalLink className="w-4 h-4 text-[#e2aa84]/30 group-hover:text-[#e67428] transition-colors" />
       </div>
 
-      {/* Source Badge */}
+      {/* Source Badge & Status */}
       <div className="mt-3 flex items-center justify-between">
         <span className={`text-[10px] px-2 py-0.5 rounded-full ${source.bg} ${source.text}`}>
           {source.label}
         </span>
-        {token.isActive && (
-          <span className="text-[10px] text-[#e67428]">Active</span>
+        {isInactive ? (
+          <span className="text-[10px] text-[#e2aa84]/40">Inactive</span>
+        ) : token.isFlywheelActive ? (
+          <span className="text-[10px] text-[#e67428]">Running</span>
+        ) : (
+          <span className="text-[10px] text-[#e2aa84]/60">Paused</span>
         )}
       </div>
     </motion.a>

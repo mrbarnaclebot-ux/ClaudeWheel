@@ -138,7 +138,8 @@ export interface PublicToken {
   image?: string
   mint: string
   source: 'launched' | 'registered' | 'mm_only'
-  isActive: boolean
+  isFlywheelActive: boolean
+  isTokenActive: boolean
   algorithm: string
   createdAt: string
 }

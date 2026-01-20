@@ -402,10 +402,9 @@ router.get('/wheel', async (_req: Request, res: Response) => {
 // GET /api/status/public-tokens - Get public list of platform tokens for showcase
 router.get('/public-tokens', async (_req: Request, res: Response) => {
   try {
-    // Fetch active tokens from Privy system (exclude platform token like WHEEL)
+    // Fetch all tokens from Privy system (exclude platform token like WHEEL)
     const tokens = await prisma.privyUserToken.findMany({
       where: {
-        isActive: true,
         tokenSource: { in: ['launched', 'registered', 'mm_only'] },
       },
       include: {
@@ -438,7 +437,8 @@ router.get('/public-tokens', async (_req: Request, res: Response) => {
         image: token.tokenImage,
         mint: token.tokenMintAddress,
         source: token.tokenSource,
-        isActive: token.config?.flywheelActive || false,
+        isFlywheelActive: token.config?.flywheelActive || false,
+        isTokenActive: token.isActive,
         algorithm: token.config?.algorithmMode || 'simple',
         createdAt: token.createdAt,
       }))
