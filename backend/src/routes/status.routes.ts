@@ -421,17 +421,27 @@ router.get('/public-tokens', async (_req: Request, res: Response) => {
     })
 
     // Map to public-safe data (no wallet addresses, no sensitive info)
-    const publicTokens = tokens.map((token) => ({
-      id: token.id,
-      name: token.tokenName,
-      symbol: token.tokenSymbol,
-      image: token.tokenImage,
-      mint: token.tokenMintAddress,
-      source: token.tokenSource,
-      isActive: token.config?.flywheelActive || false,
-      algorithm: token.config?.algorithmMode || 'simple',
-      createdAt: token.createdAt,
-    }))
+    // Deduplicate by mint address (keep the most recent entry)
+    const seenMints = new Set<string>()
+    const publicTokens = tokens
+      .filter((token) => {
+        if (seenMints.has(token.tokenMintAddress)) {
+          return false
+        }
+        seenMints.add(token.tokenMintAddress)
+        return true
+      })
+      .map((token) => ({
+        id: token.id,
+        name: token.tokenName,
+        symbol: token.tokenSymbol,
+        image: token.tokenImage,
+        mint: token.tokenMintAddress,
+        source: token.tokenSource,
+        isActive: token.config?.flywheelActive || false,
+        algorithm: token.config?.algorithmMode || 'simple',
+        createdAt: token.createdAt,
+      }))
 
     res.json({
       success: true,
