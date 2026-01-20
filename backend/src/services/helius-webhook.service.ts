@@ -215,20 +215,45 @@ export async function processHeliusWebhook(tx: HeliusTransaction): Promise<void>
       return
     }
 
-    // Use Helius type if it's BUY or SELL, otherwise use our parsed type
-    // Helius already classifies bonding curve trades correctly
+    // Determine trade type - try multiple methods
+    // Method 1: Use Helius type directly (works for most DEXes)
+    // Method 2: If SWAP, check if we have nativeInput (buy) vs nativeOutput (sell)
     let tradeType: 'buy' | 'sell' = parsedTradeType
+    let tradeTypeMethod = 'parsed'
+
     if (type === 'BUY') {
       tradeType = 'buy'
+      tradeTypeMethod = 'helius-type'
     } else if (type === 'SELL') {
       tradeType = 'sell'
+      tradeTypeMethod = 'helius-type'
+    } else if (type === 'SWAP' && tx.events?.swap) {
+      // For SWAP type, determine from native SOL flow
+      const nativeIn = tx.events.swap.nativeInput ? parseInt(tx.events.swap.nativeInput.amount) : 0
+      const nativeOut = tx.events.swap.nativeOutput ? parseInt(tx.events.swap.nativeOutput.amount) : 0
+
+      if (nativeIn > 1000000 && nativeOut < 1000000) {
+        // SOL going in, no significant SOL out = buying tokens
+        tradeType = 'buy'
+        tradeTypeMethod = 'native-flow-in'
+      } else if (nativeOut > 1000000 && nativeIn < 1000000) {
+        // SOL coming out, no significant SOL in = selling tokens
+        tradeType = 'sell'
+        tradeTypeMethod = 'native-flow-out'
+      } else if (nativeIn > 0 && nativeOut > 0) {
+        // Both present - use the larger one
+        tradeType = nativeOut > nativeIn ? 'sell' : 'buy'
+        tradeTypeMethod = 'native-flow-larger'
+      }
     }
 
     loggers.server.info({
       signature: signature.slice(0, 20) + '...',
       heliusType: type,
+      source,
       parsedType: parsedTradeType,
       finalType: tradeType,
+      tradeTypeMethod,
     }, '🔍 Trade type determination')
 
     // Check if this token has reactive mode enabled
