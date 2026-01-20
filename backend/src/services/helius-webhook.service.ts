@@ -208,12 +208,28 @@ export async function processHeliusWebhook(tx: HeliusTransaction): Promise<void>
     const monitoredMints = new Set(reactiveTokensCache.keys())
 
     // Extract token mints and SOL amount from the transaction
-    const { tokenMint, solAmount, tradeType } = parseTransaction(tx, monitoredMints)
+    const { tokenMint, solAmount, tradeType: parsedTradeType } = parseTransaction(tx, monitoredMints)
 
     if (!tokenMint || solAmount === 0) {
       loggers.server.info({ signature: signature.slice(0, 20) + '...', tokenMint, solAmount }, '⏭️ No monitored token or SOL amount found')
       return
     }
+
+    // Use Helius type if it's BUY or SELL, otherwise use our parsed type
+    // Helius already classifies bonding curve trades correctly
+    let tradeType: 'buy' | 'sell' = parsedTradeType
+    if (type === 'BUY') {
+      tradeType = 'buy'
+    } else if (type === 'SELL') {
+      tradeType = 'sell'
+    }
+
+    loggers.server.info({
+      signature: signature.slice(0, 20) + '...',
+      heliusType: type,
+      parsedType: parsedTradeType,
+      finalType: tradeType,
+    }, '🔍 Trade type determination')
 
     // Check if this token has reactive mode enabled
     const config = await getReactiveConfig(tokenMint)
