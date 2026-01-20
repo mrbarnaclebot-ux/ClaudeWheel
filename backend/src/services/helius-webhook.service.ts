@@ -392,13 +392,39 @@ function parseTransaction(tx: HeliusTransaction, monitoredMints: Set<string>): {
 
   // Determine trade type based on whether our token is in inputs or outputs
   let tradeType: 'buy' | 'sell' = 'buy'
+  let tradeTypeSource = 'default'
+
   if (matchedMint) {
     if (inputMints.has(matchedMint)) {
       // Our token is being sent IN to the swap = someone is SELLING our token
       tradeType = 'sell'
+      tradeTypeSource = 'tokenInputs'
     } else if (outputMints.has(matchedMint)) {
       // Our token is coming OUT of the swap = someone is BUYING our token
       tradeType = 'buy'
+      tradeTypeSource = 'tokenOutputs'
+    } else {
+      // Fallback: use nativeInput/nativeOutput if tokenInputs/tokenOutputs not available
+      // nativeInput = SOL going IN = someone BUYING tokens
+      // nativeOutput = SOL coming OUT = someone SELLING tokens
+      if (tx.events?.swap) {
+        const hasNativeInput = tx.events.swap.nativeInput && parseInt(tx.events.swap.nativeInput.amount) > 1000000
+        const hasNativeOutput = tx.events.swap.nativeOutput && parseInt(tx.events.swap.nativeOutput.amount) > 1000000
+
+        if (hasNativeOutput && !hasNativeInput) {
+          tradeType = 'sell'
+          tradeTypeSource = 'nativeOutput'
+        } else if (hasNativeInput && !hasNativeOutput) {
+          tradeType = 'buy'
+          tradeTypeSource = 'nativeInput'
+        } else if (hasNativeInput && hasNativeOutput) {
+          // Both present - use the larger one
+          const inputAmt = parseInt(tx.events.swap.nativeInput!.amount)
+          const outputAmt = parseInt(tx.events.swap.nativeOutput!.amount)
+          tradeType = outputAmt > inputAmt ? 'sell' : 'buy'
+          tradeTypeSource = 'nativeLarger'
+        }
+      }
     }
   }
 
@@ -417,6 +443,7 @@ function parseTransaction(tx: HeliusTransaction, monitoredMints: Set<string>): {
       matchedMint: matchedMint.slice(0, 8) + '...',
       solAmount,
       tradeType,
+      tradeTypeSource,
       inInput: inputMints.has(matchedMint),
       inOutput: outputMints.has(matchedMint),
     }, '🔍 Matched monitored token')
