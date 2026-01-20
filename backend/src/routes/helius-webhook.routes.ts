@@ -39,7 +39,14 @@ router.post('/helius', async (req: Request, res: Response) => {
     // Helius can send an array of transactions
     const transactions = Array.isArray(req.body) ? req.body : [req.body]
 
-    loggers.server.info({ count: transactions.length }, '📥 Received Helius webhook')
+    // Log every incoming webhook with signatures for debugging
+    const signatures = transactions.map((tx: any) => tx?.signature?.slice(0, 16) + '...').filter(Boolean)
+    const types = transactions.map((tx: any) => tx?.type).filter(Boolean)
+    loggers.server.info({
+      count: transactions.length,
+      signatures,
+      types,
+    }, '📥 Helius webhook received')
 
     // Process transactions asynchronously - respond immediately to avoid timeouts
     setImmediate(async () => {
