@@ -27,12 +27,32 @@ export interface MockSolanaWallet {
     walletClientType: string;
 }
 
+// Import real hooks only when not in mock mode
+// This allows the bundler to tree-shake in production
+const privyReact = IS_MOCK_MODE ? null : require('@privy-io/react-auth');
+const privySolana = IS_MOCK_MODE ? null : require('@privy-io/react-auth/solana');
+
+// Stub hooks for mock mode that satisfy React's rules of hooks
+const stubPrivy = () => ({ ready: false, authenticated: false, user: null, getAccessToken: async () => null, logout: async () => {} });
+const stubWallets = () => ({ wallets: [] });
+const stubCreateWallet = () => ({ createWallet: async () => ({ wallet: { address: '' } }) });
+const stubSigners = () => ({ addSigners: async () => ({ success: true }) });
+const stubDelegatedActions = () => ({ delegateWallet: async () => ({ success: true }) });
+
+// Get the actual hook to use (real or stub)
+const usePrivyInternal = IS_MOCK_MODE ? stubPrivy : privyReact.usePrivy;
+const useWalletsInternal = IS_MOCK_MODE ? stubWallets : privySolana.useWallets;
+const useCreateWalletInternal = IS_MOCK_MODE ? stubCreateWallet : privySolana.useCreateWallet;
+const useSignersInternal = IS_MOCK_MODE ? stubSigners : privyReact.useSigners;
+const useDelegatedActionsInternal = IS_MOCK_MODE ? stubDelegatedActions : privyReact.useHeadlessDelegatedActions;
+
 /**
  * Wrapper for usePrivy that works in both real and mock modes
  */
 export function usePrivyWrapper() {
-    // Always call the mock hook to satisfy React's rules of hooks
+    // Always call both hooks unconditionally to satisfy React's rules of hooks
     const mockPrivy = useMockPrivy();
+    const realPrivy = usePrivyInternal();
 
     if (IS_MOCK_MODE) {
         return {
@@ -44,10 +64,7 @@ export function usePrivyWrapper() {
         };
     }
 
-    // In real mode, dynamically import from Privy
-    // This is a workaround - in production, components should use the real hook
-    const { usePrivy } = require('@privy-io/react-auth');
-    return usePrivy();
+    return realPrivy;
 }
 
 /**
@@ -55,6 +72,7 @@ export function usePrivyWrapper() {
  */
 export function useWalletsWrapper(): { wallets: MockSolanaWallet[] } {
     const mockPrivy = useMockPrivy();
+    const realWallets = useWalletsInternal();
 
     if (IS_MOCK_MODE) {
         return {
@@ -62,8 +80,15 @@ export function useWalletsWrapper(): { wallets: MockSolanaWallet[] } {
         };
     }
 
-    const { useWallets } = require('@privy-io/react-auth/solana');
-    return useWallets();
+    // Map real wallets to our interface
+    return {
+        wallets: realWallets.wallets.map((w: { address: string; walletClientType?: string }) => ({
+            address: w.address,
+            delegated: (w as unknown as { delegated?: boolean }).delegated ?? false,
+            chainType: 'solana',
+            walletClientType: w.walletClientType || 'privy',
+        })),
+    };
 }
 
 /**
@@ -71,6 +96,7 @@ export function useWalletsWrapper(): { wallets: MockSolanaWallet[] } {
  */
 export function useCreateWalletWrapper() {
     const mockPrivy = useMockPrivy();
+    const realCreateWallet = useCreateWalletInternal();
 
     if (IS_MOCK_MODE) {
         return {
@@ -78,8 +104,7 @@ export function useCreateWalletWrapper() {
         };
     }
 
-    const { useCreateWallet } = require('@privy-io/react-auth/solana');
-    return useCreateWallet();
+    return realCreateWallet;
 }
 
 /**
@@ -87,6 +112,7 @@ export function useCreateWalletWrapper() {
  */
 export function useSignersWrapper() {
     const mockPrivy = useMockPrivy();
+    const realSigners = useSignersInternal();
 
     if (IS_MOCK_MODE) {
         return {
@@ -94,14 +120,15 @@ export function useSignersWrapper() {
         };
     }
 
-    const { useSigners } = require('@privy-io/react-auth');
-    return useSigners();
+    return realSigners;
 }
 
 /**
  * Wrapper for useHeadlessDelegatedActions that works in both real and mock modes
  */
 export function useHeadlessDelegatedActionsWrapper() {
+    const realDelegatedActions = useDelegatedActionsInternal();
+
     if (IS_MOCK_MODE) {
         return {
             delegateWallet: async ({ address, chainType }: { address: string; chainType: string }) => {
@@ -111,6 +138,5 @@ export function useHeadlessDelegatedActionsWrapper() {
         };
     }
 
-    const { useHeadlessDelegatedActions } = require('@privy-io/react-auth');
-    return useHeadlessDelegatedActions();
+    return realDelegatedActions;
 }
