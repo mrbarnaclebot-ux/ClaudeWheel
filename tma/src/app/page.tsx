@@ -1,17 +1,19 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useRouter } from 'next/navigation';
-import { usePrivyWrapper } from '@/hooks/usePrivyWrapper';
+import { usePrivyWrapper, useLoginWrapper } from '@/hooks/usePrivyWrapper';
 import { useTelegram } from '@/components/TelegramProvider';
 import { useOnboardingStatus } from '@/hooks/useOnboarding';
 
 export default function EntryPage() {
     const router = useRouter();
     const { ready, authenticated } = usePrivyWrapper();
+    const { login } = useLoginWrapper();
     const { isReady: telegramReady } = useTelegram();
     const { isOnboarded, isLoading } = useOnboardingStatus();
     const [timedOut, setTimedOut] = useState(false);
+    const loginAttempted = useRef(false);
 
     // Debug logging
     useEffect(() => {
@@ -24,12 +26,23 @@ export default function EntryPage() {
         return () => clearTimeout(timeout);
     }, []);
 
+    // Auto-login when Privy is ready but not authenticated
+    useEffect(() => {
+        if (ready && telegramReady && !authenticated && !loginAttempted.current) {
+            loginAttempted.current = true;
+            console.log('[EntryPage] Triggering Privy login...');
+            login().catch((err: Error) => {
+                console.error('[EntryPage] Login failed:', err);
+            });
+        }
+    }, [ready, telegramReady, authenticated, login]);
+
     // Navigation logic
     useEffect(() => {
         if (!ready || !telegramReady || isLoading) return;
 
         if (!authenticated) {
-            console.error('[EntryPage] Privy not authenticated in TMA');
+            // Login should be triggered by the effect above
             return;
         }
 

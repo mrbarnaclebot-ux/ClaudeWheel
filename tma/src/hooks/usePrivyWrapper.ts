@@ -41,6 +41,7 @@ const stubDelegatedActions = () => ({ delegateWallet: async () => ({ success: tr
 
 // Get the actual hook to use (real or stub)
 const usePrivyInternal = IS_MOCK_MODE ? stubPrivy : privyReact.usePrivy;
+const useLoginInternal = IS_MOCK_MODE ? (() => ({ login: async () => {} })) : privyReact.useLogin;
 const useWalletsInternal = IS_MOCK_MODE ? stubWallets : privySolana.useWallets;
 const useCreateWalletInternal = IS_MOCK_MODE ? stubCreateWallet : privySolana.useCreateWallet;
 const useSignersInternal = IS_MOCK_MODE ? stubSigners : privyReact.useSigners;
@@ -139,4 +140,21 @@ export function useHeadlessDelegatedActionsWrapper() {
     }
 
     return realDelegatedActions;
+}
+
+/**
+ * Wrapper for useLogin that works in both real and mock modes
+ */
+export function useLoginWrapper() {
+    const realLogin = useLoginInternal();
+
+    if (IS_MOCK_MODE) {
+        return {
+            login: async () => {
+                console.log('[MockPrivy] login called');
+            },
+        };
+    }
+
+    return realLogin;
 }
