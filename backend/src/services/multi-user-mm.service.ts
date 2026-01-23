@@ -1327,7 +1327,15 @@ class MultiUserMMService {
 
       // Counter-trade: if market buys, we sell; if market sells, we buy
       const tradeType: 'buy' | 'sell' = detectedType === 'buy' ? 'sell' : 'buy'
-      const slippageBps = token.config.slippageBps
+      const slippageBps = token.config?.slippageBps || 300
+
+      loggers.flywheel.info({
+        tokenSymbol: token.tokenSymbol,
+        tradeType,
+        slippageBps,
+        opsWalletAddress,
+        tokenMint: token.tokenMintAddress,
+      }, '🔍 Reactive trade config')
 
       let signature: string | null = null
       let tradeAmount = 0
@@ -1335,6 +1343,12 @@ class MultiUserMMService {
       if (tradeType === 'sell') {
         // Sell tokens: get token balance and sell responsePercent%
         const tokenBalance = await getTokenBalance(opsWalletPubkey, tokenMint)
+        loggers.flywheel.info({
+          tokenSymbol: token.tokenSymbol,
+          tokenBalance,
+          responsePercent,
+        }, '🔍 Token balance for sell')
+
         if (tokenBalance <= 0) {
           loggers.flywheel.warn({ tokenSymbol: token.tokenSymbol }, 'No token balance for reactive sell')
           return { ...baseResult, tradeType, success: false, amount: 0, error: 'No token balance' }
@@ -1342,12 +1356,19 @@ class MultiUserMMService {
 
         tradeAmount = tokenBalance * (responsePercent / 100)
         if (tradeAmount < 1) {
-          loggers.flywheel.debug({ tokenSymbol: token.tokenSymbol, tradeAmount }, 'Trade amount too small')
+          loggers.flywheel.warn({ tokenSymbol: token.tokenSymbol, tradeAmount }, 'Trade amount too small for sell')
           return { ...baseResult, tradeType, success: false, amount: 0, error: 'Trade amount too small' }
         }
 
         // Convert to smallest units (token decimals) - same as simple algorithm
         const tokenUnits = Math.floor(tradeAmount * Math.pow(10, token.tokenDecimals))
+
+        loggers.flywheel.info({
+          tokenSymbol: token.tokenSymbol,
+          tradeAmount,
+          tokenDecimals: token.tokenDecimals,
+          tokenUnits,
+        }, '🔍 Getting sell quote')
 
         // Get quote for selling tokens
         const quote = await this.getTradeQuote(
@@ -1359,28 +1380,49 @@ class MultiUserMMService {
         )
 
         if (!quote) {
+          loggers.flywheel.error({ tokenSymbol: token.tokenSymbol, tokenUnits, slippageBps }, '❌ Failed to get sell quote')
           return { ...baseResult, tradeType, success: false, amount: 0, error: 'Failed to get sell quote' }
         }
 
+        loggers.flywheel.info({ tokenSymbol: token.tokenSymbol, hasRawQuote: !!quote.rawQuoteResponse }, '✅ Got sell quote, executing swap')
+
         signature = await this.executeSwapWithPrivySigning(connection, opsWalletAddress, quote.rawQuoteResponse)
+
+        if (!signature) {
+          loggers.flywheel.error({ tokenSymbol: token.tokenSymbol }, '❌ Swap execution returned null')
+        }
 
       } else {
         // Buy tokens: get SOL balance and buy with responsePercent% of SOL
         const solBalance = await getBalance(opsWalletPubkey)
         const availableSol = Math.max(0, solBalance - 0.05) // Keep 0.05 SOL reserve
+
+        loggers.flywheel.info({
+          tokenSymbol: token.tokenSymbol,
+          solBalance,
+          availableSol,
+          responsePercent,
+        }, '🔍 SOL balance for buy')
+
         if (availableSol <= 0.01) {
-          loggers.flywheel.warn({ tokenSymbol: token.tokenSymbol }, 'Insufficient SOL for reactive buy')
+          loggers.flywheel.warn({ tokenSymbol: token.tokenSymbol, solBalance, availableSol }, 'Insufficient SOL for reactive buy')
           return { ...baseResult, tradeType, success: false, amount: 0, error: 'Insufficient SOL' }
         }
 
         tradeAmount = availableSol * (responsePercent / 100)
         if (tradeAmount < 0.01) {
-          loggers.flywheel.debug({ tokenSymbol: token.tokenSymbol, tradeAmount }, 'Trade amount too small')
+          loggers.flywheel.warn({ tokenSymbol: token.tokenSymbol, tradeAmount }, 'Trade amount too small for buy')
           return { ...baseResult, tradeType, success: false, amount: 0, error: 'Trade amount too small' }
         }
 
         // Convert to lamports - same as simple algorithm
         const lamports = Math.floor(tradeAmount * 1e9)
+
+        loggers.flywheel.info({
+          tokenSymbol: token.tokenSymbol,
+          tradeAmount,
+          lamports,
+        }, '🔍 Getting buy quote')
 
         // Get quote for buying tokens
         const quote = await this.getTradeQuote(
@@ -1392,10 +1434,17 @@ class MultiUserMMService {
         )
 
         if (!quote) {
+          loggers.flywheel.error({ tokenSymbol: token.tokenSymbol, lamports, slippageBps }, '❌ Failed to get buy quote')
           return { ...baseResult, tradeType, success: false, amount: 0, error: 'Failed to get buy quote' }
         }
 
+        loggers.flywheel.info({ tokenSymbol: token.tokenSymbol, hasRawQuote: !!quote.rawQuoteResponse }, '✅ Got buy quote, executing swap')
+
         signature = await this.executeSwapWithPrivySigning(connection, opsWalletAddress, quote.rawQuoteResponse)
+
+        if (!signature) {
+          loggers.flywheel.error({ tokenSymbol: token.tokenSymbol }, '❌ Swap execution returned null')
+        }
       }
 
       // Update reactive trade state
