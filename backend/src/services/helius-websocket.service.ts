@@ -261,8 +261,17 @@ async function handleLogNotification(notification: LogNotification): Promise<voi
     const { signature, err, logs } = notification.params.result.value
     const subscriptionId = notification.params.subscription
 
+    // Log every notification received (for debugging)
+    loggers.server.info({
+      signature: signature.slice(0, 16) + '...',
+      subscriptionId,
+      logsCount: logs.length,
+      hasError: err !== null,
+    }, '📨 [WS] Log notification received')
+
     // Skip failed transactions
     if (err !== null) {
+      loggers.server.debug({ signature: signature.slice(0, 16) + '...' }, '[WS] Skipping failed tx')
       return
     }
 
@@ -276,12 +285,13 @@ async function handleLogNotification(notification: LogNotification): Promise<voi
     }
 
     if (!tokenSub) {
-      loggers.server.debug({ subscriptionId }, '[WS] Unknown subscription ID')
+      loggers.server.warn({ subscriptionId }, '[WS] Unknown subscription ID')
       return
     }
 
     // Skip if already processed (deduplication)
     if (processedSignatures.has(signature)) {
+      loggers.server.debug({ signature: signature.slice(0, 16) + '...' }, '[WS] Duplicate signature')
       return
     }
 
@@ -296,6 +306,14 @@ async function handleLogNotification(notification: LogNotification): Promise<voi
     // Quick filter: check if logs contain swap program IDs
     const logsStr = logs.join(' ')
     const isSwap = SWAP_PROGRAM_IDS.some(id => logsStr.includes(id))
+
+    // Log first few log lines for debugging
+    loggers.server.info({
+      signature: signature.slice(0, 16) + '...',
+      isSwap,
+      logSample: logs.slice(0, 3).join(' | ').slice(0, 200),
+    }, isSwap ? '✅ [WS] Detected as swap' : '⏭️ [WS] Not a swap, skipping')
+
     if (!isSwap) {
       return
     }
