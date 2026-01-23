@@ -53,7 +53,9 @@ interface SubscriptionResult {
 
 // Swap program IDs to filter relevant transactions
 const SWAP_PROGRAM_IDS = [
-  'JUP', // Jupiter (short prefix)
+  'cpamdpZCGKUy5JxQXB4dcpGPiikHawvSWAd6mEn1sGG', // Bags.fm AMM (bonding curve)
+  'JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4', // Jupiter v6
+  'JUP', // Jupiter (short prefix for older versions)
   'whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc', // Orca Whirlpool
   '675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8', // Raydium AMM
   '6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P', // pump.fun
