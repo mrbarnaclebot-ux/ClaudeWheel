@@ -22,6 +22,7 @@ export type WsChannel =
   | 'logs'
   | 'flywheel_logs'
   | 'telegram_logs'
+  | 'reactive_events'
 
 export interface WsMessage {
   type: 'subscribe' | 'unsubscribe' | 'auth' | 'ping'

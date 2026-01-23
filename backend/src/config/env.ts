@@ -41,6 +41,7 @@ const envSchema = z.object({
   MULTI_USER_FLYWHEEL_ENABLED: z.string().default('true'),
   DEPOSIT_MONITOR_ENABLED: z.string().default('true'),
   BALANCE_UPDATE_JOB_ENABLED: z.string().default('true'),
+  WEBSOCKET_REACTIVE_ENABLED: z.string().default('true'),
 
   // Fast Claim Job
   FAST_CLAIM_INTERVAL_SECONDS: z.string().default('30'),
@@ -130,6 +131,7 @@ export const env = {
   multiUserFlywheelEnabled: parsed.data.MULTI_USER_FLYWHEEL_ENABLED !== 'false',
   depositMonitorEnabled: parsed.data.DEPOSIT_MONITOR_ENABLED !== 'false',
   balanceUpdateJobEnabled: parsed.data.BALANCE_UPDATE_JOB_ENABLED !== 'false',
+  websocketReactiveEnabled: parsed.data.WEBSOCKET_REACTIVE_ENABLED !== 'false',
 
   // Fast Claim Job
   fastClaimIntervalSeconds: parseInt(parsed.data.FAST_CLAIM_INTERVAL_SECONDS, 10),

@@ -26,7 +26,7 @@ import { getDepositMonitorStatus } from '../jobs/deposit-monitor.job'
 import { triggerFlywheelCycle } from '../jobs/multi-flywheel.job'
 import { loggers } from '../utils/logger'
 import { platformConfigService } from '../services/platform-config.service'
-import { setupHeliusWebhook, getWebhookStatus, deleteHeliusWebhook } from '../services/helius-webhook.service'
+import { getWebSocketReactiveStatus, restartWebSocketReactiveJob } from '../jobs/websocket-reactive.job'
 // wheelMMService removed - WHEEL is now handled by regular Privy flywheel
 
 // Legacy function stubs for backwards compatibility - these jobs have been removed
@@ -3421,99 +3421,41 @@ router.post('/discord/test', requireAdmin, async (req: AdminRequest, res: Respon
 })
 
 // ═══════════════════════════════════════════════════════════════════════════
-// HELIUS WEBHOOK MANAGEMENT (for reactive MM)
+// WEBSOCKET REACTIVE SERVICE (for reactive MM mode)
 // ═══════════════════════════════════════════════════════════════════════════
 
 /**
- * GET /api/admin/helius-webhook/status
- * Get current Helius webhook configuration status
+ * GET /api/admin/websocket-reactive/status
+ * Get current WebSocket reactive service status
  */
-router.get('/helius-webhook/status', requireAdmin, async (_req: AdminRequest, res: Response) => {
+router.get('/websocket-reactive/status', requireAdmin, async (_req: AdminRequest, res: Response) => {
   try {
-    const status = await getWebhookStatus()
+    const status = getWebSocketReactiveStatus()
     return res.json({
       success: true,
       ...status,
     })
   } catch (error) {
-    console.error('Error getting webhook status:', error)
+    console.error('Error getting WebSocket reactive status:', error)
     return res.status(500).json({ error: 'Internal server error' })
   }
 })
 
 /**
- * POST /api/admin/helius-webhook/setup
- * Setup or update Helius webhook for reactive MM
- * Body: { webhookUrl?: string } - defaults to current server URL + /api/webhooks/helius
+ * POST /api/admin/websocket-reactive/restart
+ * Restart the WebSocket reactive service
  */
-router.post('/helius-webhook/setup', requireAdmin, requirePermission('trigger_jobs'), async (req: AdminRequest, res: Response) => {
+router.post('/websocket-reactive/restart', requireAdmin, requirePermission('trigger_jobs'), async (_req: AdminRequest, res: Response) => {
   try {
-    // Default webhook URL is the current server's webhook endpoint
-    const defaultUrl = process.env.BACKEND_URL
-      ? `${process.env.BACKEND_URL}/api/webhooks/helius`
-      : `https://your-backend-url.com/api/webhooks/helius`
-
-    const webhookUrl = req.body.webhookUrl || defaultUrl
-
-    if (!webhookUrl.startsWith('https://')) {
-      return res.status(400).json({
-        success: false,
-        error: 'Webhook URL must use HTTPS',
-      })
-    }
-
-    const result = await setupHeliusWebhook(webhookUrl)
-
-    if (result.success) {
-      return res.json({
-        success: true,
-        webhookId: result.webhookId,
-        webhookUrl,
-        message: 'Helius webhook configured successfully',
-      })
-    } else {
-      return res.status(400).json({
-        success: false,
-        error: result.error,
-      })
-    }
+    await restartWebSocketReactiveJob()
+    const status = getWebSocketReactiveStatus()
+    return res.json({
+      success: true,
+      message: 'WebSocket reactive service restarted',
+      ...status,
+    })
   } catch (error) {
-    console.error('Error setting up webhook:', error)
-    return res.status(500).json({ error: 'Internal server error' })
-  }
-})
-
-/**
- * DELETE /api/admin/helius-webhook/:webhookId
- * Delete a Helius webhook
- */
-router.delete('/helius-webhook/:webhookId', requireAdmin, requirePermission('trigger_jobs'), async (req: AdminRequest, res: Response) => {
-  try {
-    const { webhookId } = req.params
-
-    // Validate webhookId format (Helius uses UUIDs)
-    if (!webhookId || !/^[a-f0-9-]{36}$/i.test(webhookId)) {
-      return res.status(400).json({
-        success: false,
-        error: 'Invalid webhook ID format',
-      })
-    }
-
-    const success = await deleteHeliusWebhook(webhookId)
-
-    if (success) {
-      return res.json({
-        success: true,
-        message: 'Webhook deleted successfully',
-      })
-    } else {
-      return res.status(400).json({
-        success: false,
-        error: 'Failed to delete webhook',
-      })
-    }
-  } catch (error) {
-    console.error('Error deleting webhook:', error)
+    console.error('Error restarting WebSocket reactive service:', error)
     return res.status(500).json({ error: 'Internal server error' })
   }
 })

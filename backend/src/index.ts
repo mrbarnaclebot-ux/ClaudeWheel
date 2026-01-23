@@ -15,11 +15,10 @@ import privyTokensRoutes from './routes/privy-tokens.routes'
 import privyLaunchesRoutes from './routes/privy-launches.routes'
 import privyUsersRoutes from './routes/privy-users.routes'
 import privyMmRoutes from './routes/privy-mm.routes'
-import heliusWebhookRoutes from './routes/helius-webhook.routes'
 import { bagsFmService } from './services/bags-fm'
-import { initHeliusWebhookService } from './services/helius-webhook.service'
 import { startTelegramBot, stopTelegramBot, getTelegramWebhookMiddleware } from './telegram/bot'
 import { startDepositMonitorJob, stopDepositMonitorJob } from './jobs/deposit-monitor.job'
+import { startWebSocketReactiveJob, stopWebSocketReactiveJob } from './jobs/websocket-reactive.job'
 import { adminWs } from './websocket/admin-ws'
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -44,9 +43,6 @@ app.use('/api/privy/tokens', privyTokensRoutes)
 app.use('/api/privy/launches', privyLaunchesRoutes)
 app.use('/api/privy/mm', privyMmRoutes)
 app.use('/api/users', privyUsersRoutes)
-
-// Helius webhook (for reactive MM)
-app.use('/api/webhooks', heliusWebhookRoutes)
 
 // Telegram webhook (for production)
 const telegramWebhook = getTelegramWebhookMiddleware()
@@ -149,9 +145,12 @@ async function initializeServices() {
     loggers.server.info('Balance update job disabled via BALANCE_UPDATE_JOB_ENABLED=false')
   }
 
-  // Initialize Helius webhook service for reactive MM mode
-  // Receives transaction events via POST /api/webhooks/helius
-  await initHeliusWebhookService()
+  // Start WebSocket reactive service for reactive MM mode
+  if (process.env.WEBSOCKET_REACTIVE_ENABLED !== 'false') {
+    await startWebSocketReactiveJob()
+  } else {
+    loggers.server.info('WebSocket reactive service disabled via WEBSOCKET_REACTIVE_ENABLED=false')
+  }
 
   // WHEEL token is processed by regular Privy flywheel (tokenSource='platform')
 
@@ -223,7 +222,8 @@ process.on('SIGTERM', async () => {
   stopDepositMonitorJob()
   stopFastClaimJob()
   stopBalanceUpdateJob()
-    server.close(() => {
+  await stopWebSocketReactiveJob()
+  server.close(() => {
     loggers.server.info('Server closed')
     process.exit(0)
   })
@@ -237,7 +237,8 @@ process.on('SIGINT', async () => {
   stopDepositMonitorJob()
   stopFastClaimJob()
   stopBalanceUpdateJob()
-    server.close(() => {
+  await stopWebSocketReactiveJob()
+  server.close(() => {
     loggers.server.info('Server closed')
     process.exit(0)
   })
