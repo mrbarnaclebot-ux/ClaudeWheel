@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { usePrivyWrapper } from '@/hooks/usePrivyWrapper';
+import { usePrivy } from '@privy-io/react-auth';
 import { useTelegram } from '@/components/TelegramProvider';
 import { api } from '@/lib/api';
 import { toast } from '@/lib/toast';
@@ -47,7 +47,7 @@ export default function TokenSettingsPage() {
     const router = useRouter();
     const tokenId = params.id as string;
     const queryClient = useQueryClient();
-    const { getAccessToken } = usePrivyWrapper();
+    const { getAccessToken } = usePrivy();
     const { hapticFeedback } = useTelegram();
 
     const [formData, setFormData] = useState<Partial<TokenConfig>>({});

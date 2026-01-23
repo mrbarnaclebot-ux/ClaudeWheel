@@ -2,7 +2,8 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
-import { usePrivyWrapper, useSignersWrapper, useWalletsWrapper, useCreateWalletWrapper, type WalletWithMetadata } from '@/hooks/usePrivyWrapper';
+import { usePrivy, useSigners, type WalletWithMetadata } from '@privy-io/react-auth';
+import { useWallets, useCreateWallet } from '@privy-io/react-auth/solana';
 import { useTelegram } from '@/components/TelegramProvider';
 import { motion, AnimatePresence } from 'framer-motion';
 import { toast } from 'sonner';
@@ -15,11 +16,11 @@ type Step = 'welcome' | 'creating_wallets' | 'delegate_dev' | 'delegate_ops' | '
 
 export default function OnboardingPage() {
     const router = useRouter();
-    const { ready, authenticated, getAccessToken, user } = usePrivyWrapper();
-    const { wallets } = useWalletsWrapper();
-    const { createWallet } = useCreateWalletWrapper();
+    const { ready, authenticated, getAccessToken, user } = usePrivy();
+    const { wallets } = useWallets();
+    const { createWallet } = useCreateWallet();
     // Use new Signers API (replaces deprecated delegateWallet)
-    const { addSigners } = useSignersWrapper();
+    const { addSigners } = useSigners();
     const { user: telegramUser, hapticFeedback } = useTelegram();
 
     const [step, setStep] = useState<Step>('welcome');

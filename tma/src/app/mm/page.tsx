@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
-import { usePrivyWrapper } from '@/hooks/usePrivyWrapper';
+import { usePrivy } from '@privy-io/react-auth';
 import { useTelegram } from '@/components/TelegramProvider';
 import { api } from '@/lib/api';
 import { toast } from '@/lib/toast';
@@ -40,7 +40,7 @@ interface PendingMm {
 
 export default function MmPage() {
     const router = useRouter();
-    const { getAccessToken } = usePrivyWrapper();
+    const { getAccessToken } = usePrivy();
     const { hapticFeedback } = useTelegram();
 
     const [step, setStep] = useState<MmStep>('input');
