@@ -37,8 +37,16 @@ export default function OnboardingPage() {
     // Ref to track current wallets for setTimeout callback (avoids closure capture)
     const walletsRef = useRef(wallets);
 
-    // useSolanaWallets already returns only Solana wallets
-    const solanaWallets = wallets;
+    // Extract Solana wallets from linkedAccounts (more reliable than useWallets hook in TMA)
+    const linkedSolanaWallets = (user?.linkedAccounts?.filter(
+        (account: any): account is WalletWithMetadata =>
+            account.type === 'wallet' &&
+            (account as WalletWithMetadata).chainType === 'solana'
+    ) || []) as WalletWithMetadata[];
+
+    // Use linkedAccounts as primary source, fall back to useWallets hook
+    const solanaWallets = linkedSolanaWallets.length >= 2 ? linkedSolanaWallets : wallets;
+    const effectiveWalletCount = Math.max(linkedSolanaWallets.length, wallets.length);
 
     // Helper to check if a wallet is already delegated via user.linkedAccounts
     const isWalletDelegated = (walletAddress: string): boolean => {
@@ -61,14 +69,14 @@ export default function OnboardingPage() {
 
     // If user already has 2 wallets, check delegation status and skip appropriately
     useEffect(() => {
-        if (!ready || !authenticated || wallets.length < 2 || step !== 'welcome') return;
+        if (!ready || !authenticated || effectiveWalletCount < 2 || step !== 'welcome') return;
 
-        const devDelegated = isWalletDelegated(wallets[0]?.address);
-        const opsDelegated = isWalletDelegated(wallets[1]?.address);
+        const devDelegated = isWalletDelegated(solanaWallets[0]?.address);
+        const opsDelegated = isWalletDelegated(solanaWallets[1]?.address);
 
         console.log('[Onboarding] Checking existing wallet status:', {
-            devAddress: wallets[0]?.address?.slice(0, 8),
-            opsAddress: wallets[1]?.address?.slice(0, 8),
+            devAddress: solanaWallets[0]?.address?.slice(0, 8),
+            opsAddress: solanaWallets[1]?.address?.slice(0, 8),
             devDelegated,
             opsDelegated,
         });
@@ -86,7 +94,7 @@ export default function OnboardingPage() {
             // Need to delegate dev wallet
             setStep('delegate_dev');
         }
-    }, [ready, authenticated, wallets.length, step, user?.linkedAccounts]);
+    }, [ready, authenticated, effectiveWalletCount, step, user?.linkedAccounts]);
 
     // Wait for wallets to load with timeout
     useEffect(() => {
@@ -94,57 +102,27 @@ export default function OnboardingPage() {
             return;
         }
 
-        // Check if user has wallet accounts in linkedAccounts (loads faster than wallets array)
-        const linkedWalletAccounts = user?.linkedAccounts?.filter(
-            (account: any) => account.type === 'wallet'
-        ) || [];
-        const hasLinkedWallets = linkedWalletAccounts.length >= 2;
-
         console.log('[Onboarding] Wallet loading check:', {
-            walletsArrayLength: wallets.length,
-            linkedWalletAccounts: linkedWalletAccounts.length,
-            hasLinkedWallets,
+            walletsHookLength: wallets.length,
+            linkedSolanaWalletsLength: linkedSolanaWallets.length,
+            effectiveWalletCount,
         });
 
-        // If we have 2+ wallets in the array, done loading immediately
-        if (wallets.length >= 2) {
+        // If we have 2+ wallets from either source, done loading immediately
+        if (effectiveWalletCount >= 2) {
             if (walletsLoadingTimerRef.current) {
                 clearTimeout(walletsLoadingTimerRef.current);
                 walletsLoadingTimerRef.current = null;
             }
+            console.log('[Onboarding] Found 2+ wallets, done loading');
             setWalletsLoading(false);
-            return;
-        }
-
-        // If user has linked wallets but wallets array isn't populated, keep waiting
-        // This is the key fix - don't timeout early for existing users
-        if (hasLinkedWallets && wallets.length < 2) {
-            console.log('[Onboarding] User has linked wallets, waiting for wallets array to sync...');
-            // Clear any existing short timeout
-            if (walletsLoadingTimerRef.current) {
-                clearTimeout(walletsLoadingTimerRef.current);
-                walletsLoadingTimerRef.current = null;
-            }
-            // Set a longer timeout for existing users (10s max)
-            walletsLoadingTimerRef.current = setTimeout(() => {
-                console.log('[Onboarding] Max timeout reached for existing user, proceeding...');
-                setWalletsLoading(false);
-                walletsLoadingTimerRef.current = null;
-            }, 10000);
             return;
         }
 
         // New user case (no linked wallets) - short timeout
         if (!walletsLoadingTimerRef.current) {
             walletsLoadingTimerRef.current = setTimeout(() => {
-                const currentCount = walletsRef.current.length;
-                if (currentCount === 0) {
-                    console.log('[Onboarding] Confirmed new user after timeout');
-                } else if (currentCount === 1) {
-                    console.log('[Onboarding] Partial wallet load (1), waiting more...');
-                    setTimeout(() => setWalletsLoading(false), 1000);
-                    return;
-                }
+                console.log('[Onboarding] Timeout reached, assuming new user');
                 setWalletsLoading(false);
                 walletsLoadingTimerRef.current = null;
             }, 2500);
@@ -156,7 +134,7 @@ export default function OnboardingPage() {
                 walletsLoadingTimerRef.current = null;
             }
         };
-    }, [ready, authenticated, wallets.length, user?.linkedAccounts]);
+    }, [ready, authenticated, effectiveWalletCount]);
 
     // Auto-complete registration for users who have delegated wallets but no backend record
     useEffect(() => {
@@ -164,9 +142,9 @@ export default function OnboardingPage() {
             return;
         }
 
-        if (wallets.length >= 2) {
-            const devDelegated = isWalletDelegated(wallets[0]?.address);
-            const opsDelegated = isWalletDelegated(wallets[1]?.address);
+        if (effectiveWalletCount >= 2) {
+            const devDelegated = isWalletDelegated(solanaWallets[0]?.address);
+            const opsDelegated = isWalletDelegated(solanaWallets[1]?.address);
 
             console.log('[Onboarding] Auto-check wallet status:', { devDelegated, opsDelegated });
 
@@ -180,7 +158,7 @@ export default function OnboardingPage() {
                 return;
             }
         }
-    }, [ready, authenticated, walletsLoading, wallets.length, user?.linkedAccounts]);
+    }, [ready, authenticated, walletsLoading, effectiveWalletCount, user?.linkedAccounts]);
 
     // Determine step for users with wallets but incomplete delegation
     useEffect(() => {
@@ -190,9 +168,9 @@ export default function OnboardingPage() {
 
         setIsInitializing(false);
 
-        if (wallets.length >= 2) {
-            const devDelegated = isWalletDelegated(wallets[0]?.address);
-            const opsDelegated = isWalletDelegated(wallets[1]?.address);
+        if (effectiveWalletCount >= 2) {
+            const devDelegated = isWalletDelegated(solanaWallets[0]?.address);
+            const opsDelegated = isWalletDelegated(solanaWallets[1]?.address);
 
             // Auto-complete case is handled by the effect above
             if (devDelegated && opsDelegated) {
@@ -203,8 +181,8 @@ export default function OnboardingPage() {
                 setStep('delegate_dev');
             }
         }
-        // else: Stay on welcome step for new users (wallets.length < 2)
-    }, [ready, authenticated, walletsLoading, wallets.length, user?.linkedAccounts]);
+        // else: Stay on welcome step for new users (effectiveWalletCount < 2)
+    }, [ready, authenticated, walletsLoading, effectiveWalletCount, user?.linkedAccounts]);
 
     // Debug logging useEffect
     useEffect(() => {
@@ -232,12 +210,12 @@ export default function OnboardingPage() {
         setError(null);
 
         try {
-            console.log('[Onboarding] Starting wallet creation, current wallets:', wallets.length);
+            console.log('[Onboarding] Starting wallet creation, effective count:', effectiveWalletCount);
 
-            // GUARD: If user already has 2+ wallets, skip creation entirely
-            if (wallets.length >= 2) {
+            // GUARD: If user already has 2+ wallets (from linkedAccounts or hook), skip creation entirely
+            if (effectiveWalletCount >= 2) {
                 console.log('[Onboarding] User already has wallets, skipping creation');
-                const devDelegated = isWalletDelegated(wallets[0]?.address);
+                const devDelegated = isWalletDelegated(solanaWallets[0]?.address);
                 if (devDelegated) {
                     setStep('delegate_ops');
                 } else {
@@ -302,49 +280,39 @@ export default function OnboardingPage() {
 
             const errorMsg = err?.message || 'Unknown error';
 
-            // Check if error is "already has wallet"
+            // Check if error is "already has wallet" - use linkedAccounts data directly
             if (errorMsg.includes('already has') || errorMsg.includes('embedded wallet')) {
-                console.log('[Onboarding] User already has wallets, waiting for sync...');
+                console.log('[Onboarding] User already has wallets, using linkedAccounts data...');
 
-                // WAIT for useWallets() to populate (same pattern as wallet creation)
-                for (let i = 0; i < 15; i++) {
-                    await new Promise(resolve => setTimeout(resolve, 200));
-                    console.log(`[Onboarding] Polling wallets... attempt ${i + 1}, count: ${wallets.length}`);
-                    if (wallets.length >= 2) {
-                        console.log('[Onboarding] Wallets synced, checking delegation status');
-                        break;
+                // Use linkedAccounts directly since useWallets() hook isn't working in TMA
+                if (linkedSolanaWallets.length >= 2) {
+                    const devDelegated = isWalletDelegated(linkedSolanaWallets[0]?.address);
+                    const opsDelegated = isWalletDelegated(linkedSolanaWallets[1]?.address);
+
+                    console.log('[Onboarding] Delegation status from linkedAccounts:', { devDelegated, opsDelegated });
+
+                    // Redirect based on delegation state
+                    if (devDelegated && opsDelegated) {
+                        console.log('[Onboarding] Both wallets delegated, auto-completing registration');
+                        setStep('registering');
+                        await completeRegistration();
+                    } else if (devDelegated) {
+                        console.log('[Onboarding] Only dev delegated, skipping to ops delegation');
+                        setStep('delegate_ops');
+                    } else {
+                        console.log('[Onboarding] No delegation, starting with dev delegation');
+                        setStep('delegate_dev');
                     }
-                }
 
-                // Verify we have wallets loaded
-                if (wallets.length < 2) {
-                    console.error('[Onboarding] Timeout waiting for wallets to sync');
-                    // Fallback: redirect to dashboard and let it handle the state
-                    router.replace('/dashboard');
+                    toast.info('Wallets already exist', {
+                        description: 'Continuing with wallet authorization',
+                    });
                     return;
                 }
 
-                // NOW check delegation with populated wallets array
-                const devDelegated = isWalletDelegated(wallets[0]?.address);
-                const opsDelegated = isWalletDelegated(wallets[1]?.address);
-
-                console.log('[Onboarding] Delegation status:', { devDelegated, opsDelegated });
-
-                // Redirect based on delegation state
-                if (devDelegated && opsDelegated) {
-                    console.log('[Onboarding] Both wallets delegated, redirecting to dashboard');
-                    router.replace('/dashboard');
-                } else if (devDelegated) {
-                    console.log('[Onboarding] Only dev delegated, skipping to ops delegation');
-                    setStep('delegate_ops');
-                } else {
-                    console.log('[Onboarding] No delegation, starting with dev delegation');
-                    setStep('delegate_dev');
-                }
-
-                toast.info('Wallets already exist', {
-                    description: 'Continuing with wallet authorization',
-                });
+                // Fallback: if linkedAccounts also doesn't have wallets, redirect to dashboard
+                console.error('[Onboarding] No wallets found in linkedAccounts either');
+                router.replace('/dashboard');
                 return;
             }
 
@@ -604,10 +572,10 @@ export default function OnboardingPage() {
 
                             <button
                                 onClick={handleStart}
-                                disabled={isCreating || wallets.length >= 2 || walletsLoading}
+                                disabled={isCreating || effectiveWalletCount >= 2 || walletsLoading}
                                 className="w-full bg-green-600 hover:bg-green-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white py-4 rounded-xl font-medium text-lg"
                             >
-                                {walletsLoading ? 'Checking wallets...' : wallets.length >= 2 ? 'Wallets Ready' : 'Get Started'}
+                                {walletsLoading ? 'Checking wallets...' : effectiveWalletCount >= 2 ? 'Wallets Ready' : 'Get Started'}
                             </button>
 
                             {error && (
