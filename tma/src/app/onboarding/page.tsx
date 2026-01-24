@@ -94,7 +94,19 @@ export default function OnboardingPage() {
             return;
         }
 
-        // If we have 2+ wallets, done loading immediately
+        // Check if user has wallet accounts in linkedAccounts (loads faster than wallets array)
+        const linkedWalletAccounts = user?.linkedAccounts?.filter(
+            (account: any) => account.type === 'wallet'
+        ) || [];
+        const hasLinkedWallets = linkedWalletAccounts.length >= 2;
+
+        console.log('[Onboarding] Wallet loading check:', {
+            walletsArrayLength: wallets.length,
+            linkedWalletAccounts: linkedWalletAccounts.length,
+            hasLinkedWallets,
+        });
+
+        // If we have 2+ wallets in the array, done loading immediately
         if (wallets.length >= 2) {
             if (walletsLoadingTimerRef.current) {
                 clearTimeout(walletsLoadingTimerRef.current);
@@ -104,21 +116,38 @@ export default function OnboardingPage() {
             return;
         }
 
-        // Start timeout to detect new user (only if timer not already running)
+        // If user has linked wallets but wallets array isn't populated, keep waiting
+        // This is the key fix - don't timeout early for existing users
+        if (hasLinkedWallets && wallets.length < 2) {
+            console.log('[Onboarding] User has linked wallets, waiting for wallets array to sync...');
+            // Clear any existing short timeout
+            if (walletsLoadingTimerRef.current) {
+                clearTimeout(walletsLoadingTimerRef.current);
+                walletsLoadingTimerRef.current = null;
+            }
+            // Set a longer timeout for existing users (10s max)
+            walletsLoadingTimerRef.current = setTimeout(() => {
+                console.log('[Onboarding] Max timeout reached for existing user, proceeding...');
+                setWalletsLoading(false);
+                walletsLoadingTimerRef.current = null;
+            }, 10000);
+            return;
+        }
+
+        // New user case (no linked wallets) - short timeout
         if (!walletsLoadingTimerRef.current) {
             walletsLoadingTimerRef.current = setTimeout(() => {
                 const currentCount = walletsRef.current.length;
                 if (currentCount === 0) {
                     console.log('[Onboarding] Confirmed new user after timeout');
                 } else if (currentCount === 1) {
-                    // Partial load - Privy auto-created one wallet, wait a bit more
                     console.log('[Onboarding] Partial wallet load (1), waiting more...');
                     setTimeout(() => setWalletsLoading(false), 1000);
                     return;
                 }
                 setWalletsLoading(false);
                 walletsLoadingTimerRef.current = null;
-            }, 2500); // Increased from 1500ms for reliability
+            }, 2500);
         }
 
         return () => {
@@ -127,7 +156,7 @@ export default function OnboardingPage() {
                 walletsLoadingTimerRef.current = null;
             }
         };
-    }, [ready, authenticated, wallets.length]);
+    }, [ready, authenticated, wallets.length, user?.linkedAccounts]);
 
     // Auto-complete registration for users who have delegated wallets but no backend record
     useEffect(() => {
