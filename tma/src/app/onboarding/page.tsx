@@ -29,6 +29,11 @@ export default function OnboardingPage() {
     const [isCreating, setIsCreating] = useState(false);
     const [debugInfo, setDebugInfo] = useState<string | null>(null);
 
+    // Track wallet loading state - prevents showing welcome screen before wallets load
+    const [walletsLoading, setWalletsLoading] = useState(true);
+    const walletsLoadingTimerRef = useRef<NodeJS.Timeout | null>(null);
+    const autoCompleteAttempted = useRef(false); // Prevent double auto-complete
+
     // Ref to track current wallets for setTimeout callback (avoids closure capture)
     const walletsRef = useRef(wallets);
 
@@ -83,59 +88,94 @@ export default function OnboardingPage() {
         }
     }, [ready, authenticated, wallets.length, step, user?.linkedAccounts]);
 
-    // NEW: Initial redirect for users with existing wallets
-    // This prevents showing the welcome screen to returning users
+    // Wait for wallets to load with timeout
     useEffect(() => {
         if (!ready || !authenticated) {
-            return; // Still initializing
+            return;
         }
 
-        // Wait for wallets to load for existing users
+        // If we have 2+ wallets, done loading immediately
+        if (wallets.length >= 2) {
+            if (walletsLoadingTimerRef.current) {
+                clearTimeout(walletsLoadingTimerRef.current);
+                walletsLoadingTimerRef.current = null;
+            }
+            setWalletsLoading(false);
+            return;
+        }
+
+        // Start timeout to detect new user (only if timer not already running)
+        if (!walletsLoadingTimerRef.current) {
+            walletsLoadingTimerRef.current = setTimeout(() => {
+                const currentCount = walletsRef.current.length;
+                if (currentCount === 0) {
+                    console.log('[Onboarding] Confirmed new user after timeout');
+                } else if (currentCount === 1) {
+                    // Partial load - Privy auto-created one wallet, wait a bit more
+                    console.log('[Onboarding] Partial wallet load (1), waiting more...');
+                    setTimeout(() => setWalletsLoading(false), 1000);
+                    return;
+                }
+                setWalletsLoading(false);
+                walletsLoadingTimerRef.current = null;
+            }, 2500); // Increased from 1500ms for reliability
+        }
+
+        return () => {
+            if (walletsLoadingTimerRef.current) {
+                clearTimeout(walletsLoadingTimerRef.current);
+                walletsLoadingTimerRef.current = null;
+            }
+        };
+    }, [ready, authenticated, wallets.length]);
+
+    // Auto-complete registration for users who have delegated wallets but no backend record
+    useEffect(() => {
+        if (!ready || !authenticated || walletsLoading || autoCompleteAttempted.current) {
+            return;
+        }
+
         if (wallets.length >= 2) {
             const devDelegated = isWalletDelegated(wallets[0]?.address);
             const opsDelegated = isWalletDelegated(wallets[1]?.address);
 
-            console.log('[Onboarding] Initial wallet check:', {
-                walletsCount: wallets.length,
-                devDelegated,
-                opsDelegated,
-            });
+            console.log('[Onboarding] Auto-check wallet status:', { devDelegated, opsDelegated });
 
             if (devDelegated && opsDelegated) {
-                // Fully onboarded, redirect to dashboard
-                console.log('[Onboarding] Fully onboarded, redirecting to dashboard');
-                router.replace('/dashboard');
-                // Don't set isInitializing = false, let the redirect happen
+                // User has delegated wallets - auto-complete registration
+                autoCompleteAttempted.current = true;
+                console.log('[Onboarding] Both wallets delegated, auto-completing registration...');
+                setStep('registering');
+                setIsInitializing(false);
+                completeRegistration();
                 return;
-            } else if (devDelegated) {
-                // Skip to ops delegation
-                console.log('[Onboarding] Skipping to ops delegation');
-                setStep('delegate_ops');
-                setIsInitializing(false); // Done initializing, render the step
-            } else {
-                // Skip to dev delegation
-                console.log('[Onboarding] Skipping to dev delegation');
-                setStep('delegate_dev');
-                setIsInitializing(false); // Done initializing, render the step
             }
-        } else if (wallets.length === 0) {
-            // Wait a bit before assuming this is a new user
-            // (wallets might still be loading for returning users)
-            console.log('[Onboarding] Waiting 1.5s to confirm new user (wallets still loading?)');
-            const timer = setTimeout(() => {
-                // Check CURRENT value from ref, not captured closure value
-                if (walletsRef.current.length === 0) {
-                    console.log('[Onboarding] Confirmed new user after timeout, showing welcome screen');
-                    setIsInitializing(false);
-                } else {
-                    console.log('[Onboarding] Wallets loaded during timeout (count: ' + walletsRef.current.length + '), skipping welcome');
-                    // Don't set isInitializing=false, let the wallets.length >= 2 branch handle it
-                }
-            }, 1500); // Increased from 1000ms to 1500ms for slower connections
-            return () => clearTimeout(timer);
         }
-        // If wallets.length === 1, keep loading (shouldn't happen but handle gracefully)
-    }, [ready, authenticated, wallets.length, user?.linkedAccounts, router]);
+    }, [ready, authenticated, walletsLoading, wallets.length, user?.linkedAccounts]);
+
+    // Determine step for users with wallets but incomplete delegation
+    useEffect(() => {
+        if (!ready || !authenticated || walletsLoading) {
+            return;
+        }
+
+        setIsInitializing(false);
+
+        if (wallets.length >= 2) {
+            const devDelegated = isWalletDelegated(wallets[0]?.address);
+            const opsDelegated = isWalletDelegated(wallets[1]?.address);
+
+            // Auto-complete case is handled by the effect above
+            if (devDelegated && opsDelegated) {
+                return; // Let auto-complete effect handle this
+            } else if (devDelegated) {
+                setStep('delegate_ops');
+            } else {
+                setStep('delegate_dev');
+            }
+        }
+        // else: Stay on welcome step for new users (wallets.length < 2)
+    }, [ready, authenticated, walletsLoading, wallets.length, user?.linkedAccounts]);
 
     // Debug logging useEffect
     useEffect(() => {
@@ -493,7 +533,7 @@ export default function OnboardingPage() {
     return (
         <div className="min-h-screen flex flex-col p-6">
             {/* Show loading spinner during initialization */}
-            {(!ready || isInitializing) ? (
+            {(!ready || isInitializing || walletsLoading) ? (
                 <div className="flex-1 flex flex-col items-center justify-center gap-4">
                     <div className="animate-spin w-8 h-8 border-2 border-green-500 border-t-transparent rounded-full" />
                     <p className="text-telegram-hint text-sm">Loading...</p>
@@ -535,10 +575,10 @@ export default function OnboardingPage() {
 
                             <button
                                 onClick={handleStart}
-                                disabled={isCreating || wallets.length >= 2}
+                                disabled={isCreating || wallets.length >= 2 || walletsLoading}
                                 className="w-full bg-green-600 hover:bg-green-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white py-4 rounded-xl font-medium text-lg"
                             >
-                                {wallets.length >= 2 ? 'Wallets Ready' : 'Get Started'}
+                                {walletsLoading ? 'Checking wallets...' : wallets.length >= 2 ? 'Wallets Ready' : 'Get Started'}
                             </button>
 
                             {error && (
